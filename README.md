@@ -6,6 +6,8 @@ Idea → researched script → narrated, subtitled, rendered video → grounded 
 - [PLAN.md](PLAN.md) — phases and what is built
 - [CLAUDE.md](CLAUDE.md) — architecture, conventions, hard API limits
 - [docs/UI-DESIGN.md](docs/UI-DESIGN.md) — design system and screens
+- [KNOWN-ISSUES.md](KNOWN-ISSUES.md) — what's unverified, broken, or needs a human
+- [FIX-TASKS.md](FIX-TASKS.md) — paste-able agent prompts to fix all of it
 
 ## Run it
 

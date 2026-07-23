@@ -185,6 +185,11 @@ ones.
 
 ## 7. Do this first
 
+**Fixes for everything on this page are written up as paste-able agent prompts in
+[FIX-TASKS.md](FIX-TASKS.md)**, ordered by dependency, each with a verifiable
+"Done when". Start with A1 — it is the only item with multi-day external latency.
+
+
 ```bash
 docker compose up -d
 ```
