@@ -17,7 +17,9 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from engine.api.channels import router as channels_router
 from engine.api.insights import router as insights_router
+from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
 from engine.settings import get_settings
 from engine.workflows import video
@@ -26,6 +28,8 @@ from engine.workflows.base import StageStatus, WorkflowError
 app = FastAPI(title="Studio Engine", version="0.1.0")
 app.include_router(publishing_router)
 app.include_router(insights_router)
+app.include_router(channels_router)
+app.include_router(models_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],

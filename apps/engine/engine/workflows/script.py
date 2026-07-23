@@ -86,7 +86,7 @@ class ResearchStage(Stage[dict]):
             )
 
         await ctx.progress("extracting facts", 0.6)
-        model = llm.primary()
+        model = llm.for_task("research")
         facts, completion = await model.json(
             f"""Topic: {topic}
 
@@ -123,7 +123,7 @@ class AngleStage(Stage[dict]):
     async def run(self, ctx: WorkflowContext) -> StageOutput[dict]:
         topic = ctx.inputs["topic"]
         research = ctx.get("research")
-        model = llm.primary()
+        model = llm.for_task("angle")
 
         result, completion = await model.json(
             f"""Topic: {topic}
@@ -161,7 +161,7 @@ class HookStage(Stage[dict]):
         angle = ctx.get("angle")
         chosen = angle["options"][angle["chosen"]]
         fmt = ctx.inputs.get("format", "short")
-        model = llm.primary()
+        model = llm.for_task("hook")
 
         # Confirmed findings from this channel's own performance, if there are any.
         # Empty for a new channel, which is correct — nine videos teach nothing.
@@ -224,7 +224,7 @@ class BeatsStage(Stage[list]):
         angle = ctx.get("angle")
         fmt = ctx.inputs.get("format", "short")
         target = 45 if fmt == "short" else ctx.inputs.get("target_seconds", 600)
-        model = llm.primary()
+        model = llm.for_task("beats")
 
         result, completion = await model.json(
             f"""Hook: {hook["variants"][hook["chosen"]]["text"]}
@@ -237,8 +237,8 @@ Target runtime: {target} seconds.
 Break the body into beats. {
                 "4-6 beats."
                 if fmt == "short"
-                else "12-20 beats, grouped into 5-8 chapters. Include a retention device around the 40% "
-                "mark, where drop-off concentrates."
+                else "12-20 beats, grouped into 5-8 chapters. Include a retention "
+                "device around the 40% mark, where drop-off concentrates."
             }
 
 Every beat needs a `visual_direction`: what is literally on screen. This drives
@@ -279,7 +279,7 @@ class DraftStage(Stage[Script]):
         beats: list[Beat] = ctx.get("beats")
         hook = ctx.get("hook")
         research = ctx.get("research")
-        model = llm.primary()
+        model = llm.for_task("draft")
 
         result, completion = await model.json(
             f"""Write the narration from these beats.
@@ -333,7 +333,7 @@ class CritiqueStage(Stage[dict]):
 
     async def run(self, ctx: WorkflowContext) -> StageOutput[dict]:
         script: Script = ctx.get("draft")
-        model = llm.primary()
+        model = llm.for_task("critique")
 
         result, completion = await model.json(
             f"""Read this script as a viewer who has not seen it before, and who will
@@ -377,7 +377,7 @@ class RevisionStage(Stage[Script]):
     async def run(self, ctx: WorkflowContext) -> StageOutput[Script]:
         script: Script = ctx.get("draft")
         critique = ctx.get("critique")
-        model = llm.primary()
+        model = llm.for_task("revision")
 
         result, completion = await model.json(
             f"""Revise this script using the critique. Fix what was identified; do not

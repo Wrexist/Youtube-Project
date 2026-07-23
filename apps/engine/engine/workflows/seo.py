@@ -163,7 +163,7 @@ class TitlesStage(Stage[list]):
     async def run(self, ctx: WorkflowContext) -> StageOutput[list]:
         evidence: keywords.KeywordEvidence = ctx.get("grounding")
         script = ctx.try_get("revision") or ctx.try_get("draft")
-        model = llm.primary()
+        model = llm.for_task("titles")
 
         competitor_block = (
             "\n".join(f"- {c['title']}" for c in evidence.competitor_titles[:20])
@@ -243,7 +243,7 @@ class DescriptionStage(Stage[str]):
         variants: list[TitleVariant] = ctx.get("titles")
         evidence: keywords.KeywordEvidence = ctx.get("grounding")
         script = ctx.try_get("revision") or ctx.try_get("draft")
-        model = llm.primary()
+        model = llm.for_task("description")
 
         result, completion = await model.json(
             f"""Title: {variants[0].text}
@@ -296,7 +296,7 @@ class TagsStage(Stage[list]):
         evidence: keywords.KeywordEvidence = ctx.get("grounding")
         variants: list[TitleVariant] = ctx.get("titles")
         # Tags are a weak ranking signal now — the fast model is the right spend here.
-        model = llm.fast()
+        model = llm.for_task("tags")
 
         result, completion = await model.json(
             f"""Topic: {evidence.seed}
@@ -344,7 +344,7 @@ class ChaptersStage(Stage[list]):
     async def run(self, ctx: WorkflowContext) -> StageOutput[list]:
         cues = ctx.get("subtitles")
         beats = ctx.try_get("beats", [])
-        model = llm.fast()
+        model = llm.for_task("chapters")
 
         result, completion = await model.json(
             f"""Subtitle cues with real timings:

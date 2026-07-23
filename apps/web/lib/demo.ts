@@ -410,3 +410,131 @@ export const LIBRARY = [
   { id: "5", title: "How salt built cities", views: "128k", ctr: 6.8, dur: "9:14" },
   { id: "6", title: "The clock that broke physics", views: "221k", ctr: 7.7, dur: "7:35" },
 ];
+
+/** Channel launch output. Mirrors GET /v1/channels/launch/{id}. */
+export const MANUAL_STEPS = [
+  {
+    id: "create",
+    title: "Create the channel",
+    detail:
+      "youtube.com → your avatar → Create a channel. Use a Brand Account so ownership can be transferred later without moving the Google account.",
+  },
+  {
+    id: "handle",
+    title: "Claim the handle",
+    detail:
+      "YouTube Studio → Customisation → Basic info. Handles are first-come; claim it before doing anything else.",
+  },
+  {
+    id: "name",
+    title: "Set the channel name",
+    detail:
+      "Same screen. The Data API cannot set a channel's name — this one is unavoidable.",
+  },
+  {
+    id: "verify",
+    title: "Verify by phone",
+    detail:
+      "Unlocks custom thumbnails and videos over 15 minutes. Without it, half this system's output cannot be uploaded as intended.",
+  },
+  {
+    id: "oauth",
+    title: "Connect the channel to Studio",
+    detail: "Grants upload and analytics access. Everything after this is automated.",
+  },
+];
+
+export const CHANNEL_LAUNCH = {
+  identity: {
+    name: "Load Bearing",
+    handle: "loadbearing",
+    tagline: "How big things hold up, until they don't",
+    description:
+      "Load Bearing explains why large structures fail — bridges, dams, towers, tunnels — and what engineers actually knew beforehand.\n\nEvery video is built from investigation reports, inquiry transcripts and published engineering analysis rather than summaries of other videos. The focus is the decision that made failure possible, not the footage of it collapsing. Sources are listed under every video.\n\nFor anyone who has driven over a bridge and wondered who checked it.",
+    keywords: [
+      "structural engineering",
+      "bridge collapse",
+      "engineering failure",
+      "civil engineering",
+      "why bridges fail",
+      "dam failure",
+      "building collapse explained",
+      "engineering disasters",
+      "structural analysis",
+      "infrastructure",
+      "forensic engineering",
+      "construction failure",
+    ],
+    keywordsString:
+      '"structural engineering" "bridge collapse" "engineering failure" "civil engineering" "why bridges fail" "dam failure" "building collapse explained" "engineering disasters" "structural analysis" infrastructure "forensic engineering" "construction failure"',
+    avatarConcept:
+      "A single truss joint, white on deep slate, cropped so one bolt sits dead centre. Reads as a mark, not a picture, at 98 pixels.",
+    bannerConcept:
+      "Wide slate field, faint blueprint grid at 8% opacity. Wordmark and tagline centred inside the safe area; the grid runs to the edges so wide crops still look composed.",
+    palette: ["#1E293B", "#0F172A", "#F97316"],
+  },
+  series: [
+    {
+      name: "The Decision",
+      format: "long",
+      pattern:
+        "One failure, traced back to the specific choice that made it possible. 9–12 minutes.",
+      perWeek: 1,
+    },
+    {
+      name: "Held Up By",
+      format: "short",
+      pattern: "One structural element, explained in under a minute.",
+      perWeek: 3,
+    },
+  ],
+  backlog: [
+    { topic: "Why the Tacoma Narrows bridge twisted itself apart", score: 0.84 },
+    { topic: "The Hyatt Regency walkway change that killed 114 people", score: 0.81 },
+    { topic: "What the Morandi bridge inspections actually recorded", score: 0.77 },
+    { topic: "Why Millennium Bridge wobbled and how they stopped it", score: 0.74 },
+    { topic: "The Teton Dam failed in one afternoon — here's the soil report", score: 0.71 },
+    { topic: "How rebar corrodes from the inside out", score: 0.68 },
+    { topic: "Why the Citicorp tower was quietly rebuilt at night", score: 0.66 },
+    { topic: "The bolt that grounded a bridge for two years", score: 0.62 },
+  ],
+  rejected: 4,
+};
+
+/** Model routing. Mirrors GET /v1/models. */
+export type ModelKey = string;
+
+export const MODEL_CATALOGUE = [
+  { key: "anthropic:claude-opus-4-8", label: "Claude Opus 4.8", isLocal: false, isFree: false, jsonMode: true, context: 200000, inputPerM: 5, outputPerM: 25 },
+  { key: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5", isLocal: false, isFree: false, jsonMode: true, context: 200000, inputPerM: 3, outputPerM: 15 },
+  { key: "anthropic:claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", isLocal: false, isFree: false, jsonMode: true, context: 200000, inputPerM: 1, outputPerM: 5 },
+  { key: "openai:gpt-4o", label: "GPT-4o", isLocal: false, isFree: false, jsonMode: true, context: 128000, inputPerM: 2.5, outputPerM: 10 },
+  { key: "openai:gpt-4o-mini", label: "GPT-4o mini", isLocal: false, isFree: false, jsonMode: true, context: 128000, inputPerM: 0.15, outputPerM: 0.6 },
+  { key: "gemini:gemini-2.0-flash", label: "Gemini 2.0 Flash", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 0.1, outputPerM: 0.4 },
+  { key: "ollama:qwen2.5:32b", label: "Qwen 2.5 32B (local)", isLocal: true, isFree: true, jsonMode: true, context: 32000, inputPerM: 0, outputPerM: 0 },
+  { key: "ollama:qwen2.5:14b", label: "Qwen 2.5 14B (local)", isLocal: true, isFree: true, jsonMode: true, context: 32000, inputPerM: 0, outputPerM: 0 },
+  { key: "ollama:llama3.1:8b", label: "Llama 3.1 8B (local)", isLocal: true, isFree: true, jsonMode: true, context: 128000, inputPerM: 0, outputPerM: 0 },
+  { key: "ollama:mistral:7b", label: "Mistral 7B (local)", isLocal: true, isFree: true, jsonMode: false, context: 32000, inputPerM: 0, outputPerM: 0 },
+  { key: "ollama:gemma2:9b", label: "Gemma 2 9B (local)", isLocal: true, isFree: true, jsonMode: false, context: 8000, inputPerM: 0, outputPerM: 0 },
+];
+
+export const MODEL_TASKS = [
+  { task: "research", group: "Script", needs: "long context, JSON", quality: "high", model: "anthropic:claude-sonnet-5" },
+  { task: "angle", group: "Script", needs: "judgement", quality: "high", model: "anthropic:claude-sonnet-5" },
+  { task: "hook", group: "Script", needs: "judgement", quality: "critical", model: "anthropic:claude-opus-4-8" },
+  { task: "beats", group: "Script", needs: "structure, JSON", quality: "high", model: "anthropic:claude-sonnet-5" },
+  { task: "draft", group: "Script", needs: "long output", quality: "critical", model: "anthropic:claude-opus-4-8" },
+  { task: "critique", group: "Script", needs: "judgement", quality: "critical", model: "anthropic:claude-opus-4-8" },
+  { task: "revision", group: "Script", needs: "long output", quality: "high", model: "anthropic:claude-sonnet-5" },
+  { task: "titles", group: "SEO", needs: "judgement, JSON", quality: "critical", model: "anthropic:claude-opus-4-8" },
+  { task: "description", group: "SEO", needs: "prose", quality: "high", model: "anthropic:claude-sonnet-5" },
+  { task: "tags", group: "SEO", needs: "mechanical", quality: "low", model: "anthropic:claude-haiku-4-5-20251001" },
+  { task: "chapters", group: "SEO", needs: "mechanical, JSON", quality: "low", model: "anthropic:claude-haiku-4-5-20251001" },
+  { task: "thumbnail", group: "Assets", needs: "judgement, JSON", quality: "medium", model: "anthropic:claude-sonnet-5" },
+  { task: "positioning", group: "Channel", needs: "judgement", quality: "high", model: "anthropic:claude-sonnet-5" },
+  { task: "naming", group: "Channel", needs: "judgement", quality: "high", model: "anthropic:claude-sonnet-5" },
+  { task: "about", group: "Channel", needs: "prose", quality: "high", model: "anthropic:claude-sonnet-5" },
+  { task: "visuals", group: "Channel", needs: "judgement", quality: "medium", model: "anthropic:claude-sonnet-5" },
+  { task: "series", group: "Channel", needs: "structure, JSON", quality: "medium", model: "anthropic:claude-sonnet-5" },
+  { task: "backlog", group: "Channel", needs: "volume, JSON", quality: "medium", model: "anthropic:claude-sonnet-5" },
+];

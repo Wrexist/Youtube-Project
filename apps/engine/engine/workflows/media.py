@@ -206,7 +206,7 @@ class ThumbnailStage(Stage[list]):
 
         titles = ctx.get("titles")
         script = ctx.try_get("revision") or ctx.get("draft")
-        model = llm.fast()
+        model = llm.for_task("thumbnail")
 
         concepts, completion = await model.json(
             f"""Title: {titles[0].text}
@@ -244,10 +244,13 @@ Return: {{"concepts": [{{"image_prompt": str, "overlay_text": str,
 
 
 async def _synthesize(text: str, voice: str) -> tuple[Path, list[dict]]:
-    """Edge TTS with word-boundary capture.
+    """Edge TTS with boundary capture.
 
-    Boundary events are what give us subtitle cues without a transcription pass, so
-    they are collected here rather than reconstructed later.
+    Boundary events are what give us subtitle cues without a transcription pass.
+
+    edge-tts 7 defaults `boundary` to "SentenceBoundary", which yields one cue per
+    sentence — a wall of text on screen. We ask for word boundaries explicitly, and
+    still handle sentence boundaries, because not every voice honours the request.
     """
     import edge_tts
 
@@ -255,22 +258,32 @@ async def _synthesize(text: str, voice: str) -> tuple[Path, list[dict]]:
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{hashlib.sha1(text.encode()).hexdigest()[:16]}.mp3"
 
-    communicate = edge_tts.Communicate(text, voice)
-    cues: list[dict] = []
+    communicate = edge_tts.Communicate(text, voice, boundary="WordBoundary")
+    words: list[dict] = []
+    sentences: list[dict] = []
+
     with path.open("wb") as fh:
         async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
+            kind = chunk["type"]
+            if kind == "audio":
                 fh.write(chunk["data"])
-            elif chunk["type"] == "WordBoundary":
+            elif kind in ("WordBoundary", "SentenceBoundary"):
                 start = chunk["offset"] / 10_000_000
-                cues.append(
-                    {
-                        "start": start,
-                        "end": start + chunk["duration"] / 10_000_000,
-                        "text": chunk["text"],
-                    }
-                )
-    return path, _group_cues(cues)
+                cue = {
+                    "start": start,
+                    "end": start + chunk["duration"] / 10_000_000,
+                    "text": chunk["text"],
+                }
+                (words if kind == "WordBoundary" else sentences).append(cue)
+
+    if words:
+        return path, _group_cues(words)
+    if sentences:
+        logger.info("voice {} returned sentence boundaries only; splitting", voice)
+        return path, _split_sentence_cues(sentences)
+    # No timings at all — SubtitlesStage falls back to Whisper.
+    logger.warning("voice {} returned no boundary events", voice)
+    return path, []
 
 
 def _group_cues(word_cues: list[dict], max_chars: int = 42) -> list[dict]:
@@ -301,6 +314,43 @@ def _group_cues(word_cues: list[dict], max_chars: int = 42) -> list[dict]:
             flush()
     flush()
     return grouped
+
+
+def _split_sentence_cues(sentences: list[dict], max_chars: int = 42) -> list[dict]:
+    """Split sentence-level cues into readable lines.
+
+    Timing within a sentence is apportioned by character count. That is an
+    approximation — speech rate is not uniform — but a whole sentence held on screen
+    at once is worse, and it stays within the sentence's true bounds so drift cannot
+    accumulate across the video.
+    """
+    out: list[dict] = []
+    for sentence in sentences:
+        text = sentence["text"].strip()
+        span = max(sentence["end"] - sentence["start"], 0.1)
+        if len(text) <= max_chars:
+            out.append({**sentence, "text": text})
+            continue
+
+        lines: list[str] = []
+        current = ""
+        for word in text.split():
+            candidate = f"{current} {word}".strip()
+            if len(candidate) > max_chars and current:
+                lines.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+
+        total = sum(len(line) for line in lines) or 1
+        cursor = sentence["start"]
+        for line in lines:
+            duration = span * (len(line) / total)
+            out.append({"start": cursor, "end": cursor + duration, "text": line})
+            cursor += duration
+    return out
 
 
 async def _pexels_search(

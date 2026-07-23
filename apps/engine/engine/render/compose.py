@@ -60,7 +60,11 @@ def _render_sync(
     output: Path,
     report: Callable[[float, str], None],
 ) -> None:
-    from moviepy.editor import (
+    # MoviePy 2.x. The 1.x `moviepy.editor` namespace is gone, and the mutator
+    # methods were renamed (`subclip`→`subclipped`, `set_*`→`with_*`, and the
+    # geometry helpers gained past-tense names). Written against 2.x deliberately;
+    # 1.x is EOL.
+    from moviepy import (
         AudioFileClip,
         CompositeVideoClip,
         TextClip,
@@ -90,29 +94,33 @@ def _render_sync(
                 logger.warning("skipping unreadable clip {}: {}", clip["path"], exc)
                 continue
             take = min(per_clip, source.duration)
-            segments.append(_fit(source.subclip(0, take), width, height))
+            segments.append(_fit(source.subclipped(0, take), width, height))
         report(0.25 + 0.45 * (index + 1) / max(len(beat_spans), 1), f"beat {index + 1}")
 
     if not segments:
         raise RuntimeError("no usable clips after download")
 
-    video = concatenate_videoclips(segments, method="compose").set_duration(total)
-    video = video.set_audio(narration)
+    video = concatenate_videoclips(segments, method="compose").with_duration(total)
+    video = video.with_audio(narration)
 
     report(0.75, "burning subtitles")
+    # MoviePy 2 requires an explicit font path for TextClip — it no longer falls back
+    # to an ImageMagick-resolved family name, and omitting it raises at construction.
+    font = _subtitle_font()
     overlays = [
         TextClip(
-            cue["text"],
-            fontsize=int(height * 0.045),
+            text=cue["text"],
+            font=font,
+            font_size=int(height * 0.045),
             color="white",
             stroke_color="black",
             stroke_width=2,
             method="caption",
             size=(int(width * 0.86), None),
         )
-        .set_start(cue["start"])
-        .set_duration(max(cue["end"] - cue["start"], 0.4))
-        .set_position(("center", int(height * 0.72)))
+        .with_start(cue["start"])
+        .with_duration(max(cue["end"] - cue["start"], 0.4))
+        .with_position(("center", int(height * 0.72)))
         for cue in cues
     ]
 
@@ -151,8 +159,33 @@ def _beat_spans(beats: list, total: float) -> list[tuple[float, float]]:
 def _fit(clip, width: int, height: int):
     """Scale-and-crop to the target frame. Never letterbox — black bars read as cheap."""
     scale = max(width / clip.w, height / clip.h)
-    resized = clip.resize(scale)
-    return resized.crop(x_center=resized.w / 2, y_center=resized.h / 2, width=width, height=height)
+    resized = clip.resized(scale)
+    return resized.cropped(
+        x_center=resized.w / 2, y_center=resized.h / 2, width=width, height=height
+    )
+
+
+def _subtitle_font() -> str:
+    """A concrete font file for TextClip.
+
+    MoviePy 2 passes this straight to Pillow, so a family name will not do — it needs
+    a path that exists. The candidates cover Windows, the Debian-based engine image,
+    and macOS. Failing loudly here beats failing 90% of the way through a render.
+    """
+    candidates = [
+        r"C:\Windows\Fonts\arialbd.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]
+    for path in candidates:
+        if Path(path).exists():
+            return path
+    raise RuntimeError(
+        "no subtitle font found — install fonts-dejavu-core, or add a path to "
+        "_subtitle_font(). Tried: " + ", ".join(candidates)
+    )
 
 
 async def transcribe(audio_path: Path) -> list[dict]:
