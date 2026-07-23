@@ -249,6 +249,35 @@ export const FINDINGS = [
   },
 ];
 
+/** Finished videos waiting for a publish slot. */
+export const PENDING_VIDEOS = [
+  { id: "p1", title: "Why bridges collapse", format: "long" as const, duration: "8:02" },
+  { id: "p2", title: "The airline seat that never sold", format: "short" as const, duration: "0:48" },
+  { id: "p3", title: "How salt built cities", format: "long" as const, duration: "9:14" },
+  { id: "p4", title: "Why elevators have mirrors", format: "short" as const, duration: "0:52" },
+  { id: "p5", title: "The clock that broke physics", format: "short" as const, duration: "0:41" },
+  { id: "p6", title: "The map that started a war", format: "long" as const, duration: "11:20" },
+  { id: "p7", title: "Why glass is a liquid (it isn't)", format: "short" as const, duration: "0:55" },
+];
+
+/** Quota already consumed per day, mostly by competitor research.
+ *  Keyed the same way `dayKey` in lib/schedule.ts keys days. */
+export const QUOTA_BY_DAY: Record<string, number> = (() => {
+  const out: Record<string, number> = {};
+  const today = new Date();
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  // A day that is nearly spent, so the "full" and blocked-drop states are reachable
+  // without having to schedule four videos first.
+  const spend = [400, 1200, 9200, 800, 0, 300, 100, 2400, 0, 600];
+  spend.forEach((units, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    out[`${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`] = units;
+  });
+  return out;
+})();
+
 export const LIBRARY = [
   { id: "1", title: "Why bridges collapse", views: "184k", ctr: 7.1, dur: "8:02" },
   { id: "2", title: "The airline seat that never sold", views: "92k", ctr: 6.4, dur: "0:48" },

@@ -139,7 +139,12 @@ Full spec: **[docs/UI-DESIGN.md](docs/UI-DESIGN.md)** — tokens, the five scree
 5. Render performance: parallel clip prep, hardware encode where available.
 6. **Exit:** a 16:9 10-minute video that doesn't look auto-generated.
 
-### Phase 7 — YouTube publishing *(2–3 days)*
+### Phase 7 — YouTube publishing *(2–3 days)* — **code complete, unverified against the live API**
+
+Built: OAuth with encrypted refresh tokens ([youtube.py](apps/engine/engine/providers/youtube.py), [crypto.py](apps/engine/engine/crypto.py)), resumable upload, thumbnails/captions/playlist as separately-retryable stages ([publish.py](apps/engine/engine/workflows/publish.py)), the quota ledger ([quota.py](apps/engine/engine/quota.py)), the auto-scheduler ([scheduling.py](apps/engine/engine/scheduling.py)), and the drag-and-drop calendar.
+
+**Not yet exercised against Google** — that needs real OAuth credentials. Until then the upload path is reviewed code, not proven code.
+
 1. Google OAuth 2.0 flow, encrypted refresh-token storage, multi-channel support.
 2. `videos.insert` resumable upload with progress; set title, description, tags, category, language, `madeForKids`.
 3. Scheduled publishing via `privacyStatus: private` + `publishAt`.
