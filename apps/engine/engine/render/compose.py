@@ -46,9 +46,7 @@ async def compose_video(
         """Bridge from the render thread back to the async event stream."""
         asyncio.run_coroutine_threadsafe(on_progress(fraction, message), loop)
 
-    await asyncio.to_thread(
-        _render_sync, clips, beats, audio_path, cues, aspect, output, report
-    )
+    await asyncio.to_thread(_render_sync, clips, beats, audio_path, cues, aspect, output, report)
     await on_progress(1.0, "done")
     return output
 
@@ -154,9 +152,7 @@ def _fit(clip, width: int, height: int):
     """Scale-and-crop to the target frame. Never letterbox — black bars read as cheap."""
     scale = max(width / clip.w, height / clip.h)
     resized = clip.resize(scale)
-    return resized.crop(
-        x_center=resized.w / 2, y_center=resized.h / 2, width=width, height=height
-    )
+    return resized.crop(x_center=resized.w / 2, y_center=resized.h / 2, width=width, height=height)
 
 
 async def transcribe(audio_path: Path) -> list[dict]:
@@ -167,9 +163,7 @@ async def transcribe(audio_path: Path) -> list[dict]:
 
         model = WhisperModel("base", device="cpu", compute_type="int8")
         segments, _ = model.transcribe(str(audio_path), word_timestamps=True)
-        return [
-            {"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments
-        ]
+        return [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segments]
 
     return await asyncio.to_thread(_run)
 
@@ -198,8 +192,7 @@ async def make_thumbnail(concept: dict, *, job_id: str, index: int) -> str:
         # Left-weighted: the bottom-right ~15% is covered by the duration badge.
         y = 180
         for word in words:
-            draw.text((70, y), word, font=font, fill="white",
-                      stroke_width=8, stroke_fill="black")
+            draw.text((70, y), word, font=font, fill="white", stroke_width=8, stroke_fill="black")
             y += 160
 
         import io

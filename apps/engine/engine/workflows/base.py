@@ -28,7 +28,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
 from loguru import logger
@@ -36,7 +36,7 @@ from loguru import logger
 T = TypeVar("T")
 
 
-class StageStatus(str, Enum):
+class StageStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     DONE = "done"
@@ -359,9 +359,7 @@ class Workflow:
             try:
                 coro = stage.run(ctx)
                 output = (
-                    await asyncio.wait_for(coro, stage.timeout_s)
-                    if stage.timeout_s
-                    else await coro
+                    await asyncio.wait_for(coro, stage.timeout_s) if stage.timeout_s else await coro
                 )
 
                 # Provenance is not optional. A stage that forgets it silently breaks
@@ -385,7 +383,7 @@ class Workflow:
                 )
                 return
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 err = f"timed out after {stage.timeout_s}s"
             except WorkflowError:
                 raise

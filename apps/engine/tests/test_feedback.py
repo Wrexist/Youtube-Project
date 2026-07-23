@@ -9,7 +9,7 @@ trained on noise.
 from __future__ import annotations
 
 from engine.feedback import guidance_for, retention_guidance
-from engine.insights import VideoRecord, Verdict, analyze
+from engine.insights import Verdict, VideoRecord, analyze
 
 
 def records(dimension: str, groups: dict[str, list[float]]) -> list[VideoRecord]:

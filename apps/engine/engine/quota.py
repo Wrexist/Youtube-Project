@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 
 # Documented unit costs. Anything not listed defaults to 1 (the read-op cost).
 COSTS: dict[str, int] = {
@@ -43,9 +43,7 @@ class QuotaExceeded(Exception):
 
     def __init__(self, operation: str, cost: int, remaining: int) -> None:
         self.operation, self.cost, self.remaining = operation, cost, remaining
-        super().__init__(
-            f"{operation} costs {cost} units but only {remaining} remain today"
-        )
+        super().__init__(f"{operation} costs {cost} units but only {remaining} remain today")
 
 
 @dataclass
@@ -59,9 +57,9 @@ class Entry:
 
 def quota_day(moment: datetime | None = None) -> date:
     """The quota day a moment falls in. Pacific, because that's where Google resets."""
-    moment = moment or datetime.now(timezone.utc)
+    moment = moment or datetime.now(UTC)
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
+        moment = moment.replace(tzinfo=UTC)
     return moment.astimezone(PACIFIC).date()
 
 
@@ -104,7 +102,7 @@ class QuotaLedger:
         entry = Entry(
             operation=operation,
             cost=self.cost_of(operation),
-            at=at or datetime.now(timezone.utc),
+            at=at or datetime.now(UTC),
             channel_id=channel_id,
             note=note,
         )
@@ -118,9 +116,7 @@ class QuotaLedger:
         because publishing a video and then failing to set its thumbnail is not a
         useful outcome.
         """
-        per_publish = (
-            COSTS["videos.insert"] + COSTS["thumbnails.set"] + COSTS["captions.insert"]
-        )
+        per_publish = COSTS["videos.insert"] + COSTS["thumbnails.set"] + COSTS["captions.insert"]
         return self.remaining(day) // per_publish
 
     def usage_by_day(self, days: int = 28) -> dict[date, int]:

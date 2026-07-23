@@ -10,9 +10,10 @@ endpoint, and never included in an error payload.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -56,8 +57,10 @@ class Credentials:
     @property
     def is_fresh(self) -> bool:
         # 60s of headroom so a token doesn't expire mid-upload.
-        return bool(self.access_token) and bool(self.expires_at) and (
-            self.expires_at > datetime.now(timezone.utc) + timedelta(seconds=60)
+        return (
+            bool(self.access_token)
+            and bool(self.expires_at)
+            and (self.expires_at > datetime.now(UTC) + timedelta(seconds=60))
         )
 
 
@@ -71,8 +74,8 @@ def authorize_url(state: str) -> str:
         "redirect_uri": s.google_redirect_uri,
         "response_type": "code",
         "scope": " ".join(SCOPES),
-        "access_type": "offline",   # without this there is no refresh token
-        "prompt": "consent",        # forces one to be issued on re-auth
+        "access_type": "offline",  # without this there is no refresh token
+        "prompt": "consent",  # forces one to be issued on re-auth
         "state": state,
     }
     return f"{AUTH_URL}?{httpx.QueryParams(params)}"
@@ -104,7 +107,7 @@ async def exchange_code(code: str) -> Credentials:
     return Credentials(
         refresh_token_encrypted=encrypt(payload["refresh_token"]),
         access_token=payload["access_token"],
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=payload["expires_in"]),
+        expires_at=datetime.now(UTC) + timedelta(seconds=payload["expires_in"]),
     )
 
 
@@ -133,9 +136,7 @@ async def refresh(creds: Credentials) -> Credentials:
 
     payload = resp.json()
     creds.access_token = payload["access_token"]
-    creds.expires_at = datetime.now(timezone.utc) + timedelta(
-        seconds=payload["expires_in"]
-    )
+    creds.expires_at = datetime.now(UTC) + timedelta(seconds=payload["expires_in"])
     return creds
 
 
@@ -151,9 +152,7 @@ class YouTube:
             await refresh(self.creds)
         return {"Authorization": f"Bearer {self.creds.access_token}"}
 
-    async def _call(
-        self, method: str, url: str, operation: str, **kwargs: Any
-    ) -> httpx.Response:
+    async def _call(self, method: str, url: str, operation: str, **kwargs: Any) -> httpx.Response:
         ledger.check(operation)  # refuse before spending, not after
         headers = {**(await self._headers()), **kwargs.pop("headers", {})}
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -170,8 +169,13 @@ class YouTube:
             "GET",
             f"{API}/search",
             "search.list",
-            params={"part": "snippet", "q": query, "type": "video",
-                    "maxResults": limit, "order": "relevance"},
+            params={
+                "part": "snippet",
+                "q": query,
+                "type": "video",
+                "maxResults": limit,
+                "order": "relevance",
+            },
         )
         return resp.json().get("items", [])
 
@@ -218,9 +222,9 @@ class YouTube:
             },
         }
         if publish_at:
-            body["status"]["publishAt"] = publish_at.astimezone(timezone.utc).isoformat()
+            body["status"]["publishAt"] = publish_at.astimezone(UTC).isoformat()
 
-        size = video_path.stat().st_size
+        size = (await asyncio.to_thread(video_path.stat)).st_size
         ledger.check("videos.insert")
 
         # 1. Open the resumable session.
@@ -247,8 +251,10 @@ class YouTube:
         async with httpx.AsyncClient(timeout=None) as client:
             with video_path.open("rb") as fh:
                 while offset < size:
-                    fh.seek(offset)
-                    chunk = fh.read(CHUNK)
+                    # Read off the event loop. An 8MB read from disk is tens of
+                    # milliseconds, and stalling the loop mid-upload also stalls
+                    # every other job's progress stream.
+                    chunk = await asyncio.to_thread(_read_at, fh, offset, CHUNK)
                     end = offset + len(chunk) - 1
                     resp = await client.put(
                         session_url,
@@ -260,8 +266,9 @@ class YouTube:
                     )
 
                     if resp.status_code in (200, 201):
-                        ledger.record("videos.insert", channel_id=self.creds.channel_id,
-                                      note=title[:60])
+                        ledger.record(
+                            "videos.insert", channel_id=self.creds.channel_id, note=title[:60]
+                        )
                         return resp.json()["id"]
 
                     if resp.status_code == 308:  # incomplete; continue
@@ -272,8 +279,9 @@ class YouTube:
                         continue
 
                     if resp.status_code in (500, 502, 503, 504, 429):
-                        logger.warning("transient {} during upload; retrying chunk",
-                                       resp.status_code)
+                        logger.warning(
+                            "transient {} during upload; retrying chunk", resp.status_code
+                        )
                         continue
 
                     # 4xx is deterministic — retrying burns quota for nothing.
@@ -298,8 +306,7 @@ class YouTube:
     ) -> None:
         """A real caption track. Burned-in subtitles do nothing for search; this does."""
         meta = {
-            "snippet": {"videoId": video_id, "language": language, "name": name,
-                        "isDraft": False}
+            "snippet": {"videoId": video_id, "language": language, "name": name, "isDraft": False}
         }
         files = {
             "metadata": (None, json.dumps(meta), "application/json"),
@@ -338,15 +345,23 @@ class YouTube:
                 "id": video_id,
                 "status": {
                     "privacyStatus": "private",
-                    "publishAt": publish_at.astimezone(timezone.utc).isoformat(),
+                    "publishAt": publish_at.astimezone(UTC).isoformat(),
                 },
             },
         )
 
     async def processing_status(self, video_id: str) -> str:
         resp = await self._call(
-            "GET", f"{API}/videos", "videos.list",
+            "GET",
+            f"{API}/videos",
+            "videos.list",
             params={"part": "processingDetails", "id": video_id},
         )
         items = resp.json().get("items", [])
         return items[0]["processingDetails"]["processingStatus"] if items else "unknown"
+
+
+def _read_at(fh, offset: int, size: int) -> bytes:
+    """Positioned read, run in a thread by the uploader."""
+    fh.seek(offset)
+    return fh.read(size)

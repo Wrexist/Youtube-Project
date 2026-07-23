@@ -71,9 +71,7 @@ class VoiceoverStage(Stage[Voiceover]):
         return StageOutput(
             value=Voiceover(audio_key=key, duration_s=duration, cues=cues, voice=voice),
             artifacts={"audio": key},
-            provenance=Provenance(
-                params={"voice": voice, "provider": settings.tts_provider}
-            ),
+            provenance=Provenance(params={"voice": voice, "provider": settings.tts_provider}),
         )
 
 
@@ -231,9 +229,7 @@ Return: {{"concepts": [{{"image_prompt": str, "overlay_text": str,
         variants = []
         for i, concept in enumerate(concepts["concepts"][:3]):
             await ctx.progress(f"rendering concept {i + 1}/3", (i + 1) / 3)
-            key = await compose.make_thumbnail(
-                concept, job_id=ctx.job_id, index=i
-            )
+            key = await compose.make_thumbnail(concept, job_id=ctx.job_id, index=i)
             variants.append({**concept, "key": key})
 
         return StageOutput(

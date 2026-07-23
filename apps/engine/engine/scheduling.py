@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
-from engine.quota import DAILY_LIMIT, COSTS
+from engine.quota import COSTS, DAILY_LIMIT
 
 # Publish this far ahead of the audience peak so impressions accumulate first.
 PEAK_LEAD_HOURS = 2
@@ -39,9 +39,30 @@ MAX_PUBLISHES_PER_DAY = DAILY_LIMIT // PUBLISH_COST  # 4 with the default quota
 # in the channel's primary timezone. Evening-weighted, which is typical but is a
 # *guess* — it is replaced by measured data as soon as Phase 8 has 28 days of it.
 DEFAULT_HOURLY = [
-    0.15, 0.10, 0.07, 0.05, 0.05, 0.08, 0.18, 0.32,
-    0.45, 0.48, 0.46, 0.50, 0.58, 0.55, 0.52, 0.56,
-    0.68, 0.82, 0.94, 1.00, 0.96, 0.82, 0.58, 0.32,
+    0.15,
+    0.10,
+    0.07,
+    0.05,
+    0.05,
+    0.08,
+    0.18,
+    0.32,
+    0.45,
+    0.48,
+    0.46,
+    0.50,
+    0.58,
+    0.55,
+    0.52,
+    0.56,
+    0.68,
+    0.82,
+    0.94,
+    1.00,
+    0.96,
+    0.82,
+    0.58,
+    0.32,
 ]
 
 # Weekday multipliers. Sunday and Thursday-Saturday evenings tend to run hotter.
@@ -205,8 +226,9 @@ def auto_schedule(
     for video in ordered:
         placed = False
         for slot in slots:
-            if any(abs((slot.at - t).total_seconds()) < constraints.min_gap_hours * 3600
-                   for t in taken):
+            if any(
+                abs((slot.at - t).total_seconds()) < constraints.min_gap_hours * 3600 for t in taken
+            ):
                 continue
             if video.ready_at and slot.at < video.ready_at:
                 continue
@@ -219,17 +241,13 @@ def auto_schedule(
 
             week = slot.at.isocalendar()[1]
             cap = (
-                constraints.long_per_week
-                if video.format == "long"
-                else constraints.shorts_per_week
+                constraints.long_per_week if video.format == "long" else constraints.shorts_per_week
             )
             if weekly_used.get((week, video.format), 0) >= cap:
                 continue
 
             plan.assignments.append(
-                Assignment(
-                    video_id=video.id, at=slot.at, score=slot.score, reason=slot.reason
-                )
+                Assignment(video_id=video.id, at=slot.at, score=slot.score, reason=slot.reason)
             )
             taken.append(slot.at)
             per_day[day] = per_day.get(day, 0) + 1
@@ -289,8 +307,7 @@ def validate_move(
     if conflict:
         gap = abs((moment - conflict).total_seconds()) / 3600
         return True, (
-            f"only {gap:.0f}h from another upload — they'll compete in the same "
-            f"subscriber feeds"
+            f"only {gap:.0f}h from another upload — they'll compete in the same subscriber feeds"
         )
 
     return True, ""

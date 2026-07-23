@@ -304,6 +304,104 @@ export const QUOTA_BY_DAY: Record<string, number> = (() => {
   return out;
 })();
 
+/** Standing series configs. Auto-publish is off by default and deliberately
+ *  awkward to turn on — see engine/automation.py. */
+export const SERIES = [
+  {
+    id: "s1",
+    name: "Engineering failures",
+    niche: "civil engineering, disasters",
+    shortsPerWeek: 3,
+    longPerWeek: 1,
+    autoPublish: false,
+    paused: false,
+    monthlyBudget: 120,
+    spentThisMonth: 71.4,
+    backlogDepth: 14,
+    producedThisWeek: 2,
+  },
+  {
+    id: "s2",
+    name: "Objects with histories",
+    niche: "material history, trade",
+    shortsPerWeek: 2,
+    longPerWeek: 1,
+    autoPublish: true,
+    paused: false,
+    monthlyBudget: 90,
+    spentThisMonth: 84.2,
+    backlogDepth: 3,
+    producedThisWeek: 3,
+  },
+  {
+    id: "s3",
+    name: "Physics oddities",
+    niche: "physics, measurement",
+    shortsPerWeek: 4,
+    longPerWeek: 0,
+    autoPublish: false,
+    paused: true,
+    monthlyBudget: 60,
+    spentThisMonth: 0,
+    backlogDepth: 9,
+    producedThisWeek: 0,
+  },
+];
+
+/** Videos waiting on a human. Every blocker carries a readable reason —
+ *  "blocked" with no explanation is not an acceptable thing to display. */
+export const REVIEW_QUEUE = [
+  {
+    id: "r1",
+    title: "The bridge that sang itself apart",
+    series: "Engineering failures",
+    cost: 2.41,
+    blockers: [],
+  },
+  {
+    id: "r2",
+    title: "Why concrete keeps getting weaker",
+    series: "Engineering failures",
+    cost: 3.12,
+    blockers: [
+      {
+        code: "ungrounded",
+        message:
+          "the script cites no sources — this is what YouTube's inauthentic-content policy targets",
+      },
+    ],
+  },
+  {
+    id: "r3",
+    title: "How a single bolt grounded a fleet",
+    series: "Objects with histories",
+    cost: 1.88,
+    blockers: [
+      { code: "no_thumbnail", message: "no thumbnail was produced" },
+      {
+        code: "weak_script",
+        message: "the critique pass rated this 4/5 for problems",
+      },
+    ],
+  },
+];
+
+/** Scored backlog. Rejected duplicates are kept visible rather than dropped, so
+ *  you can see the generator tried to repeat itself and was stopped. */
+export const BACKLOG = [
+  { topic: "Why tunnels flood", score: 0.78, demand: 0.85, fit: 0.62, duplicate: null },
+  { topic: "The dam that moved a mountain", score: 0.71, demand: 0.7, fit: 0.71, duplicate: null },
+  { topic: "How rebar rusts from inside", score: 0.64, demand: 0.6, fit: 0.68, duplicate: null },
+  {
+    topic: "The reason bridges collapse",
+    score: 0.0,
+    demand: 0.9,
+    fit: 0.9,
+    duplicate: "Why bridges collapse",
+    similarity: 0.67,
+  },
+];
+
 export const LIBRARY = [
   { id: "1", title: "Why bridges collapse", views: "184k", ctr: 7.1, dur: "8:02" },
   { id: "2", title: "The airline seat that never sold", views: "92k", ctr: 6.4, dur: "0:48" },

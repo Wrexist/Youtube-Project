@@ -7,7 +7,7 @@ when "today" started, the failure shows up as a rejected upload hours later.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -22,7 +22,7 @@ from engine.scheduling import (
     validate_move,
 )
 
-START = datetime(2026, 8, 3, 8, 0, tzinfo=timezone.utc)  # a Monday
+START = datetime(2026, 8, 3, 8, 0, tzinfo=UTC)  # a Monday
 
 
 # ── quota ───────────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ def test_search_competes_with_uploads_for_the_same_budget():
 def test_quota_day_uses_pacific_not_utc():
     """01:00 UTC is still the previous day in Pacific. Getting this wrong means the
     ledger and Google disagree for eight hours every day."""
-    early_utc = datetime(2026, 8, 4, 1, 0, tzinfo=timezone.utc)
+    early_utc = datetime(2026, 8, 4, 1, 0, tzinfo=UTC)
     assert quota_day(early_utc) == date(2026, 8, 3)
 
 
@@ -103,7 +103,7 @@ def test_enforces_minimum_gap_between_uploads():
     pending = [Pending(id=f"s{i}", title=f"s{i}") for i in range(6)]
     plan = auto_schedule(pending, start=START, horizon_days=28)
     times = sorted(a.at for a in plan.assignments)
-    gaps = [(b - a).total_seconds() / 3600 for a, b in zip(times, times[1:])]
+    gaps = [(b - a).total_seconds() / 3600 for a, b in zip(times, times[1:], strict=False)]
     assert gaps and all(g >= 20 for g in gaps), gaps
 
 
@@ -143,9 +143,7 @@ def test_unplaceable_videos_are_reported_not_dropped():
 
 def test_a_video_is_not_scheduled_before_it_is_ready():
     ready = START + timedelta(days=5)
-    plan = auto_schedule(
-        [Pending(id="v", title="v", ready_at=ready)], start=START, horizon_days=14
-    )
+    plan = auto_schedule([Pending(id="v", title="v", ready_at=ready)], start=START, horizon_days=14)
     assert plan.assignments[0].at >= ready
 
 

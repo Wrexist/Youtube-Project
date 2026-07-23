@@ -63,10 +63,7 @@ class Analytics:
             {
                 "startDate": start.isoformat(),
                 "endDate": end.isoformat(),
-                "metrics": (
-                    "views,estimatedMinutesWatched,averageViewDuration,"
-                    "subscribersGained"
-                ),
+                "metrics": ("views,estimatedMinutesWatched,averageViewDuration,subscribersGained"),
                 "dimensions": "day",
                 "sort": "day",
             }

@@ -146,9 +146,7 @@ async def get_job(job_id: str) -> dict:
         "status": job["status"],
         "inputs": job["inputs"],
         "stages": _serialize_stages(job),
-        "cost_usd": round(
-            sum(s.output.cost_usd for s in job["states"].values() if s.output), 4
-        ),
+        "cost_usd": round(sum(s.output.cost_usd for s in job["states"].values() if s.output), 4),
     }
 
 

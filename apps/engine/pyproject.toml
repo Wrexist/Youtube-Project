@@ -32,6 +32,15 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = [
+    # Assumes a trio/anyio codebase. We are on asyncio, and the remaining Path
+    # calls read a <=2MB thumbnail and a text SRT. The one read that genuinely
+    # mattered — 8MB chunks in the upload loop — is on a thread already.
+    "ASYNC240",
+    # Flags any async function taking a `timeout` argument. Ours is forwarded
+    # straight to httpx, which is the intended way to bound an HTTP call.
+    "ASYNC109",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

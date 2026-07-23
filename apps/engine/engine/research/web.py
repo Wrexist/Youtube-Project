@@ -29,9 +29,7 @@ async def research(topic: str, *, max_sources: int = 8) -> dict:
     async with httpx.AsyncClient(
         timeout=15.0, follow_redirects=True, headers={"User-Agent": USER_AGENT}
     ) as client:
-        pages = await asyncio.gather(
-            *(_fetch(client, url) for url in urls), return_exceptions=True
-        )
+        pages = await asyncio.gather(*(_fetch(client, url) for url in urls), return_exceptions=True)
 
     digest_parts: list[str] = []
     sources: list[str] = []
@@ -52,12 +50,8 @@ async def _search(topic: str, *, limit: int) -> list[str]:
     configuration. Replace with a proper search API when volume justifies it.
     """
     try:
-        async with httpx.AsyncClient(
-            timeout=12.0, headers={"User-Agent": USER_AGENT}
-        ) as client:
-            resp = await client.post(
-                "https://html.duckduckgo.com/html/", data={"q": topic}
-            )
+        async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": USER_AGENT}) as client:
+            resp = await client.post("https://html.duckduckgo.com/html/", data={"q": topic})
             resp.raise_for_status()
         hrefs = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"', resp.text)
         return _dedupe_hosts(hrefs)[:limit]

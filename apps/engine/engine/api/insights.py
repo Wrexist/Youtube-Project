@@ -86,7 +86,9 @@ async def retention(video_id: str) -> dict:
 
     return {
         "curve": curve,
-        "beats": map_retention_to_beats(curve, beats, duration_s=record.avd_seconds if record else 0),
+        "beats": map_retention_to_beats(
+            curve, beats, duration_s=record.avd_seconds if record else 0
+        ),
     }
 
 

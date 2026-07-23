@@ -36,9 +36,7 @@ class KeywordEvidence:
         return bool(self.suggestions or self.competitor_titles)
 
     def summary(self) -> str:
-        return (
-            f"{len(self.suggestions)} queries · {len(self.competitor_titles)} competitors"
-        )
+        return f"{len(self.suggestions)} queries · {len(self.competitor_titles)} competitors"
 
 
 async def suggest(seed: str, *, expand: bool = True, timeout: float = 8.0) -> list[str]:
@@ -66,17 +64,13 @@ async def suggest(seed: str, *, expand: bool = True, timeout: float = 8.0) -> li
 
 
 async def _suggest_one(client: httpx.AsyncClient, query: str) -> list[str]:
-    resp = await client.get(
-        SUGGEST_URL, params={"client": "firefox", "ds": "yt", "q": query}
-    )
+    resp = await client.get(SUGGEST_URL, params={"client": "firefox", "ds": "yt", "q": query})
     resp.raise_for_status()
     payload = json.loads(resp.text)
     return payload[1] if len(payload) > 1 and isinstance(payload[1], list) else []
 
 
-async def competitors(
-    keyword: str, youtube_client=None, limit: int = 20
-) -> list[dict]:
+async def competitors(keyword: str, youtube_client=None, limit: int = 20) -> list[dict]:
     """Top-ranking videos for a keyword.
 
     Costs 100 quota units against the same 10,000/day budget that uploads draw from,
@@ -107,9 +101,7 @@ async def gather(
     evidence = KeywordEvidence(seed=seed)
 
     suggestions_task = suggest(seed)
-    competitor_task = (
-        competitors(seed, youtube_client) if use_competitors else _empty()
-    )
+    competitor_task = competitors(seed, youtube_client) if use_competitors else _empty()
     suggestions, competitor_list = await asyncio.gather(
         suggestions_task, competitor_task, return_exceptions=True
     )

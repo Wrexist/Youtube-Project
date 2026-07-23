@@ -165,9 +165,11 @@ class HookStage(Stage[dict]):
 
         # Confirmed findings from this channel's own performance, if there are any.
         # Empty for a new channel, which is correct — nine videos teach nothing.
-        learned = feedback.guidance_for(ctx.inputs["insights"], "hook") if ctx.inputs.get(
-            "insights"
-        ) else ""
+        learned = (
+            feedback.guidance_for(ctx.inputs["insights"], "hook")
+            if ctx.inputs.get("insights")
+            else ""
+        )
         learned += feedback.retention_guidance(ctx.inputs.get("last_retention_map", []))
 
         result, completion = await model.json(
@@ -232,9 +234,12 @@ Facts available:
 
 Target runtime: {target} seconds.
 
-Break the body into beats. {"4-6 beats." if fmt == "short" else
-"12-20 beats, grouped into 5-8 chapters. Include a retention device around the 40% "
-"mark, where drop-off concentrates."}
+Break the body into beats. {
+                "4-6 beats."
+                if fmt == "short"
+                else "12-20 beats, grouped into 5-8 chapters. Include a retention device around the 40% "
+                "mark, where drop-off concentrates."
+            }
 
 Every beat needs a `visual_direction`: what is literally on screen. This drives
 footage selection, and it is the difference between a video that looks intentional
@@ -246,7 +251,8 @@ pacing.
 
 Return: {{"beats": [{{"purpose": str, "text_direction": str, "visual_direction": str,
                      "energy": "high"|"medium"|"low", "est_seconds": float}}]{
-    ', "chapters": [{"title": str, "beat_indexes": [int]}]' if fmt == "long" else ""}}}""",
+                ', "chapters": [{"title": str, "beat_indexes": [int]}]' if fmt == "long" else ""
+            }}}""",
             max_tokens=4000,
         )
 

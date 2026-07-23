@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
@@ -100,9 +100,7 @@ async def quota() -> dict:
 @router.get("/calendar")
 async def calendar() -> dict:
     return {
-        "scheduled": [
-            {"video_id": vid, "at": at.isoformat()} for vid, at in SCHEDULE.items()
-        ],
+        "scheduled": [{"video_id": vid, "at": at.isoformat()} for vid, at in SCHEDULE.items()],
         "quota_by_day": {d.isoformat(): v for d, v in ledger.usage_by_day().items()},
     }
 
@@ -111,13 +109,11 @@ async def calendar() -> dict:
 async def slots(days: int = 14) -> dict:
     """Ranked publish times, so the calendar can show *why* a slot is good."""
     profile = AudienceProfile()
-    ranked = candidate_slots(datetime.now(timezone.utc), days, profile)[:40]
+    ranked = candidate_slots(datetime.now(UTC), days, profile)[:40]
     return {
         "source": profile.source,
         "measured": profile.is_measured,
-        "slots": [
-            {"at": s.at.isoformat(), "score": s.score, "reason": s.reason} for s in ranked
-        ],
+        "slots": [{"at": s.at.isoformat(), "score": s.score, "reason": s.reason} for s in ranked],
     }
 
 
@@ -162,13 +158,11 @@ async def auto(body: AutoScheduleRequest) -> dict:
                 id=v["id"],
                 title=v.get("title", ""),
                 format=v.get("format", "short"),
-                ready_at=(
-                    datetime.fromisoformat(v["ready_at"]) if v.get("ready_at") else None
-                ),
+                ready_at=(datetime.fromisoformat(v["ready_at"]) if v.get("ready_at") else None),
             )
             for v in body.videos
         ],
-        start=datetime.now(timezone.utc),
+        start=datetime.now(UTC),
         profile=profile,
         constraints=Constraints(
             shorts_per_week=body.shorts_per_week,

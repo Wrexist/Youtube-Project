@@ -24,8 +24,7 @@ def _cipher() -> Fernet:
     secret = get_settings().secret_key
     if len(secret) < 32:
         raise RuntimeError(
-            "STUDIO_SECRET_KEY must be at least 32 characters — it protects "
-            "channel refresh tokens"
+            "STUDIO_SECRET_KEY must be at least 32 characters — it protects channel refresh tokens"
         )
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
     return Fernet(key)

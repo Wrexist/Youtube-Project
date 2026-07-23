@@ -101,14 +101,16 @@ class LLM:
         so parse defensively and retry with the parse error fed back rather than
         failing the stage on a formatting hiccup.
         """
-        instruction = (
-            f"{prompt}\n\nRespond with valid JSON only. No prose, no markdown fences."
-        )
+        instruction = f"{prompt}\n\nRespond with valid JSON only. No prose, no markdown fences."
         last_error = ""
         for attempt in range(retries + 1):
-            body = instruction if not last_error else (
-                f"{instruction}\n\nYour previous response could not be parsed: "
-                f"{last_error}\nReturn only valid JSON this time."
+            body = (
+                instruction
+                if not last_error
+                else (
+                    f"{instruction}\n\nYour previous response could not be parsed: "
+                    f"{last_error}\nReturn only valid JSON this time."
+                )
             )
             completion = await self.complete(
                 body, system=system, max_tokens=max_tokens, temperature=temperature

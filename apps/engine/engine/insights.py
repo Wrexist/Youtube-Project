@@ -18,7 +18,7 @@ whole reason this module is careful.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from engine.stats import Comparison, summarize, welch_t_test
@@ -33,7 +33,7 @@ ALPHA = 0.05
 MIN_MEANINGFUL_LIFT = 8.0  # percent
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     CONFIRMED = "confirmed"
     SUGGESTIVE = "suggestive"
     INSUFFICIENT = "insufficient"
@@ -201,9 +201,7 @@ def analyze(
                 )
             )
 
-    report.findings.sort(
-        key=lambda f: (f.verdict is not Verdict.CONFIRMED, -abs(f.lift))
-    )
+    report.findings.sort(key=lambda f: (f.verdict is not Verdict.CONFIRMED, -abs(f.lift)))
     return report
 
 
@@ -225,9 +223,7 @@ def _formatter(metric: Metric):
     return lambda v: f"{v:,.0f}"
 
 
-def map_retention_to_beats(
-    curve: list[float], beats: list, duration_s: float
-) -> list[dict]:
+def map_retention_to_beats(curve: list[float], beats: list, duration_s: float) -> list[dict]:
     """Locate each script beat on the retention curve and find the steepest drop.
 
     This is what turns "retention falls at 20%" into "retention falls at the first

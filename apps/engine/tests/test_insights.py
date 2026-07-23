@@ -11,13 +11,12 @@ import pytest
 
 from engine.insights import (
     MIN_PER_GROUP,
-    VideoRecord,
     Verdict,
+    VideoRecord,
     analyze,
     map_retention_to_beats,
 )
 from engine.stats import summarize, two_tailed_p, welch_t_test
-
 
 # ── the t-distribution itself ───────────────────────────────────────────────
 
@@ -29,12 +28,12 @@ def test_t_of_zero_is_certainly_not_significant():
 @pytest.mark.parametrize(
     "t,df,expected",
     [
-        (2.306, 8, 0.05),      # published critical value, df=8
-        (2.228, 10, 0.05),     # df=10
-        (2.042, 30, 0.05),     # df=30
+        (2.306, 8, 0.05),  # published critical value, df=8
+        (2.228, 10, 0.05),  # df=10
+        (2.042, 30, 0.05),  # df=30
         (1.960, 100_000, 0.05),  # converges on the normal
-        (1.000, 8, 0.3466),    # mid-range check
-        (3.355, 8, 0.01),      # df=8 at p=0.01
+        (1.000, 8, 0.3466),  # mid-range check
+        (3.355, 8, 0.01),  # df=8 at p=0.01
     ],
 )
 def test_p_values_match_published_critical_values(t, df, expected):
@@ -92,9 +91,7 @@ def test_a_clear_large_difference_is_confirmed():
     records = videos("curiosity_gap", [6.0, 6.4, 6.1, 6.3, 6.2, 6.5, 6.0, 6.6]) + videos(
         "number_list", [4.0, 4.2, 3.9, 4.1, 4.0, 4.3, 3.8, 4.1]
     )
-    finding = next(
-        f for f in analyze(records).findings if f.metric == "ctr"
-    )
+    finding = next(f for f in analyze(records).findings if f.metric == "ctr")
     assert finding.verdict is Verdict.CONFIRMED
     assert finding.winner == "curiosity_gap"
     assert finding.lift > 40
