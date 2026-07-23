@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from engine import feedback
 from engine.providers import llm
 from engine.research import keywords
 from engine.workflows.base import Provenance, Stage, StageOutput, WorkflowContext
@@ -171,6 +172,14 @@ class TitlesStage(Stage[list]):
             or "(none retrieved — rely on the search queries above)"
         )
 
+        # Only confirmed findings reach the prompt; suggestive ones are shown to the
+        # user and withheld from the generator.
+        learned = (
+            feedback.guidance_for(ctx.inputs["insights"], "titles")
+            if ctx.inputs.get("insights")
+            else ""
+        )
+
         result, completion = await model.json(
             f"""Topic: {evidence.seed}
 
@@ -191,7 +200,7 @@ approaches.
 Then identify the primary keyword (the query with the best volume-to-competition
 trade-off from the list above) and the gap: what are all the ranking titles doing that
 you are deliberately not doing?
-
+{learned}
 Return: {{"titles": [{{"text": str, "strategy": str}}],
           "primary_keyword": str, "competitor_gap": str}}""",
             max_tokens=2500,

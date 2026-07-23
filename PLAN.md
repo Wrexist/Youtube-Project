@@ -153,7 +153,12 @@ Built: OAuth with encrypted refresh tokens ([youtube.py](apps/engine/engine/prov
 6. **Quota reality:** default is 10,000 units/day and an upload costs ~1,600 → **~6 uploads/day per project**. Build a quota ledger and surface remaining budget in the UI; plan a quota-extension application early if volume matters.
 7. **Exit:** one-click publish or schedule, from the web UI, to a real channel.
 
-### Phase 8 — Analytics feedback loop *(2 days)*
+### Phase 8 — Analytics feedback loop *(2 days)* — **code complete, unverified against the live API**
+
+Built: hand-rolled Welch's t-test with an exact p-value ([stats.py](apps/engine/engine/stats.py)), attribution with confirmed/suggestive/insufficient verdicts ([insights.py](apps/engine/engine/insights.py)), the Analytics API client ([analytics.py](apps/engine/engine/providers/analytics.py)), and prompt feedback gated on confirmed findings only ([feedback.py](apps/engine/engine/feedback.py)).
+
+**The gate is the point.** A finding needs 8+ videos per group, p<0.05, *and* ≥8% lift before it is allowed to change a prompt. Everything else is shown to the user and withheld from the generator.
+
 1. YouTube Analytics API: daily pull of impressions, CTR, average view duration, retention curve.
 2. Attribute performance back to the title variant / thumbnail / hook / script prompt that produced it.
 3. Surface: "titles using the curiosity-gap pattern average 6.2% CTR vs 4.1% for numbers, over 23 videos."

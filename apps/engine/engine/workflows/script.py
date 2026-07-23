@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from engine import feedback
 from engine.providers import llm
 from engine.research import web
 from engine.workflows.base import Provenance, Stage, StageOutput, WorkflowContext
@@ -162,6 +163,13 @@ class HookStage(Stage[dict]):
         fmt = ctx.inputs.get("format", "short")
         model = llm.primary()
 
+        # Confirmed findings from this channel's own performance, if there are any.
+        # Empty for a new channel, which is correct — nine videos teach nothing.
+        learned = feedback.guidance_for(ctx.inputs["insights"], "hook") if ctx.inputs.get(
+            "insights"
+        ) else ""
+        learned += feedback.retention_guidance(ctx.inputs.get("last_retention_map", []))
+
         result, completion = await model.json(
             f"""Angle: {chosen["angle"]}
 Tension: {chosen["tension"]}
@@ -180,7 +188,7 @@ explain what is coming. Those are retention leaks.
 
 For each variant report `time_to_tension` — how many words pass before the
 interesting thing arrives. Lower is better; above 12 is usually fatal.
-
+{learned}
 Return: {{"variants": [{{"text": str, "device": str, "time_to_tension": int,
                         "promise": str}}], "chosen": int}}""",
             max_tokens=1500,

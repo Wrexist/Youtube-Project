@@ -7,18 +7,24 @@ import {
   SUBS_28D,
   RETENTION,
   RETENTION_BEATS,
+  RETENTION_BEAT_MAP,
   FINDINGS,
+  SKIPPED,
 } from "@/lib/demo";
 
 /** Analytics — a narrative, not a wall of charts.
  *
- *  Read top to bottom: one number that matters, three supporting tiles, then plain
- *  sentences stating what the system has learned, then the retention map. The
- *  per-video table is last and collapsed, because it is reference material rather
- *  than insight.
+ *  Read top to bottom: the one number that matters, three supporting tiles, then
+ *  what the system has learned as plain sentences, then the retention map. The
+ *  per-video table is last and collapsed — reference material, not insight.
+ *
+ *  Every claim carries its sample size and verdict. A finding from 9 videos must not
+ *  look like a finding from 90, because only the confirmed ones actually change what
+ *  the generator does.
  */
 export default function AnalyticsPage() {
   const total = VIEWS_28D.reduce((a, b) => a + b, 0);
+  const confirmed = FINDINGS.filter((f) => f.verdict === "confirmed");
 
   return (
     <>
@@ -31,6 +37,10 @@ export default function AnalyticsPage() {
             delta={38.2}
             series={VIEWS_28D}
           />
+          <p className="mt-3 text-[12px] text-[var(--color-faint)]">
+            The two most recent days are provisional — YouTube&apos;s data lags 24–48
+            hours.
+          </p>
         </section>
 
         <section className="grid gap-4 sm:grid-cols-3">
@@ -57,22 +67,36 @@ export default function AnalyticsPage() {
 
         {/* The payoff of the whole system: what it has learned, in sentences. */}
         <section className="mt-10">
-          <h2 className="text-[13px] font-semibold text-[var(--color-muted)]">
-            What&apos;s working
-          </h2>
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-[13px] font-semibold text-[var(--color-muted)]">
+              What&apos;s working
+            </h2>
+            <span className="mono text-[12px] text-[var(--color-faint)]">
+              {confirmed.length} of {FINDINGS.length} confirmed
+            </span>
+          </div>
+
           <div className="mt-3 grid gap-2.5">
             {FINDINGS.map((f) => (
               <Card key={f.claim} className="px-5 py-4">
                 <div className="flex items-start gap-4">
                   <div className="min-w-0 flex-1">
-                    <p className="text-[14px] leading-snug">{f.claim}</p>
-                    <p className="mt-1 text-[12px] text-[var(--color-faint)]">
-                      {f.against} · across {f.n} videos
+                    <div className="flex flex-wrap items-center gap-2">
+                      <VerdictBadge verdict={f.verdict} />
+                      <p className="text-[14px] leading-snug">{f.claim}</p>
+                    </div>
+                    <p className="mono mt-1.5 text-[12px] text-[var(--color-faint)]">
+                      {f.detail} · p={f.p.toFixed(3)}
                     </p>
                   </div>
                   <span
                     className="mono shrink-0 text-[13px]"
-                    style={{ color: "var(--color-ok)" }}
+                    style={{
+                      color:
+                        f.verdict === "confirmed"
+                          ? "var(--color-ok)"
+                          : "var(--color-muted)",
+                    }}
                   >
                     +{f.lift}%
                   </span>
@@ -80,9 +104,26 @@ export default function AnalyticsPage() {
               </Card>
             ))}
           </div>
-          <p className="mt-3 text-[12px] text-[var(--color-faint)]">
-            These patterns feed back into title and hook generation automatically.
+
+          <p className="mt-3 text-[12px] leading-relaxed text-[var(--color-faint)]">
+            Confirmed findings feed back into title and hook generation
+            automatically. Suggestive ones are shown here and deliberately withheld
+            from the generator — training on noise makes the system worse, and it
+            does it invisibly.
           </p>
+
+          {SKIPPED.length > 0 && (
+            <div className="mt-3 rounded-[var(--radius-card)] border border-dashed border-[var(--color-line)] px-4 py-3">
+              <p className="text-[12px] font-semibold text-[var(--color-muted)]">
+                Not enough data to compare
+              </p>
+              {SKIPPED.map((s) => (
+                <p key={s} className="mono mt-1 text-[11px] text-[var(--color-faint)]">
+                  {s}
+                </p>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="mt-10">
@@ -92,13 +133,44 @@ export default function AnalyticsPage() {
             </h2>
             <span className="mono text-[12px] text-[var(--color-faint)]">8:02</span>
           </div>
+
           <Card className="mt-3 p-6">
             <RetentionMap curve={RETENTION} beats={RETENTION_BEATS} />
           </Card>
+
+          <div className="mt-3 grid gap-1.5">
+            {RETENTION_BEAT_MAP.map((beat) => (
+              <div
+                key={beat.label}
+                className="flex items-center gap-3 text-[12px]"
+                style={{
+                  color: beat.worst ? "var(--color-warn)" : "var(--color-faint)",
+                }}
+              >
+                <span className="mono w-10 shrink-0 text-right">{beat.at}%</span>
+                <span className="w-40 shrink-0">{beat.label}</span>
+                <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--color-raised)]">
+                  <div
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${(beat.drop / 25) * 100}%`,
+                      background: beat.worst
+                        ? "var(--color-warn)"
+                        : "var(--color-line-hover)",
+                    }}
+                  />
+                </div>
+                <span className="mono w-16 shrink-0 text-right">
+                  −{beat.drop} pts
+                </span>
+              </div>
+            ))}
+          </div>
+
           <p className="mt-3 text-[12px] leading-relaxed text-[var(--color-faint)]">
-            Beats are overlaid on the curve, so a drop-off points at the sentence that
-            caused it. The steepest fall here lands on the first data point — the
-            script states a figure without setting up why it matters.
+            Drop is measured per unit of runtime, so a long beat isn&apos;t flagged
+            just for being long. The worst beat here is fed into the next script&apos;s
+            prompt as an explicit instruction not to repeat it.
           </p>
         </section>
 
@@ -111,12 +183,26 @@ export default function AnalyticsPage() {
               </span>
             </summary>
             <Card className="mt-3 p-5 text-[13px] text-[var(--color-faint)]">
-              Wired to the YouTube Analytics API in Phase 8. Data lags 24–48 hours;
-              the two most recent days are always marked provisional.
+              Populated from the YouTube Analytics API once a channel is connected.
             </Card>
           </details>
         </section>
       </Page>
     </>
+  );
+}
+
+function VerdictBadge({ verdict }: { verdict: "confirmed" | "suggestive" }) {
+  const confirmed = verdict === "confirmed";
+  return (
+    <span
+      className="mono shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase"
+      style={{
+        color: confirmed ? "var(--color-ok)" : "var(--color-muted)",
+        borderColor: confirmed ? "var(--color-ok)" : "var(--color-line-hover)",
+      }}
+    >
+      {verdict}
+    </span>
   );
 }

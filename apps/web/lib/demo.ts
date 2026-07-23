@@ -228,25 +228,51 @@ export const RETENTION_BEATS = [
   { at: 86, label: "Payoff" },
 ];
 
+/** Findings carry their verdict, sample size, and p-value.
+ *  Only `confirmed` ones are fed back into generation — see engine/feedback.py. */
 export const FINDINGS = [
   {
-    claim: "Curiosity-gap titles average 6.2% CTR",
-    against: "4.1% for number-led titles",
-    n: 23,
+    claim: "Curiosity-gap titles beat number-led titles on click-through rate",
+    detail: "6.2% vs 4.1% across 23 and 19 videos",
+    verdict: "confirmed" as const,
     lift: 51,
+    p: 0.003,
+    n: [23, 19] as [number, number],
   },
   {
-    claim: "A question in the first 3 seconds holds +12%",
-    against: "measured at the 30-second mark",
-    n: 31,
-    lift: 12,
-  },
-  {
-    claim: "Thumbnails with one focal point beat composed scenes",
-    against: "5.9% vs 4.4% CTR",
-    n: 18,
+    claim: "One-focal-point thumbnails beat composed scenes on click-through rate",
+    detail: "5.9% vs 4.4% across 18 and 14 videos",
+    verdict: "confirmed" as const,
     lift: 34,
+    p: 0.019,
+    n: [18, 14] as [number, number],
   },
+  {
+    claim: "Contradiction hooks hold 30-second retention better than questions",
+    detail: "74% vs 66% across 11 and 9 videos",
+    verdict: "suggestive" as const,
+    lift: 12,
+    p: 0.082,
+    n: [11, 9] as [number, number],
+  },
+];
+
+/** Dimensions with too little data to compare. Stated rather than hidden — an
+ *  absent finding and an untested one look identical otherwise. */
+export const SKIPPED = [
+  "script_model: needs 2 groups of 8+ videos, has 1 (3 groups total)",
+];
+
+/** Retention curve mapped onto script beats. `worst` marks the steepest drop
+ *  per unit of runtime, so a long beat isn't flagged just for being long. */
+export const RETENTION_BEAT_MAP = [
+  { at: 0, label: "Hook", drop: 12, worst: false },
+  { at: 12, label: "Setup", drop: 7, worst: false },
+  { at: 20, label: "First data point", drop: 23, worst: true },
+  { at: 34, label: "Case study", drop: 6, worst: false },
+  { at: 47, label: "Mid-roll device", drop: 4, worst: false },
+  { at: 68, label: "Counter-argument", drop: 9, worst: false },
+  { at: 86, label: "Payoff", drop: 11, worst: false },
 ];
 
 /** Finished videos waiting for a publish slot. */
