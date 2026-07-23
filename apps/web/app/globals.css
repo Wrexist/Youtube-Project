@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/* Design tokens. Every value in docs/UI-DESIGN.md lives here and nowhere else —
+   a raw hex in a component is a bug. */
+@theme {
+  --color-bg: #0a0a0b;
+  --color-surface: #141416;
+  --color-raised: #1c1c1f;
+  --color-line: #26262a;
+  --color-line-hover: #33333a;
+  --color-ink: #fafafa;
+  --color-muted: #a1a1aa;
+  --color-faint: #71717a;
+  --color-accent: #ff3b30;
+  --color-ok: #34d399;
+  --color-warn: #fbbf24;
+  --color-bad: #f87171;
+
+  --radius-btn: 6px;
+  --radius-card: 8px;
+  --radius-modal: 12px;
+
+  --ease-in-out: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Light mode inverts the neutral ramp; the accent is unchanged.
+   Both themes ship together — a dark-only style is a bug. */
+:root {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-bg: #fbfbfc;
+    --color-surface: #ffffff;
+    --color-raised: #f4f4f5;
+    --color-line: #e4e4e7;
+    --color-line-hover: #d4d4d8;
+    --color-ink: #18181b;
+    --color-muted: #52525b;
+    --color-faint: #8a8a93;
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --color-bg: #fbfbfc;
+  --color-surface: #ffffff;
+  --color-raised: #f4f4f5;
+  --color-line: #e4e4e7;
+  --color-line-hover: #d4d4d8;
+  --color-ink: #18181b;
+  --color-muted: #52525b;
+  --color-faint: #8a8a93;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #0a0a0b;
+  --color-surface: #141416;
+  --color-raised: #1c1c1f;
+  --color-line: #26262a;
+  --color-line-hover: #33333a;
+  --color-ink: #fafafa;
+  --color-muted: #a1a1aa;
+  --color-faint: #71717a;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: ui-monospace, "JetBrains Mono", "Cascadia Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Focus is always visible. `outline: none` without a replacement is rejected. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-raised);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.05), transparent);
+  animation: shimmer 1.6s infinite;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.rise { animation: rise 0.4s var(--ease-in-out) both; }
+
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgb(255 59 48 / 0.4); }
+  70%  { box-shadow: 0 0 0 6px rgb(255 59 48 / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(255 59 48 / 0); }
+}
+.pulse { animation: pulse-ring 1.8s infinite; }
+
+/* Motion communicates state change; when the user opts out, state still changes. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
