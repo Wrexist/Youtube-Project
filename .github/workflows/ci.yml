@@ -42,6 +42,10 @@ jobs:
         run: alembic upgrade head
         env:
           STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@localhost:5432/studio
+      # The committed schema is what generates the web app's types. If a route
+      # changed without re-exporting, the contract silently lies.
+      - name: openapi.json matches the app
+        run: python scripts/export_openapi.py --check
 
   # vendor/moneyprinterturbo is a read-only reference snapshot. Nothing may import
   # it — the house rules in CLAUDE.md apply only to code that has been ported out.
@@ -65,6 +69,10 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # A stale contract is silent drift: the web app keeps compiling against types
+      # the engine no longer serves. Fail the build instead.
+      - name: Generated types match openapi.json
+        run: npm run check --workspace=@studio/contracts
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
