@@ -3,8 +3,14 @@
 What is unverified, what is knowingly incomplete, and what will need a human.
 Ordered by how likely it is to bite you.
 
-Last updated after Phase 10 + channel launcher + model routing.
-**104 engine tests passing. Web builds and typechecks clean.**
+Last updated after vendoring the MoneyPrinterTurbo reference and porting the render
+services that were missing from it (`engine/services/`).
+**217 engine tests passing. Web builds and typechecks clean.**
+
+One unrelated fix came with it: `stats.two_tailed_p` fell back to `math.betainc`,
+which **no released CPython has**. `scipy` was not declared anywhere, so a clean
+`pip install -e ".[dev]"` produced 17 failures in `test_insights.py` and CI was red.
+`scipy` is now a real dependency and the dead fallback is gone. See 4.6.
 
 ---
 
@@ -39,8 +45,15 @@ live daemon.
 **To fix:** `ollama serve`, `ollama pull qwen2.5:14b`, then
 `POST /v1/models/ollama/register` and `POST /v1/models/test`.
 
-### 1.4 No `PEXELS_API_KEY` → no footage
-`MaterialsStage` raises immediately without one. Free key, instant signup.
+### 1.4 No stock provider key → no footage
+`MaterialsStage` raises immediately unless `PEXELS_API_KEY` or `PIXABAY_API_KEY`
+is set. Both are free and instant. Pexels is searched first and Pixabay fills
+whatever it could not — with only one key you get one shot per beat, and a beat
+with no footage is a hole in the video.
+
+Pixabay has no orientation parameter, so its results are filtered on the returned
+dimensions. Upstream compares width only, which is how a landscape clip ends up
+in a portrait render with the subject cropped out of frame.
 
 ---
 
@@ -53,9 +66,14 @@ These were actually executed on this machine, not assumed:
   4.1.
 - **Edge TTS + subtitle cues.** Real audio, real word-boundary timings, correctly
   grouped into readable lines. Fixed a real bug — see 4.2.
-- **FastAPI app imports** with all 16 routes registered.
-- **104 unit tests**, covering the workflow framework, scheduling, quota arithmetic,
-  statistics, attribution, automation, and model routing.
+- **FastAPI app imports** with all routes registered.
+- **217 unit tests**, covering the workflow framework, scheduling, quota arithmetic,
+  statistics, attribution, automation, model routing, and — new — stock-provider
+  response parsing, Ken Burns ramps, font resolution and BGM path safety.
+
+**Not executed:** Ken Burns motion, cross-clip fades and the BGM mix are new and
+have unit tests for their arithmetic and path handling only. None has been through
+a real MoviePy render. Do one short before trusting the look.
 
 ---
 
@@ -86,8 +104,15 @@ application to Google that takes weeks.
 
 ### 3.3 Music licensing
 Nothing ships with licensed music. MoneyPrinterTurbo's bundled `resource/songs` has
-unclear provenance and is deliberately **not** carried over. Do not publish anything
-with it.
+unclear provenance and is deliberately **not** carried over — it is excluded from the
+vendored snapshot too. Do not publish anything scored with it.
+
+The mixing code exists (`engine/services/bgm.py`): looped, faded out over the last
+three seconds, mixed under the narration at `STUDIO_BGM_VOLUME`. It is **off by
+default** and the music directory is **empty by default**. Drop tracks you have the
+right to publish into `./storage/bgm` and set `STUDIO_BGM_ENABLED=true`.
+
+The mix is unverified against a real render — see 6, "not executed".
 
 ---
 
@@ -96,8 +121,10 @@ with it.
 ### 4.1 MoviePy 2.x API
 Written against 1.x; 2.1.2 installed. `moviepy.editor` is gone, and
 `subclip`/`resize`/`crop`/`set_*` were all renamed. `TextClip` now requires an
-explicit font **path** — a family name raises. Fixed, with a `_subtitle_font()` probe
-that fails loudly with an actionable message rather than 90% into a render.
+explicit font **path** — a family name raises. Fixed, with a probe that fails loudly
+with an actionable message rather than 90% into a render. That probe now lives in
+`engine/services/fonts.py` and also honours `STUDIO_SUBTITLE_FONT` and a
+`./storage/fonts` drop-in directory.
 
 ### 4.2 edge-tts emitted zero subtitle cues
 edge-tts 7 changed the `boundary` default to `SentenceBoundary`; the handler only
@@ -113,6 +140,15 @@ job's progress stream. Moved to a thread.
 ### 4.4 Retention mapping used indexing where it needed interpolation
 Any beat shorter than one curve sample reported a drop of exactly zero — so short
 beats, often the ones that lose people, could never be flagged.
+
+### 4.6 The p-value fallback could never have run
+`two_tailed_p` claimed to fall back to `math.betainc` "for an exact result without
+any third-party dependency". `math.betainc` does not exist — not in 3.11, not in
+3.12, not in any released CPython. `scipy` was also absent from `pyproject.toml`,
+so on a clean install every attribution comparison raised `AttributeError` and 17
+tests failed. `scipy` is now a declared dependency and the branch is deleted rather
+than approximated: a wrong p-value trains the feedback loop on noise, which is a
+worse failure than a missing package.
 
 ### 4.5 Python 3.12-only f-string syntax
 Nested same-quotes in an f-string. Ran fine on the 3.13 venv, would have crashed on
@@ -130,7 +166,9 @@ real ranking signal.
 
 **Proper fix:** realign cue text against the original script — match each cue's words
 back to the source sentence and restore the punctuation. MoneyPrinterTurbo does a
-version of this in `voice.py:_match_script_line`.
+version of this in `vendor/moneyprinterturbo/app/services/voice.py:_match_script_line`.
+`media._restore_punctuation` is our take on it; it recovers terminal `.!?` but not
+commas or quotes.
 
 ### 5.2 Publish-time scheduling is a heuristic
 YouTube exposes no hourly "when your viewers are online" dimension publicly. The

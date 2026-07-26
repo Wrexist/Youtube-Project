@@ -43,6 +43,7 @@ apps/engine/.venv/Scripts/python -m pytest apps/engine/tests -q
 apps/web/      Next.js 16 · Tailwind 4 · dark and light
 apps/engine/   FastAPI · arq workers · owns generation, rendering, publishing
 docs/          design spec
+vendor/        MoneyPrinterTurbo, read-only reference. Never imported.
 ```
 
 ## The parts that carry the weight
@@ -58,6 +59,9 @@ docs/          design spec
 | [insights.py](apps/engine/engine/insights.py) | Metrics attributed back to the title strategy and hook device that produced them |
 | [automation.py](apps/engine/engine/automation.py) | Series cadence, approval gates, spend ceilings |
 | [ideas.py](apps/engine/engine/ideas.py) | Backlog scoring and duplicate detection |
+| [services/stock.py](apps/engine/engine/services/stock.py) | Pexels then Pixabay, orientation enforced, no clip reused across a video |
+| [services/effects.py](apps/engine/engine/services/effects.py) | Ken Burns and fades — what stops stock footage looking like stock footage |
+| [services/bgm.py](apps/engine/engine/services/bgm.py) | Music bed, off by default because nothing here ships licensed music |
 
 ## Three things worth knowing before relying on it
 
@@ -72,6 +76,9 @@ docs/          design spec
 
 ## Status
 
-Phases 0–10 are code-complete. **Neither Google API has been exercised against a live
-account** — upload, captions and analytics are reviewed code, not proven code. That
-needs OAuth credentials from a Google Cloud project.
+Phases 0–10 are code-complete; 217 engine tests pass. **Neither Google API has been
+exercised against a live account** — upload, captions and analytics are reviewed
+code, not proven code. That needs OAuth credentials from a Google Cloud project.
+
+The render additions above (motion, fades, music, Pixabay) have unit tests but have
+not been through a real MoviePy render. See [KNOWN-ISSUES.md](KNOWN-ISSUES.md) §2.

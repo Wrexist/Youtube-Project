@@ -13,7 +13,6 @@ places we deliberately diverge from upstream:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -23,6 +22,7 @@ import httpx
 from loguru import logger
 
 from engine.render import compose
+from engine.services import stock
 from engine.settings import get_settings
 from engine.storage import store
 from engine.workflows.base import Provenance, Stage, StageOutput, WorkflowContext
@@ -118,22 +118,26 @@ class MaterialsStage(Stage[Materials]):
         aspect = ctx.inputs.get("aspect", "9:16")
         settings = get_settings()
 
-        if not settings.pexels_api_key:
-            raise RuntimeError("PEXELS_API_KEY is not set; cannot source footage")
+        if not (settings.pexels_api_key or settings.pixabay_api_key):
+            raise RuntimeError(
+                "no stock provider configured; set PEXELS_API_KEY or PIXABAY_API_KEY"
+            )
 
         materials = Materials()
         seen_ids: set[str] = set()
 
-        async with httpx.AsyncClient(
-            timeout=30.0, headers={"Authorization": settings.pexels_api_key}
-        ) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             for index, beat in enumerate(beats):
                 await ctx.progress(
                     f"sourcing beat {index + 1}/{len(beats)}", (index + 1) / len(beats)
                 )
                 needed = max(1, round(beat.est_seconds / PACING.get(beat.energy, 3.5)))
-                clips = await _pexels_search(
-                    client, beat.visual_direction, aspect, needed, seen_ids
+                clips = await stock.search(
+                    beat.visual_direction,
+                    aspect=aspect,
+                    count=needed,
+                    exclude=seen_ids,
+                    client=client,
                 )
                 for clip in clips:
                     clip["beat_index"] = index
@@ -146,7 +150,12 @@ class MaterialsStage(Stage[Materials]):
         return StageOutput(
             value=materials,
             provenance=Provenance(
-                params={"aspect": aspect, "unique_clips": len(seen_ids), "pacing": PACING}
+                params={
+                    "aspect": aspect,
+                    "unique_clips": len(seen_ids),
+                    "pacing": PACING,
+                    "providers": sorted({c["provider"] for c in materials.clips}),
+                }
             ),
         )
 
@@ -412,60 +421,7 @@ def _split_sentence_cues(sentences: list[dict], max_chars: int = 42) -> list[dic
     return out
 
 
-async def _pexels_search(
-    client: httpx.AsyncClient,
-    query: str,
-    aspect: str,
-    count: int,
-    exclude: set[str],
-) -> list[dict]:
-    orientation = "portrait" if aspect == "9:16" else "landscape"
-    try:
-        resp = await client.get(
-            "https://api.pexels.com/videos/search",
-            params={"query": query, "orientation": orientation, "per_page": count * 3},
-        )
-        resp.raise_for_status()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("pexels search failed for {!r}: {}", query, exc)
-        return []
-
-    picked: list[dict] = []
-    for video in resp.json().get("videos", []):
-        vid = str(video["id"])
-        if vid in exclude:
-            continue  # upstream repeats clips across a video; we don't
-        files = sorted(
-            (f for f in video["video_files"] if f.get("width")),
-            key=lambda f: f["width"],
-            reverse=True,
-        )
-        if not files:
-            continue
-        picked.append(
-            {
-                "id": vid,
-                "url": files[0]["link"],
-                "duration": video.get("duration", 0),
-                "query": query,
-            }
-        )
-        if len(picked) >= count:
-            break
-    return picked
-
-
-async def download_all(clips: list[dict]) -> None:
-    """Fetch clip files in parallel. Called by the compose step."""
-    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-        await asyncio.gather(*(_download(client, c) for c in clips))
-
-
-async def _download(client: httpx.AsyncClient, clip: dict) -> None:
-    key = f"materials/{clip['id']}.mp4"
-    if await store.exists(key):
-        clip["path"] = str(await store.local_path(key))
-        return
-    resp = await client.get(clip["url"])
-    resp.raise_for_status()
-    clip["path"] = str(await store.put_bytes(resp.content, key))
+# Stock search and download moved to engine.services.stock when Pixabay was added
+# as a fallback provider. Re-exported so `from engine.workflows.media import
+# download_all` keeps working.
+download_all = stock.download_all

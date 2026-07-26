@@ -88,23 +88,18 @@ def summarize(values: Sequence[float]) -> Summary:
 def two_tailed_p(t_stat: float, df: float) -> float:
     """Two-tailed p-value from a t-statistic and degrees of freedom.
 
-    Uses scipy when available; falls back to Python's built-in
-    ``math.betainc`` (Python 3.12+) for an exact result without any
-    third-party dependency.
+    Requires scipy, which is a hard dependency for exactly this reason. There
+    used to be a ``math.betainc`` fallback here "for an exact result without any
+    third-party dependency" — but no released CPython has ``math.betainc``, so
+    that branch raised ``AttributeError`` every time it was reached. A wrong
+    p-value silently trains the Phase 8 feedback loop on noise, which is worse
+    than a missing package, so this fails loudly instead of approximating.
 
     Formula: P(|T| > |t| | df) = I(df / (df + t²); df/2, 1/2)
     """
-    try:
-        from scipy.stats import t as t_dist  # type: ignore[import]
+    from scipy.stats import t as t_dist  # type: ignore[import]
 
-        return float(2 * t_dist.sf(abs(t_stat), df))
-    except ImportError:
-        pass
-    t_abs = abs(t_stat)
-    if t_abs == 0.0:
-        return 1.0
-    x = df / (df + t_abs ** 2)
-    return math.betainc(df / 2.0, 0.5, x)
+    return float(2 * t_dist.sf(abs(t_stat), df))
 
 
 def welch_t_test(a_values: Sequence[float], b_values: Sequence[float]) -> Comparison:

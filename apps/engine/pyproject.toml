@@ -21,6 +21,10 @@ dependencies = [
     "moviepy>=1.0.3",
     "edge-tts>=6.1",
     "faster-whisper>=1.1",
+    # Phase 8's statistical gate. Not optional: the pure-Python fallback in
+    # stats.py was written against a `math.betainc` that does not exist in any
+    # released CPython, so without this every attribution comparison raises.
+    "scipy>=1.14",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,4 @@
+# Reference snapshot of MoneyPrinterTurbo. Not ours, not built, not edited.
+# Keeps it out of language stats and collapsed in pull request diffs.
+vendor/** linguist-vendored
+vendor/** -diff

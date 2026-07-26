@@ -13,6 +13,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from engine.services import bgm, effects, fonts
 from engine.settings import get_settings
 from engine.storage import store
 
@@ -31,7 +32,7 @@ async def compose_video(
     job_id: str,
     on_progress: ProgressFn,
 ) -> Path:
-    from engine.workflows.media import download_all
+    from engine.services.stock import download_all
 
     await on_progress(0.05, "downloading footage")
     await download_all(clips)
@@ -72,6 +73,7 @@ def _render_sync(
         concatenate_videoclips,
     )
 
+    settings = get_settings()
     width, height = RESOLUTIONS[aspect]
     narration = AudioFileClip(str(audio_path))
     total = narration.duration
@@ -100,13 +102,31 @@ def _render_sync(
     if not segments:
         raise RuntimeError("no usable clips after download")
 
+    # Motion and fades go on after the whole timeline is known — the first and last
+    # segments are treated differently, and that cannot be decided mid-loop.
+    report(0.70, "applying motion")
+    segments = [
+        effects.style_segment(
+            segment,
+            index=index,
+            count=len(segments),
+            ken_burns=settings.ken_burns,
+            fade_s=settings.transition_fade_s,
+        )
+        for index, segment in enumerate(segments)
+    ]
+
     video = concatenate_videoclips(segments, method="compose").with_duration(total)
-    video = video.with_audio(narration)
+
+    track = bgm.resolve() if bgm.should_mix(settings.bgm_volume) else None
+    video = video.with_audio(
+        bgm.mix(narration, duration=total, track=track, volume=settings.bgm_volume)
+    )
 
     report(0.75, "burning subtitles")
     # MoviePy 2 requires an explicit font path for TextClip — it no longer falls back
     # to an ImageMagick-resolved family name, and omitting it raises at construction.
-    font = _subtitle_font()
+    font = fonts.cached_resolve(settings.subtitle_font)
     overlays = [
         TextClip(
             text=cue["text"],
@@ -165,29 +185,6 @@ def _fit(clip, width: int, height: int):
     )
 
 
-def _subtitle_font() -> str:
-    """A concrete font file for TextClip.
-
-    MoviePy 2 passes this straight to Pillow, so a family name will not do — it needs
-    a path that exists. The candidates cover Windows, the Debian-based engine image,
-    and macOS. Failing loudly here beats failing 90% of the way through a render.
-    """
-    candidates = [
-        r"C:\Windows\Fonts\arialbd.ttf",
-        r"C:\Windows\Fonts\arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-    ]
-    for path in candidates:
-        if Path(path).exists():
-            return path
-    raise RuntimeError(
-        "no subtitle font found — install fonts-dejavu-core, or add a path to "
-        "_subtitle_font(). Tried: " + ", ".join(candidates)
-    )
-
-
 async def transcribe(audio_path: Path) -> list[dict]:
     """Whisper fallback for TTS backends that return no word boundaries."""
 
@@ -218,8 +215,10 @@ async def make_thumbnail(concept: dict, *, job_id: str, index: int) -> str:
 
         words = concept["overlay_text"].upper().split()[:5]
         try:
-            font = ImageFont.truetype("arialbd.ttf", 150)
-        except OSError:
+            font = ImageFont.truetype(fonts.cached_resolve(), 150)
+        except (OSError, RuntimeError):
+            # A thumbnail in the default bitmap font is ugly but recoverable;
+            # the render it belongs to has already succeeded by this point.
             font = ImageFont.load_default(size=150)
 
         # Left-weighted: the bottom-right ~15% is covered by the duration badge.

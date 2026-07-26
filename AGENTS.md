@@ -27,7 +27,7 @@ infra/          docker-compose: postgres, redis, engine, web.
 
 ## The render core
 
-`apps/engine/engine/services/` is derived from **MoneyPrinterTurbo** (`C:\Users\IsacC\Downloads\MoneyPrinterTurbo-Portable-Windows-1.3.2\MoneyPrinterTurbo`). Consult the original when behavior is unclear — especially `app/services/{video,voice,material,subtitle}.py`.
+`apps/engine/engine/services/` and `engine/render/compose.py` are derived from **MoneyPrinterTurbo**. The upstream source is vendored at [`vendor/moneyprinterturbo/`](vendor/moneyprinterturbo/README.md) — consult it when behavior is unclear, especially `app/services/{video,voice,material,subtitle}.py`. It is reference only: nothing imports it, ruff and pytest never see it, and it is not edited.
 
 Rules for that code:
 - Our public contract is `RenderRequest`, not MPT's `VideoParams`. `VideoParams` is an internal adapter detail and must not leak into API responses or the web app.

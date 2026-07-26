@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     tts_provider: Literal["edge", "azure", "elevenlabs", "gemini"] = "edge"
     tts_voice: str = "en-US-AvaNeural"
 
+    # Render. Ken Burns alternates by default — a whole video pushing the same
+    # direction develops a rhythm the viewer starts to anticipate.
+    subtitle_font: str = ""
+    ken_burns: Literal["none", "in", "out", "alternate"] = "alternate"
+    transition_fade_s: float = Field(default=0.35, ge=0.0, le=2.0)
+
+    # Background music. Off by default and empty by design: nothing ships with
+    # music, and publishing over an unlicensed bed is a copyright strike.
+    # See KNOWN-ISSUES.md §3.3.
+    bgm_enabled: bool = False
+    bgm_dir: str = ""
+    bgm_volume: float = Field(default=0.12, gt=0.0, le=1.0)
+
     # YouTube
     youtube_daily_quota: int = 10_000
     google_redirect_uri: str = "http://localhost:8080/v1/auth/google/callback"
