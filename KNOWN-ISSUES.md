@@ -209,11 +209,23 @@ scheduler measures **weekday** from real data and **estimates hour-of-day** from
 built-in evening-weighted curve. The API labels this `measured_weekday_only` and the
 UI says "estimated" rather than implying precision it does not have.
 
-### 5.3 Thumbnails are placeholder images
-`make_thumbnail` composes real typography with correct safe zones onto a solid
-background. **No image model is wired in.** The composition and text layer are the
-parts worth getting right first; the background is a two-line swap once you pick a
-provider.
+### 5.3 Thumbnail backgrounds are generated but the image APIs are unproven
+Backgrounds now come from GPT Image (or Imagen), through
+[providers/images.py](apps/engine/engine/providers/images.py), reusing
+`OPENAI_API_KEY`/`GEMINI_API_KEY` rather than adding a key. With neither set the
+composition falls back to a flat panel, so a keyless clone still gets a thumbnail.
+
+**Neither transport has been called against a live API** — the request and response
+shapes are covered by tests against recorded envelopes, not by a real key. Same
+standing as the Google clients in §1.1.
+
+Five archetypes with genuinely different layouts live in
+[render/templates.py](apps/engine/engine/render/templates.py), and the three variants
+are forced onto three different ones. Note what is *not* possible here: MrBeast-style
+thumbnails are built on a human face at maximum expression, and this system is
+faceless by design. What is ported is the machinery underneath — one idea readable at
+168px, stakes made visible, saturation past tasteful, big numerals, reserved negative
+space.
 
 ### 5.4 Storage and job state are in-process
 `JOBS`, `CHANNELS`, `SCHEDULE`, `RECORDS`, `LAUNCHES` are module-level dicts. A

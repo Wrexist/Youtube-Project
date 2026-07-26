@@ -248,38 +248,100 @@ class ThumbnailStage(Stage[list]):
         spec = images.selected()
         return 0.06 + (3 * spec.cost_per_image if spec else 0.0)
 
+    def _brief(self, titles, script) -> str:
+        """What the video actually is.
+
+        The concept call used to see one title and one hook — enough to write a
+        plausible thumbnail for a video it had not been told anything about. The
+        beats carry the visual direction and the energy curve, which is precisely
+        what decides whether an archetype fits: a build has a before/after, an
+        explainer has a reveal, and nothing in a title says which.
+        """
+        lines = [f"Title: {titles[0].text}", f"Hook: {script.hook}"]
+
+        alternatives = [t.text for t in titles[1:3]]
+        if alternatives:
+            # Where the titles disagree is where the promise is still unsettled, and
+            # the thumbnail is the other half of that promise.
+            lines.append("Other titles under consideration: " + " / ".join(alternatives))
+
+        beats = getattr(script, "beats", None) or []
+        if beats:
+            lines.append("\nBeats, in order:")
+            for i, beat in enumerate(beats[:10], 1):
+                bits = [getattr(beat, "purpose", "") or ""]
+                visual = getattr(beat, "visual_direction", "")
+                if visual:
+                    bits.append(f"visual: {visual}")
+                energy = getattr(beat, "energy", "")
+                if energy:
+                    bits.append(f"energy: {energy}")
+                lines.append(f"  {i}. " + " — ".join(b for b in bits if b))
+
+        sources = getattr(script, "sources", None) or []
+        if sources:
+            lines.append(f"\nGrounded in {len(sources)} source(s) — this is not a listicle.")
+
+        return "\n".join(lines)
+
     async def run(self, ctx: WorkflowContext) -> StageOutput[list]:
         from engine.providers import llm
+        from engine.render import templates
 
         titles = ctx.get("titles")
         script = ctx.try_get("revision") or ctx.get("draft")
         model = llm.for_task("thumbnail")
 
         concepts, completion = await model.json(
-            f"""Title: {titles[0].text}
-Hook: {script.hook}
+            f"""{self._brief(titles, script)}
 
-Design 3 thumbnail concepts. The thumbnail is judged at 168 pixels wide on a phone —
-anything that only reads at full size has failed.
+Design 3 thumbnail concepts for this video. The thumbnail is judged at 168 pixels
+wide on a phone, in a feed, against everything else competing for that tap —
+anything that only reads at full size has already failed.
 
-Each concept: one focal point, and 3-5 words of overlay text that do NOT repeat the
-title. If the title asks a question, the thumbnail shows the stakes.
+Rules that are not negotiable:
+- One idea per thumbnail. Not two. A viewer gives it a fifth of a second.
+- The overlay text does NOT repeat the title. The title and thumbnail are two halves
+  of one promise; repeating wastes half of it.
+- If the title asks a question, the thumbnail shows the stakes, never the answer.
+- The image prompt describes the image ONLY. Never ask for text, words, numbers,
+  letters or logos in the image — we compose type separately so variants stay
+  swappable, and generated typography is unreliable anyway.
+- Prefer one dominant subject, saturated colour and hard light. Tasteful loses.
 
-The image prompt describes the image only. Never ask for text in the image; we
-compose type separately so variants can be swapped later.
+Pick a different template for each of the 3 concepts:
 
-Return: {{"concepts": [{{"image_prompt": str, "overlay_text": str,
-                        "focal_point": str, "rationale": str}}]}}""",
-            max_tokens=1500,
+{templates.catalogue_for_prompt()}
+
+Accent colours available: {", ".join(templates.ACCENTS)}. Pick one per concept that
+will contrast with its own image, not one that blends into it.
+
+Return: {{"concepts": [{{"template": str, "image_prompt": str, "overlay_text": str,
+                        "accent": str, "focal_point": str, "rationale": str}}]}}""",
+            max_tokens=2000,
         )
+
+        chosen = concepts["concepts"][:3]
+        # Enforced here rather than hoped for in the prompt: asked for variety, models
+        # still return the same archetype three times often enough to matter, and three
+        # variants in one layout is the same thumbnail three times.
+        spread = templates.distinct([c.get("template") for c in chosen])
 
         variants = []
         image_cost = 0.0
-        for i, concept in enumerate(concepts["concepts"][:3]):
-            await ctx.progress(f"rendering concept {i + 1}/3", (i + 1) / 3)
+        for i, (concept, template_key) in enumerate(zip(chosen, spread, strict=False)):
+            await ctx.progress(f"rendering concept {i + 1}/{len(chosen)}", (i + 1) / len(chosen))
+            concept = {**concept, "template": template_key}
             thumb = await compose.make_thumbnail(concept, job_id=ctx.job_id, index=i)
             image_cost += thumb.cost_usd
-            variants.append({**concept, "key": thumb.key, "image_model": thumb.image_model})
+            variants.append(
+                {
+                    **concept,
+                    "key": thumb.key,
+                    "template": thumb.template,
+                    "image_model": thumb.image_model,
+                }
+            )
 
         # Two models produce a thumbnail — one designs the concept, one paints the
         # background — so recording only the first would attribute a winning

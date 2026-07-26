@@ -170,7 +170,7 @@ async def test_a_generated_background_is_cover_fitted_to_16_9(monkeypatch, tmp_p
     _use_storage(monkeypatch, tmp_path)
 
     async def fake_generate(prompt):
-        assert prompt == CONCEPT["image_prompt"], "the concept's image_prompt must be used"
+        assert CONCEPT["image_prompt"] in prompt, "the concept's image_prompt must be used"
         return images.GeneratedImage(
             data=_png(size=(1536, 1024)),
             model="gemini:imagen-4.0-generate-001",
