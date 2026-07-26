@@ -220,3 +220,71 @@ def test_no_secret_is_logged():
         if re.search(r"\{[^}]*(api_key|secret|token)[^}]*\}|\+\s*\w*(api_key|secret|token)", line)
     ]
     assert not interesting, f"possible secret in a log line: {interesting}"
+
+
+# ── worker dispatch ─────────────────────────────────────────────────────────
+#
+# Codex review, P1: `enqueue` returned True whenever Redis accepted the job, so
+# with Redis up but no arq worker consuming — exactly what `docker compose up -d`
+# gives you, since the worker is a separate command — a Generate sat in `running`
+# forever with no stage events and nothing in any log.
+
+
+async def test_enqueue_refuses_when_no_worker_is_consuming(monkeypatch):
+    """Redis being reachable is not the same question as a worker existing."""
+    from engine import worker
+
+    class DeadQueue:
+        async def exists(self, _key):
+            return 0  # the health key has expired, or was never set
+
+        async def enqueue_job(self, *_a, **_kw):
+            raise AssertionError("must not enqueue into a queue nobody is reading")
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(worker, "create_pool", lambda *_a, **_kw: _resolve(DeadQueue()))
+    assert await worker.enqueue("job-1") is False
+
+
+async def test_enqueue_uses_the_worker_when_one_is_alive(monkeypatch):
+    from engine import worker
+
+    enqueued = []
+
+    class LiveQueue:
+        async def exists(self, key):
+            assert key == worker.HEALTH_KEY
+            return 1
+
+        async def enqueue_job(self, fn, *args):
+            enqueued.append((fn, args))
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(worker, "create_pool", lambda *_a, **_kw: _resolve(LiveQueue()))
+    assert await worker.enqueue("job-1") is True
+    assert enqueued == [("run_job_task", ("job-1", None))]
+
+
+async def test_enqueue_falls_back_when_redis_is_absent(monkeypatch):
+    from engine import worker
+
+    async def refuse(*_a, **_kw):
+        raise ConnectionError("no redis")
+
+    monkeypatch.setattr(worker, "create_pool", refuse)
+    assert await worker.enqueue("job-1") is False
+
+
+def test_the_health_check_interval_makes_the_key_a_liveness_signal():
+    """arq's default is an hour, which would keep a dead worker looking alive."""
+    from engine.worker import WorkerSettings
+
+    assert WorkerSettings.health_check_interval <= 60
+
+
+async def _resolve(value):
+    return value

@@ -24,10 +24,12 @@ installed, exactly as it did before this file existed.
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from typing import Any
 
 from arq import create_pool
 from arq.connections import RedisSettings
+from arq.constants import default_queue_name, health_check_key_suffix
 from loguru import logger
 
 from engine.settings import get_settings
@@ -35,6 +37,10 @@ from engine.settings import get_settings
 # One channel per job. Subscribing per job rather than filtering one firehose
 # keeps a busy queue from waking every open browser tab.
 CHANNEL = "studio:job:{}"
+
+# arq's defaults, named here because `enqueue` has to look the health key up.
+QUEUE_NAME = default_queue_name
+HEALTH_KEY = default_queue_name + health_check_key_suffix
 
 
 def build_redis_settings() -> RedisSettings:
@@ -101,16 +107,52 @@ async def run_job_task(ctx: dict, job_id: str, start_from: str | None = None) ->
     return job["status"]
 
 
+async def worker_is_alive(pool) -> bool:
+    """Is a worker actually consuming this queue?
+
+    Redis being reachable is not the same question. `docker compose up -d` starts
+    Postgres and Redis while the worker is a separate command, which is the
+    documented development setup — so keying off Redis alone would enqueue into
+    an empty queue and leave every Generate sitting in `running` forever with no
+    stage events and nothing in any log.
+
+    arq refreshes `arq:queue:health-check` on a TTL, so the key's presence *is*
+    the liveness signal. `WorkerSettings.health_check_interval` below is lowered
+    to 30s specifically to make it one: arq's default of an hour would keep a
+    dead worker looking alive for an hour.
+    """
+    try:
+        return bool(await pool.exists(HEALTH_KEY))
+    except Exception:  # noqa: BLE001 — an unanswerable question is a "no"
+        return False
+
+
 async def enqueue(job_id: str, start_from: str | None = None) -> bool:
-    """Hand a job to the worker. False if Redis is not there, so the caller runs it locally."""
+    """Hand a job to a worker.
+
+    False means the caller should run it in-process — either Redis is not there,
+    or it is but nothing is consuming the queue.
+    """
+    pool = None
     try:
         pool = await create_pool(redis_settings())
+        if not await worker_is_alive(pool):
+            logger.info(
+                "redis is up but no arq worker is consuming {}; running {} in-process. "
+                "Start one with: python -m arq engine.worker.WorkerSettings",
+                QUEUE_NAME,
+                job_id,
+            )
+            return False
         await pool.enqueue_job("run_job_task", job_id, start_from)
-        await pool.aclose()
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not enqueue {} ({}); running in-process", job_id, exc)
         return False
+    finally:
+        if pool is not None:
+            with suppress(Exception):
+                await pool.aclose()
 
 
 class WorkerSettings:
@@ -124,6 +166,11 @@ class WorkerSettings:
     functions: list[Any] = [run_job_task]
     redis_settings: RedisSettings = build_redis_settings()
     max_jobs = 4
+    # 30s, not arq's default hour. The key's TTL is this + 1, and `enqueue` uses
+    # its presence to decide whether a worker exists — an hour-long TTL would let
+    # a worker that died at breakfast still look alive at lunch, and every job
+    # enqueued in between would hang.
+    health_check_interval = 30
     # A long-form render legitimately takes many minutes; arq's default would kill
     # it mid-encode and leave a half-written file.
     job_timeout = 60 * 60
