@@ -113,6 +113,30 @@
         "title": "BulkRoute",
         "type": "object"
       },
+      "CalendarResponse": {
+        "properties": {
+          "quota_by_day": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Quota By Day",
+            "type": "object"
+          },
+          "scheduled": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduledVideo"
+            },
+            "title": "Scheduled",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scheduled",
+          "quota_by_day"
+        ],
+        "title": "CalendarResponse",
+        "type": "object"
+      },
       "EditRequest": {
         "properties": {
           "stage": {
@@ -275,6 +299,56 @@
         "title": "PublishRequest",
         "type": "object"
       },
+      "QuotaResponse": {
+        "description": "The daily YouTube budget.\n\nA response model rather than a bare dict because this is the one payload the\nweb app does arithmetic on \u2014 without it the generated TypeScript types every\nfield as `unknown` and the UI has to cast, which is the hand-written mirror\n`packages/contracts` exists to prevent.",
+        "properties": {
+          "breakdown": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Breakdown",
+            "type": "object"
+          },
+          "by_day": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Day",
+            "type": "object"
+          },
+          "day": {
+            "title": "Day",
+            "type": "string"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "integer"
+          },
+          "uploads_left": {
+            "title": "Uploads Left",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "day",
+          "limit",
+          "spent",
+          "remaining",
+          "uploads_left",
+          "breakdown",
+          "by_day"
+        ],
+        "title": "QuotaResponse",
+        "type": "object"
+      },
       "RouteUpdate": {
         "properties": {
           "model": {
@@ -310,6 +384,24 @@
           "at"
         ],
         "title": "ScheduleRequest",
+        "type": "object"
+      },
+      "ScheduledVideo": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "at"
+        ],
+        "title": "ScheduledVideo",
         "type": "object"
       },
       "ValidationError": {
@@ -574,9 +666,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Calendar V1 Calendar Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/CalendarResponse"
                 }
               }
             },
@@ -1624,9 +1714,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Quota V1 Quota Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/QuotaResponse"
                 }
               }
             },

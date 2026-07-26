@@ -35,6 +35,34 @@ SCHEDULE: dict[str, datetime] = {}  # video_id -> publish time
 _STATES: set[str] = set()
 
 
+class QuotaResponse(BaseModel):
+    """The daily YouTube budget.
+
+    A response model rather than a bare dict because this is the one payload the
+    web app does arithmetic on — without it the generated TypeScript types every
+    field as `unknown` and the UI has to cast, which is the hand-written mirror
+    `packages/contracts` exists to prevent.
+    """
+
+    day: str
+    limit: int
+    spent: int
+    remaining: int
+    uploads_left: int
+    breakdown: dict[str, int]
+    by_day: dict[str, int]
+
+
+class ScheduledVideo(BaseModel):
+    video_id: str
+    at: str
+
+
+class CalendarResponse(BaseModel):
+    scheduled: list[ScheduledVideo]
+    quota_by_day: dict[str, int]
+
+
 class ScheduleRequest(BaseModel):
     video_id: str
     at: datetime
@@ -109,27 +137,27 @@ async def list_channels() -> dict:
 
 
 @router.get("/quota")
-async def quota() -> dict:
-    return {
-        "day": quota_day().isoformat(),
-        "limit": ledger.limit,
-        "spent": ledger.spent(),
-        "remaining": ledger.remaining(),
-        "uploads_left": ledger.uploads_left(),
-        "breakdown": ledger.breakdown(),
-        "by_day": {d.isoformat(): v for d, v in ledger.usage_by_day().items()},
-    }
+async def quota() -> QuotaResponse:
+    return QuotaResponse(
+        day=quota_day().isoformat(),
+        limit=ledger.limit,
+        spent=ledger.spent(),
+        remaining=ledger.remaining(),
+        uploads_left=ledger.uploads_left(),
+        breakdown=ledger.breakdown(),
+        by_day={d.isoformat(): v for d, v in ledger.usage_by_day().items()},
+    )
 
 
 # ── calendar ────────────────────────────────────────────────────────────────
 
 
 @router.get("/calendar")
-async def calendar() -> dict:
-    return {
-        "scheduled": [{"video_id": vid, "at": at.isoformat()} for vid, at in SCHEDULE.items()],
-        "quota_by_day": {d.isoformat(): v for d, v in ledger.usage_by_day().items()},
-    }
+async def calendar() -> CalendarResponse:
+    return CalendarResponse(
+        scheduled=[ScheduledVideo(video_id=vid, at=at.isoformat()) for vid, at in SCHEDULE.items()],
+        quota_by_day={d.isoformat(): v for d, v in ledger.usage_by_day().items()},
+    )
 
 
 @router.get("/calendar/slots")

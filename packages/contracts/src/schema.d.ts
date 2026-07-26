@@ -777,6 +777,15 @@ export interface components {
             /** Model */
             model: string;
         };
+        /** CalendarResponse */
+        CalendarResponse: {
+            /** Quota By Day */
+            quota_by_day: {
+                [key: string]: number;
+            };
+            /** Scheduled */
+            scheduled: components["schemas"]["ScheduledVideo"][];
+        };
         /** EditRequest */
         EditRequest: {
             /** Stage */
@@ -861,6 +870,35 @@ export interface components {
             /** Publish At */
             publish_at?: string | null;
         };
+        /**
+         * QuotaResponse
+         * @description The daily YouTube budget.
+         *
+         *     A response model rather than a bare dict because this is the one payload the
+         *     web app does arithmetic on — without it the generated TypeScript types every
+         *     field as `unknown` and the UI has to cast, which is the hand-written mirror
+         *     `packages/contracts` exists to prevent.
+         */
+        QuotaResponse: {
+            /** Breakdown */
+            breakdown: {
+                [key: string]: number;
+            };
+            /** By Day */
+            by_day: {
+                [key: string]: number;
+            };
+            /** Day */
+            day: string;
+            /** Limit */
+            limit: number;
+            /** Remaining */
+            remaining: number;
+            /** Spent */
+            spent: number;
+            /** Uploads Left */
+            uploads_left: number;
+        };
         /** RouteUpdate */
         RouteUpdate: {
             /** Model */
@@ -874,6 +912,13 @@ export interface components {
              * At
              * Format: date-time
              */
+            at: string;
+            /** Video Id */
+            video_id: string;
+        };
+        /** ScheduledVideo */
+        ScheduledVideo: {
+            /** At */
             at: string;
             /** Video Id */
             video_id: string;
@@ -1079,9 +1124,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["CalendarResponse"];
                 };
             };
         };
@@ -1921,9 +1964,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["QuotaResponse"];
                 };
             };
         };

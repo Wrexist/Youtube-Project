@@ -1,55 +1,131 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { Header, Page, Button } from "@/components/ui";
 import { Pipeline } from "@/components/pipeline";
+import { useJobStream } from "@/lib/use-job-stream";
 import { DEMO_JOB } from "@/lib/demo";
-import type { Job } from "@/lib/types";
+import type { Stage } from "@/lib/types";
+import { publish, startJob } from "./actions";
 
 /** Create — the screen that matters.
  *
  *  Before submit: one input and three quiet chips. Nothing else is visible, because
  *  nothing else is a decision the user needs to make yet.
  *
- *  After submit: the input becomes the pipeline. Each stage collapses to one
- *  informative line as it finishes, and expands to show and edit what it produced.
+ *  After submit: the input becomes the pipeline, fed by the engine's SSE stream.
+ *  Each stage collapses to one informative line as it finishes.
+ *
+ *  With no engine running the same screen runs on `DEMO_JOB`, which is how the
+ *  design stayed judgeable before the plumbing existed — but it says "demo" rather
+ *  than implying a render actually happened.
  */
 export default function CreatePage() {
   const [topic, setTopic] = useState("");
   const [format, setFormat] = useState<"short" | "long">("long");
-  const [job, setJob] = useState<Job | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [demo, setDemo] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [blockers, setBlockers] = useState<{ code: string; message: string }[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const stream = useJobStream(jobId, emptyStages());
+  const stages: Stage[] = demo ? DEMO_JOB.stages : stream.stages;
+  const cost = demo ? DEMO_JOB.cost_usd : stream.cost_usd;
 
   function start() {
     if (topic.trim().length < 3) return;
-    // Wired to POST /v1/jobs + the SSE stream once the engine is running; the demo
-    // job has the identical shape, so that swap touches only this function.
-    setJob({ ...DEMO_JOB, topic, format });
+    setError(null);
+    startTransition(async () => {
+      const result = await startJob({ topic: topic.trim(), format });
+      if (result.ok && result.data) {
+        setJobId(result.data.job_id);
+      } else {
+        // The engine is not there. Show the design on demo data rather than a
+        // dead end, and say which it is.
+        setDemo(true);
+        setError(result.error ?? "could not reach the engine");
+      }
+    });
   }
 
-  if (job) {
+  function onPublish() {
+    if (!jobId) return;
+    setBlockers([]);
+    setNotice(null);
+    startTransition(async () => {
+      const result = await publish(jobId);
+      if (result.ok) {
+        setNotice("Publishing — the upload has started.");
+      } else {
+        setBlockers(result.blockers ?? []);
+        setError(result.error ?? "publish failed");
+      }
+    });
+  }
+
+  function reset() {
+    setJobId(null);
+    setDemo(false);
+    setError(null);
+    setBlockers([]);
+    setNotice(null);
+    setTopic("");
+  }
+
+  if (jobId || demo) {
     return (
       <>
         <Header
-          title={job.topic}
+          title={topic || DEMO_JOB.topic}
           meta={
-            <span className="mono">
-              {job.format === "long" ? "16:9" : "9:16"} · ${job.cost_usd.toFixed(2)}
+            <span className="mono flex items-center gap-2">
+              {format === "long" ? "16:9" : "9:16"} · ${cost.toFixed(2)}
+              {demo && (
+                <span className="rounded-full border border-[var(--color-line)] px-2 py-0.5 text-[11px] text-[var(--color-faint)]">
+                  demo data
+                </span>
+              )}
             </span>
           }
           action={
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setJob(null)}>
+              <Button variant="ghost" onClick={reset}>
                 New
               </Button>
-              <Button>Publish</Button>
+              <Button onClick={onPublish} disabled={demo || pending || stream.status !== "completed"}>
+                Publish
+              </Button>
             </div>
           }
         />
         <Page>
-          <Pipeline
-            stages={job.stages}
-            onRerun={(name) => console.log("re-run from", name)}
-          />
+          <Pipeline stages={stages} onRerun={(name) => console.log("re-run from", name)} />
+
+          {notice && (
+            <p className="mt-4 text-[13px] text-[var(--color-muted)]">{notice}</p>
+          )}
+
+          {/* Each blocker states its reason. A bare "blocked" is not an
+              acceptable thing to show someone about their own video. */}
+          {blockers.length > 0 && (
+            <div className="mt-4 rounded-lg border border-[var(--color-line)] p-4">
+              <p className="text-[13px] font-semibold">Not ready to publish</p>
+              <ul className="mt-2 space-y-1.5">
+                {blockers.map((b) => (
+                  <li key={b.code} className="text-[13px] text-[var(--color-muted)]">
+                    {b.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {error && blockers.length === 0 && (
+            <p className="mt-4 text-[13px] text-[var(--color-bad)]">{error}</p>
+          )}
+
           <p className="mt-4 text-[12px] text-[var(--color-faint)]">
             This job keeps running if you close the tab. Progress is restored on
             return.
@@ -91,8 +167,8 @@ export default function CreatePage() {
           <Chip active={false} onClick={() => {}} label="From a series…" />
 
           <div className="ml-auto">
-            <Button onClick={start} disabled={topic.trim().length < 3}>
-              Generate
+            <Button onClick={start} disabled={pending || topic.trim().length < 3}>
+              {pending ? "Starting…" : "Generate"}
             </Button>
           </div>
         </div>
@@ -105,6 +181,18 @@ export default function CreatePage() {
       </div>
     </>
   );
+}
+
+/** The pipeline before the first event arrives, so the shape is visible immediately. */
+function emptyStages(): Stage[] {
+  return DEMO_JOB.stages.map((s) => ({
+    ...s,
+    status: "pending" as const,
+    summary: null,
+    error: null,
+    cost_usd: 0,
+    elapsed_ms: 0,
+  }));
 }
 
 function Chip({
