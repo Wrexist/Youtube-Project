@@ -3,6 +3,7 @@
 Idea → researched script → narrated, subtitled, rendered video → grounded SEO package
 → scheduled to YouTube → measured → fed back into the next video.
 
+- [SETUP.md](SETUP.md) — **start here.** One command, then two API keys.
 - [PLAN.md](PLAN.md) — phases and what is built
 - [CLAUDE.md](CLAUDE.md) — architecture, conventions, hard API limits
 - [docs/UI-DESIGN.md](docs/UI-DESIGN.md) — design system and screens
@@ -12,44 +13,32 @@ Idea → researched script → narrated, subtitled, rendered video → grounded 
 
 ## Run it
 
-The web app runs on demo data with **no engine and no API keys**. That is
-deliberate — a design you can't look at is a design you can't judge.
-
 ```bash
-npm install
-npm run dev
+./scripts/setup.sh
 ```
 
-Engine and infrastructure:
+That is the whole setup: venv, both toolchains, `.env`, database schema, tests.
+**No Docker needed** — the engine defaults to SQLite and runs renders in-process.
+It finishes by listing anything still missing, which will be two API keys.
+See [SETUP.md](SETUP.md).
 
 ```bash
-docker compose up -d
-```
-
-```bash
-cd apps/engine && python -m venv .venv && .venv/bin/python -m pip install -e ".[dev]"
-```
-
-```bash
+npm run dev                                                              # :3000
 apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 ```
 
-```bash
-apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
-```
-
-Create the schema, then start the render worker. Renders run there so they survive
-a restart of the API — without a worker the API runs them in-process, which also
-works; a render just dies with the web process.
+Check what is configured at any time:
 
 ```bash
-cd apps/engine && .venv/bin/python -m alembic upgrade head
-apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings
+apps/engine/.venv/bin/python apps/engine/scripts/doctor.py
 ```
 
-> **Windows:** a venv puts its interpreter in `.venv/Scripts/` rather than
-> `.venv/bin/`. Substitute that in the commands above; everything else is
-> identical.
+Upgrades, both optional: `docker compose up -d` for Postgres and Redis, then
+`apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings` to run renders
+in a worker so restarting the API cannot kill one. Or
+`docker compose --profile full up -d` for the whole stack in containers.
+
+On Windows the interpreter is at `.venv/Scripts/python`.
 
 ## Layout
 

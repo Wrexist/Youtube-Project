@@ -25,9 +25,48 @@ from sqlalchemy.ext.asyncio import (
 from engine.settings import get_settings
 
 
+async def ensure_schema() -> str:
+    """Create any missing tables. Called at startup.
+
+    Alembic remains the source of truth for *migrations* — this only creates what
+    is absent, so an existing database is never touched and a schema change still
+    needs a revision. What it buys is that a fresh clone runs without anyone
+    remembering `alembic upgrade head` first, which is the single most common way
+    a first run fails.
+
+    Returns a short description of what it found, for the startup log.
+    """
+    from sqlalchemy import inspect
+
+    from engine.tables import Base
+
+    async with engine().begin() as conn:
+        existing = set(await conn.run_sync(lambda c: inspect(c).get_table_names()))
+        expected = set(Base.metadata.tables)
+        missing = expected - existing
+
+        if not missing:
+            return f"schema present ({len(expected)} tables)"
+
+        await conn.run_sync(Base.metadata.create_all)
+
+    if existing:
+        # Some tables were there and some were not: a revision was probably added
+        # without being applied. Creating the gap keeps the app up, but say so.
+        return f"created {len(missing)} missing table(s) — consider `alembic upgrade head`"
+    return f"created schema ({len(missing)} tables)"
+
+
 @lru_cache(maxsize=1)
 def engine() -> AsyncEngine:
     url = get_settings().database_url
+
+    if url.startswith("sqlite"):
+        # SQLite has no connection pool worth configuring and rejects the
+        # Postgres-shaped arguments below outright.
+        _ensure_parent_dir(url)
+        return create_async_engine(url, future=True)
+
     return create_async_engine(
         url,
         # A render holds no connection, but a burst of jobs starting together
@@ -37,6 +76,20 @@ def engine() -> AsyncEngine:
         pool_pre_ping=True,  # a recycled container leaves dead sockets in the pool
         future=True,
     )
+
+
+def _ensure_parent_dir(url: str) -> None:
+    """Create the directory a SQLite file lives in.
+
+    The default is `./storage/studio.db` and `storage/` is gitignored, so on a
+    fresh clone it does not exist and SQLAlchemy fails with a bare
+    "unable to open database file" that says nothing about why.
+    """
+    from pathlib import Path
+
+    path = url.split("///", 1)[-1].split("?", 1)[0]
+    if path and path != ":memory:":
+        Path(path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

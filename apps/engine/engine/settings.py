@@ -24,7 +24,14 @@ class Settings(BaseSettings):
     # every job, channel, booking and — worst — the day's quota spend, so the next
     # upload silently overruns Google's ceiling.
     persist: bool = True
-    database_url: str = "postgresql+asyncpg://studio:studio@localhost:5432/studio"
+    # SQLite by default so a fresh clone runs with no Docker and no database
+    # server — the first thing anyone does should not be infrastructure. Every
+    # query here is ordinary SQLAlchemy and the same suite passes on both, so
+    # moving up is one env var:
+    #   STUDIO_DATABASE_URL=postgresql+asyncpg://studio:studio@localhost:5432/studio
+    # Use Postgres for anything real: SQLite serialises writers, which a worker
+    # plus an API will contend on.
+    database_url: str = "sqlite+aiosqlite:///./storage/studio.db"
     redis_url: str = "redis://localhost:6379/0"
     secret_key: str = "dev-only-do-not-use-in-production-000"
 

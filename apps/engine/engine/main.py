@@ -42,6 +42,7 @@ async def lifespan(_: FastAPI):
     """
     if get_settings().persist:
         try:
+            logger.info("database: {}", await db.ensure_schema())
             await ledger.load()
             JOBS.update(await repository.load_jobs(video.get))
             channels.CHANNELS.update(await repository.load_channels())
