@@ -28,5 +28,6 @@ Thumbs.db
 .claude/worktrees/
 .claude/settings.local.json
 
-# Local Postgres data dir used by the dev/test harness
+# Local Postgres and Redis data from the dev/test harness
 pgdata/
+dump.rdb

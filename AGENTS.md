@@ -60,6 +60,8 @@ docker compose up -d                        # postgres + redis
 npm run dev                                 # web on :3000
 apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
+apps/engine/.venv/bin/python -m alembic upgrade head       # schema
+apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings   # render worker
 ```
 
 On Windows the interpreter is at `.venv/Scripts/python` instead of `.venv/bin/python`.

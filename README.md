@@ -38,8 +38,17 @@ apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
 ```
 
+Create the schema, then start the render worker. Renders run there so they survive
+a restart of the API — without a worker the API runs them in-process, which also
+works; a render just dies with the web process.
+
+```bash
+cd apps/engine && .venv/bin/python -m alembic upgrade head
+apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings
+```
+
 > **Windows:** a venv puts its interpreter in `.venv/Scripts/` rather than
-> `.venv/bin/`. Substitute that in the three commands above; everything else is
+> `.venv/bin/`. Substitute that in the commands above; everything else is
 > identical.
 
 ## Layout

@@ -18,7 +18,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from engine import automation, db, repository
+from engine import automation, db, repository, worker
 from engine.api import publishing as channels
 from engine.api.channels import router as channels_router
 from engine.api.insights import router as insights_router
@@ -167,9 +167,69 @@ async def create_job(body: JobRequest) -> dict:
         "status": "running",
     }
 
-    # Deliberately not tied to the request: closing the tab must not cancel a render.
-    JOBS[job_id]["task"] = asyncio.create_task(_run_job(job_id))
+    await _persist(JOBS[job_id])
+    await _dispatch(job_id)
     return {"job_id": job_id, "status": "running"}
+
+
+async def _dispatch(job_id: str, start_from: str | None = None) -> None:
+    """Hand the job to a worker, or run it here if there is no worker to hand it to.
+
+    The in-process path is not a fallback that shipped by accident — `uvicorn` on
+    its own, with no Redis and no worker, is a supported way to run this. It is
+    just the one where a render dies with the web process.
+    """
+    if await worker.enqueue(job_id, start_from):
+        # The work happens elsewhere; this process only relays the worker's events
+        # to any browser watching.
+        JOBS[job_id]["task"] = asyncio.create_task(_relay(job_id))
+    else:
+        # Deliberately not tied to the request: closing the tab must not cancel a render.
+        JOBS[job_id]["task"] = asyncio.create_task(_run_job(job_id, start_from))
+
+
+async def _relay(job_id: str) -> None:
+    """Mirror a worker's events into this process's log so SSE works unchanged.
+
+    Subscribers read `job["events"]` by cursor and know nothing about where the
+    work runs. Appending here keeps that true for both execution paths.
+    """
+    import json
+
+    from arq.connections import create_pool
+
+    job = JOBS[job_id]
+    pool = None
+    try:
+        pool = await create_pool(worker.redis_settings())
+        pubsub = pool.pubsub()
+        await pubsub.subscribe(worker.CHANNEL.format(job_id))
+
+        async for message in pubsub.listen():
+            if message.get("type") != "message":
+                continue  # the subscribe confirmation, not an event
+            event = json.loads(message["data"])
+            if event.get("type") == "__done__":
+                break
+            job["events"].append(event)
+            _wake(job)
+
+        await pubsub.unsubscribe()
+        await pubsub.aclose()
+    except Exception:  # noqa: BLE001
+        logger.exception("relay for job {} stopped", job_id)
+    finally:
+        if pool is not None:
+            with suppress(Exception):
+                await pool.aclose()
+        # The worker owns the row, so re-read it for the final status rather than
+        # inferring one from the last event seen.
+        with suppress(Exception):
+            fresh = await repository.load_jobs(video.get)
+            if job_id in fresh:
+                job["status"] = fresh[job_id]["status"]
+                job["states"] = fresh[job_id]["states"]
+        _wake(job)
 
 
 def _wake(job: dict) -> None:
