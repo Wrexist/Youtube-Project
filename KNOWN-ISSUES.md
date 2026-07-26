@@ -4,14 +4,14 @@ What is unverified, what is knowingly incomplete, and what will need a human.
 Ordered by how likely it is to bite you.
 
 > **A full-system audit on 2026-07-26 found 20 issues this file did not list.**
-> **15 are now fixed** — publishing is wired up and gated, CI is green, SSE no longer
-> duplicates events, and every setting either works or is gone. The 5 that remain are
-> Phase 5: Postgres, arq workers, and the web↔engine wiring. See
-> [AUDIT.md](AUDIT.md) for the evidence, the fixes, and what is left.
+> **19 are now fixed.** Publishing is wired up and gated, CI is green, SSE no longer
+> duplicates events, every setting either works or is gone, state survives a restart,
+> renders run in a worker, and the web app reads live data. The exception is the npm
+> advisories, which need an upstream Next release — see [AUDIT.md](AUDIT.md) §4.7 for
+> what each actually exposes. Several entries below are now out of date; AUDIT.md is
+> the current record.
 
-Last updated after vendoring the MoneyPrinterTurbo reference and porting the render
-services that were missing from it (`engine/services/`).
-**217 engine tests passing. Web builds and typechecks clean.**
+**314 engine tests passing. Web builds, lints and typechecks clean.**
 
 One unrelated fix came with it: `stats.two_tailed_p` fell back to `math.betainc`,
 which **no released CPython has**. `scipy` was not declared anywhere, so a clean
@@ -73,7 +73,7 @@ These were actually executed on this machine, not assumed:
 - **Edge TTS + subtitle cues.** Real audio, real word-boundary timings, correctly
   grouped into readable lines. Fixed a real bug — see 4.2.
 - **FastAPI app imports** with all routes registered.
-- **223 unit tests**, covering the workflow framework, scheduling, quota arithmetic,
+- **314 unit tests**, covering the workflow framework, scheduling, quota arithmetic,
   statistics, attribution, automation, model routing, and — new — stock-provider
   response parsing, Ken Burns ramps, font resolution and BGM path safety.
 - **A real render of the new features**, measured rather than eyeballed:
@@ -241,10 +241,10 @@ ones.
 
 ## 6. Not built at all
 
-- **No Postgres.** `docker-compose.yml` starts it; nothing connects. No models, no
-  migrations.
-- **No arq workers.** Jobs run as in-process asyncio tasks. Fine for one user,
-  wrong for anything else.
+- ~~**No Postgres.**~~ Done — SQLAlchemy models, Alembic migrations, and a quota
+  ledger that survives a restart. AUDIT.md §5.1.
+- ~~**No arq workers.**~~ Done — `engine/worker.py`, events over Redis pub/sub.
+  The in-process path is kept as a supported single-process mode. AUDIT.md §5.2.
 - **No auth.** The engine is unauthenticated. Do not expose it.
 - **No ⌘K command palette**, though the design spec leans on it to keep screens
   sparse.

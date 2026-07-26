@@ -7,11 +7,11 @@ verbatim.
 
 **20 findings. One of them means the product cannot do the thing it exists to do.**
 
-> **Status — Phases 0-4 are done.** 15 of the 20 findings are fixed and verified;
-> the 5 that remain are Phase 5 (Postgres, arq, web↔engine wiring), which is
-> genuinely 1-2 weeks of work and is scoped below. Engine tests went 156 → 285 and
-> every CI step is green for the first time. Each finding below carries its own
-> status line.
+> **Status — all phases done. 19 of 20 findings fixed and verified.**
+> The one exception is §4.7 (npm advisories), which cannot be fixed from this
+> repository — see its entry for the assessment. Engine tests went 156 → 314, the
+> app survives a restart, renders run in a worker, the web app reads live data, and
+> every CI step is green. Each finding below carries its own status line.
 
 Each finding below has: what is wrong, the evidence that proves it, the fix, and a
 **Done when** that can be checked. Phases are ordered by dependency — P0 first
@@ -25,7 +25,7 @@ Stated first so the list below is read in proportion.
 
 | Area | Status | Evidence |
 |---|---|---|
-| Engine unit tests | **223 pass** (now 285) | `pytest -q`, 7.5s |
+| Engine unit tests | **223 pass** (now 314) | `pytest -q`, 7.5s |
 | Web typecheck | **clean** | `tsc --noEmit`, no output |
 | Web build | **clean** | Next 16.2.11, 8 static routes |
 | Web render | **all 8 routes 200** | headless Chromium, no console errors |
@@ -359,7 +359,7 @@ actionable messages.
 
 ### 3.2 · Grounding has a single point of failure with no key and no fallback (P2)
 
-> **OPEN** — still one unauthenticated source. §3.1 now makes the failure legible, which was the urgent half.
+> **FIXED** — optional keyed source, tried only when the free ones return nothing.
 
 Both sources are unauthenticated scraped endpoints:
 `suggestqueries.google.com` and `html.duckduckgo.com`. The code comment says this
@@ -479,7 +479,7 @@ The reference is now vendored in-repo.
 
 ### 4.4 · Declared workspace `packages/*` does not exist (P3)
 
-> **OPEN** — belongs with Phase 5's web wiring.
+> **FIXED** — `packages/contracts` generated from OpenAPI, with two CI drift guards.
 
 Root `package.json` declares `workspaces: ["apps/web", "packages/*"]` and `CLAUDE.md`
 says *"Types come from `packages/contracts`. Never hand-write a type that mirrors an
@@ -520,14 +520,38 @@ verified.
 
 ### 4.7 · Three high-severity npm advisories (P3)
 
-> **OPEN** — waiting on a Next patch release.
+> **NOT FIXED — cannot be, from here.** See the assessment below.
 
-Via `next@16.2.11` → `postcss` (arbitrary file read via `sourceMappingURL`,
-CVSS 7.5) and `sharp`. `npm audit fix` offers only a downgrade to `next@9`.
+Now 14 rather than 3, because adding `openapi-typescript` (§4.4) pulled in
+`@redocly/openapi-core`, and ESLint (§0.3) pulled in the `minimatch` chain. All 14
+are **high**, none critical.
 
-**Fix.** Wait for a Next patch release, or pin `postcss` via `overrides`. Low
-practical risk while the app is local-only and static, but it should not stay
-unreviewed.
+**`npm overrides` was tried and does not work here.** Both a flat override and a
+nested one (`{"next": {"postcss": "^8.5.22"}}`) were written, the lockfile deleted
+and the tree reinstalled from scratch. npm recorded no overrides in the lockfile
+and `next/node_modules/postcss` stayed pinned at 8.4.31. The config was removed
+rather than left in place claiming a fix it was not making.
+
+`npm audit fix --force` resolves them by downgrading Next from 16 to 9. That is not
+a trade worth making.
+
+**What is actually exposed.** Every one of the 14 is a transitive **build- or
+dev-time** dependency, and none is reachable by an attacker in a deployed instance:
+
+| Package | Where | Reachable? |
+|---|---|---|
+| `postcss` 8.4.31 | pinned inside Next | Build time. Processes our own CSS, never attacker input. |
+| `sharp` / libvips | Next image optimisation | This app serves no user-supplied images. |
+| `brace-expansion`, `minimatch` | ESLint toolchain | Dev only. Never in a deployed artifact. |
+| `js-yaml` | `@redocly/openapi-core` | Dev only. Parses our own `openapi.json`. |
+
+**Fix.** Upstream. A Next patch release moves `postcss` and `sharp`; an
+`eslint-config-next` release moves the `minimatch` chain. Until then the honest
+position is the table above, not a config that pretends.
+
+CI now runs `npm audit --audit-level=critical`, which will not block on these 14 but
+will fail the build the moment a *critical* one appears. Re-check this entry on the
+next Next upgrade.
 
 ---
 
@@ -538,7 +562,7 @@ here with the dependency order that matters. One to two weeks.
 
 ### 5.1 · All state is in module-level dicts (P1)
 
-> **OPEN** — Phase 5.
+> **FIXED** — Postgres + Alembic; verified by killing a live server and restarting.
 
 `JOBS`, `CHANNELS`, `SCHEDULE`, `RECORDS`, `LAUNCHES`. A restart loses every job,
 channel, schedule and quota record. `database_url` and `redis_url` are configured and
@@ -556,7 +580,7 @@ quota overrun on restart.
 
 ### 5.2 · Jobs run as in-process asyncio tasks, not arq workers (P2)
 
-> **OPEN** — Phase 5.
+> **FIXED** — arq worker, events over Redis pub/sub, in-process fallback kept.
 
 `arq` and `redis` are dependencies; neither is imported. `create_task` means a
 long render dies with the web process, and `max_concurrent_renders` (§2.3) cannot be
@@ -567,7 +591,7 @@ Redis pub/sub.
 
 ### 5.3 · The web app is not connected to the engine at all (P1)
 
-> **OPEN** — Phase 5. Unblocked now that §3.3 is fixed.
+> **FIXED** — Server Component reads, Server Actions, SSE live job view.
 
 Every screen renders from `apps/web/lib/demo.ts`. There is **no** `fetch`, no
 `EventSource`, no Server Action against the engine — only an env passthrough in
@@ -602,31 +626,28 @@ Not defects; scope that was consciously left out. Tracked so it is not rediscove
 
 ---
 
-## Suggested order
+## Order, as executed
 
 ```
-Phase 0  ✅ done  ▸  CI green — everything after this is verifiable
-Phase 1  ✅ done  ▸  the product can publish
-Phase 3  ✅ done  ▸  failures explain themselves  (unblocks Phase 5 ④)
-Phase 2  ✅ done  ▸  settings stop lying
-Phase 4  ✅ done  ▸  a new contributor can start
-Phase 5  ▸ 1–2 weeks  ▸  survives a restart; UI is real
-Phase 6  ▸ —          ▸  deferred by choice
+Phase 0  ✅  CI green — everything after this is verifiable
+Phase 1  ✅  the product can publish
+Phase 3  ✅  failures explain themselves  (unblocked Phase 5 ④)
+Phase 2  ✅  settings stop lying
+Phase 4  ✅  a new contributor can start
+Phase 5  ✅  survives a restart; renders in a worker; the UI is real
+Phase 6  ▸   deferred by choice — see below
 ```
 
-Phase 5 is the only remaining work, and it is the largest. Do it in this order —
-each step unblocks the next:
+Phase 5 was done in the order below, each step unblocking the next.
 
-1. **`packages/contracts` from OpenAPI** (§4.4). The schema is already complete and
-   served; generating types is the cheapest step and everything in the UI depends
-   on it.
-2. **Postgres** (§5.1). The quota ledger table first — it is the only thing standing
-   between the system and a quota overrun after a restart. The dict shapes were kept
-   deliberately compatible, so this is a swap rather than a redesign.
-3. **arq workers** (§5.2). Needed before `max_concurrent_renders` can mean anything
-   across processes.
-4. **Web → engine** (§5.3). Read paths, then Server Actions, then the live job view
-   on `EventSource` — that last one was blocked on the SSE fix and no longer is.
+1. **`packages/contracts` from OpenAPI.** Generated types plus two CI drift guards.
+2. **Postgres.** SQLAlchemy models, Alembic migrations, quota ledger first. Verified
+   by killing a live server mid-flight and restarting it.
+3. **arq workers.** Renders execute out of process; events cross over Redis pub/sub.
+   The in-process path is kept, because `uvicorn` alone is still a supported way to
+   run this.
+4. **Web → engine.** Server Component reads, Server Actions, and the SSE live job
+   view — which was blocked on the §3.3 fix and is the reason it was sequenced last.
 
 ---
 
@@ -653,7 +674,13 @@ rather than by unit test alone:
 
 | Fix | How it was confirmed |
 |---|---|
-| CI green | all six steps run locally: ruff check, ruff format, pytest (285), npm lint, typecheck, build |
+| CI green | every step run locally: ruff check, ruff format, pytest (314), openapi check, contracts check, npm lint, typecheck, build |
+| Persistence | spent 4,800 quota units, booked a slot, started a job on a live Postgres; **killed the server**; on restart quota read 4,800 with uploads_left 2, the booking returned, and the job restored with its stage states |
+| Persistence, portable | the same 21-test suite passes identically on SQLite and on Postgres 16 |
+| arq worker | API enqueued, worker executed (its log shows the run, the API's shows none), 8 events reached an SSE subscriber with no duplicates; killing Redis produced a job the API ran itself, logging "running in-process" |
+| Contracts | added an endpoint without re-exporting → `export_openapi.py --check` exits 1; restored → exits 0 |
+| Web ↔ engine | calendar rendered "4 uploads left today · 10,000 of 10,000 units" from the real ledger; killing the engine left it serving 200 with fallback copy and a "demo data" chip |
+| Grounding fallback | 8 tests, including that it does **not** run when the free sources worked |
 | Publish reachable | `/health` lists it; `/v1/workflows/publish` serves a 21-stage graph ending upload → thumbnail_set → captions → playlist |
 | Approval gate | 10 endpoint tests: running job, wrong workflow, no channel, quality blockers, exhausted quota, and the happy path |
 | SSE duplication | live curl: `workflow.started` and `stage.started` once each, previously twice |

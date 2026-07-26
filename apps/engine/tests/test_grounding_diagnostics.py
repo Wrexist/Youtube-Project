@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from engine.research.keywords import KeywordEvidence, _describe, gather, suggest_with_failures
+from engine.settings import get_settings
 
 # ── _describe ───────────────────────────────────────────────────────────────
 
@@ -149,3 +150,114 @@ def test_diagnosis_always_names_the_topic_that_failed(failures):
     """With several jobs in flight, a message that omits the topic is unusable."""
     message = KeywordEvidence(seed="why bridges collapse", failures=failures).diagnosis()
     assert "why bridges collapse" in message
+
+
+# ── the keyed fallback ──────────────────────────────────────────────────────
+
+
+async def test_no_fallback_configured_is_not_a_failure(monkeypatch):
+    """Most installs have no keyed source. That must not show up as an error."""
+    from engine.research.keywords import _fallback_suggest
+
+    get_settings.cache_clear()
+    monkeypatch.delenv("KEYWORD_API_URL", raising=False)
+    try:
+        assert await _fallback_suggest("bridges") == ([], "")
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_the_fallback_runs_only_when_the_free_sources_are_empty(monkeypatch):
+    """It costs money. The free path usually works, so it is tried first."""
+    calls = {"n": 0}
+
+    async def ok(client, query):
+        return ["why bridges collapse"]
+
+    async def counting_fallback(seed, **_kw):
+        calls["n"] += 1
+        return ["should not be reached"], ""
+
+    monkeypatch.setattr("engine.research.keywords._suggest_one", ok)
+    monkeypatch.setattr("engine.research.keywords._fallback_suggest", counting_fallback)
+
+    evidence = await gather("bridges", youtube_client=None)
+    assert evidence.is_grounded
+    assert calls["n"] == 0, "the fallback ran even though autocomplete worked"
+
+
+async def test_the_fallback_rescues_a_blocked_network(monkeypatch):
+    """The point of §3.2: both free sources blocked used to end the run."""
+
+    async def blocked(client, query):
+        raise httpx.ConnectError("datacenter IP")
+
+    async def fallback(seed, **_kw):
+        return ["why bridges collapse", "bridge failure causes"], ""
+
+    monkeypatch.setattr("engine.research.keywords._suggest_one", blocked)
+    monkeypatch.setattr("engine.research.keywords._fallback_suggest", fallback)
+
+    evidence = await gather("bridges", youtube_client=None)
+    assert evidence.is_grounded
+    assert "keyword_api" in evidence.sources
+    # The autocomplete failure is still recorded — the run survived, but the
+    # operator should still know their network is blocking it.
+    assert "youtube_autocomplete" in evidence.failures
+
+
+async def test_a_dead_fallback_is_recorded_not_raised(monkeypatch):
+    async def blocked(client, query):
+        raise httpx.ConnectError("blocked")
+
+    async def dead(seed, **_kw):
+        return [], "HTTP 502"
+
+    monkeypatch.setattr("engine.research.keywords._suggest_one", blocked)
+    monkeypatch.setattr("engine.research.keywords._fallback_suggest", dead)
+
+    evidence = await gather("bridges", youtube_client=None)
+    assert not evidence.is_grounded
+    assert evidence.failures["keyword_api"] == "HTTP 502"
+    assert "keyword_api" in evidence.diagnosis()
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        (["a", "b"], ["a", "b"]),
+        ({"keywords": ["a"]}, ["a"]),
+        ({"results": ["B"]}, ["b"]),
+        ({}, []),
+    ],
+)
+async def test_the_fallback_accepts_the_common_response_shapes(
+    monkeypatch, payload, expected, respx_mock=None
+):
+    """Deliberately generic: the point is having a second source, not a vendor."""
+    import httpx as _httpx
+
+    from engine.research import keywords as kw
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("KEYWORD_API_URL", "https://keywords.test/search")
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def get(self, *_a, **_kw):
+            return _httpx.Response(
+                200, json=payload, request=_httpx.Request("GET", "https://keywords.test/search")
+            )
+
+    monkeypatch.setattr(kw.httpx, "AsyncClient", lambda **_kw: FakeClient())
+    try:
+        phrases, failure = await kw._fallback_suggest("bridges")
+        assert phrases == expected
+        assert failure == ""
+    finally:
+        get_settings.cache_clear()

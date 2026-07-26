@@ -90,7 +90,7 @@ vendor/        MoneyPrinterTurbo, read-only reference. Never imported.
 
 ## Status
 
-Phases 0–10 are code-complete; 223 engine tests pass. **Neither Google API has been
+Phases 0–10 are code-complete; 314 engine tests pass. **Neither Google API has been
 exercised against a live account** — upload, captions and analytics are reviewed
 code, not proven code. That needs OAuth credentials from a Google Cloud project.
 
@@ -98,3 +98,7 @@ Motion, crossfades and the music bed were verified by a real MoviePy render with
 measurements, not by eye — see [KNOWN-ISSUES.md](KNOWN-ISSUES.md) §2. That render
 used synthetic clips and tones; the pipeline has still not been run end to end
 against live Pexels footage and edge-tts audio.
+
+State survives a restart (Postgres), renders run in an arq worker, and the web app
+reads live engine data with a labelled demo fallback. See [AUDIT.md](AUDIT.md) for
+what was found, fixed and measured.

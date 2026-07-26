@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
+    # Optional second grounding source. YouTube autocomplete and DuckDuckGo are
+    # unauthenticated and routinely block datacenter IPs, so on a cloud host they
+    # can both fail and take the only workflow's first stage with them. Any
+    # endpoint answering GET {url}?q=seed with a JSON list of keywords works.
+    keyword_api_url: str = Field(default="", validation_alias="KEYWORD_API_URL")
+    keyword_api_key: str = Field(default="", validation_alias="KEYWORD_API_KEY")
+
     pexels_api_key: str = Field(default="", validation_alias="PEXELS_API_KEY")
     pixabay_api_key: str = Field(default="", validation_alias="PIXABAY_API_KEY")
     google_client_id: str = Field(default="", validation_alias="GOOGLE_CLIENT_ID")

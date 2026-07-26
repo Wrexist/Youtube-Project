@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 import httpx
 from loguru import logger
 
+from engine.settings import get_settings
+
 SUGGEST_URL = "https://suggestqueries.google.com/complete/search"
 
 
@@ -185,7 +187,61 @@ async def gather(
     elif youtube_client is None:
         evidence.failures["youtube_search"] = "skipped (no channel connected)"
 
+    # Only when the free sources produced nothing. Both are unauthenticated
+    # endpoints that routinely block datacenter IPs, which is precisely where this
+    # gets deployed — so grounding had a single point of failure and no way past
+    # it. The fallback is tried second rather than in parallel because it costs
+    # money and the free path usually works.
+    if not evidence.is_grounded:
+        phrases, failure = await _fallback_suggest(seed)
+        if phrases:
+            evidence.suggestions = phrases
+            evidence.sources.append("keyword_api")
+        elif failure:
+            evidence.failures["keyword_api"] = failure
+
     return evidence
+
+
+async def _fallback_suggest(seed: str, *, timeout: float = 10.0) -> tuple[list[str], str]:
+    """A keyed keyword source, for when the free ones are blocked.
+
+    OpenAI-compatible in shape only: any endpoint that answers
+    `GET {base}?q={seed}` with a JSON list of strings, or `{"keywords": [...]}`,
+    will do. Kept deliberately generic because the point is *having a second
+    source*, not endorsing a particular vendor — and an operator on a blocked
+    network needs to be able to point this at whatever they already pay for.
+
+    Returns ([], "") when unconfigured: not having a fallback is the default, and
+    it must not read as a failure in the diagnosis.
+    """
+    settings = get_settings()
+    base = settings.keyword_api_url
+    if not base:
+        return [], ""
+
+    headers = {}
+    if settings.keyword_api_key:
+        headers["Authorization"] = f"Bearer {settings.keyword_api_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(base, params={"q": seed}, headers=headers)
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception as exc:  # noqa: BLE001 — a dead fallback is not fatal
+        logger.warning("keyword fallback failed for {!r}: {}", seed, _describe(exc))
+        return [], _describe(exc)
+
+    if isinstance(payload, dict):
+        payload = payload.get("keywords") or payload.get("results") or []
+    if not isinstance(payload, list):
+        return [], "unexpected response shape (expected a list of keywords)"
+
+    phrases = [str(p).lower().strip() for p in payload if isinstance(p, str | int | float)]
+    if phrases:
+        logger.info("keyword fallback supplied {} phrases for {!r}", len(phrases), seed)
+    return phrases, ""
 
 
 async def _empty() -> list[dict]:

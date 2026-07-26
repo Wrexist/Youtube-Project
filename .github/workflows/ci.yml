@@ -76,3 +76,9 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      # Deliberately `critical`, not `high`. There are 14 standing high advisories,
+      # all transitive build/dev dependencies whose fixes need an upstream Next or
+      # eslint-config-next release — see AUDIT.md §4.7 for what each one exposes.
+      # Failing on `high` would mean a permanently red build that nobody reads;
+      # this still fails the moment something critical appears.
+      - run: npm audit --audit-level=critical
