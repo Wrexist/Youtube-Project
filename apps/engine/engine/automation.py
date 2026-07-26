@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from engine.ideas import Idea, IdeaStatus, next_up
+from engine.ideas import Idea, next_up
 
 # Per-video cost ceiling from engine.settings — hardcoded here to avoid pulling
 # in pydantic in test environments that may not have a .env file.
@@ -337,8 +337,7 @@ def plan_week(
                 Blocker(
                     code="paused",
                     message=(
-                        f"Series '{series.name}' is paused. Resume it before "
-                        f"queuing new videos."
+                        f"Series '{series.name}' is paused. Resume it before queuing new videos."
                     ),
                 )
             ],
@@ -346,7 +345,10 @@ def plan_week(
 
     # 2. Daily ceiling — even one video today would exceed it.
     today_total = ledger.spent_today()
-    if policy.per_day_usd != float("inf") and today_total + DEFAULT_COST_PER_VIDEO_USD > policy.per_day_usd:
+    if (
+        policy.per_day_usd != float("inf")
+        and today_total + DEFAULT_COST_PER_VIDEO_USD > policy.per_day_usd
+    ):
         return WeekPlan(
             to_generate=[],
             blocked=[

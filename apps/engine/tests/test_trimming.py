@@ -9,11 +9,8 @@ Both functions must:
 
 from __future__ import annotations
 
-import pytest
-
 from engine.channel import KEYWORDS_MAX, trim_keywords
 from engine.workflows.seo import TAGS_TOTAL_MAX, validate_tags
-
 
 # ── trim_keywords ────────────────────────────────────────────────────────────
 

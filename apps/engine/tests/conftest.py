@@ -26,4 +26,15 @@ def _stub(name: str, **attrs: object) -> None:
 # Only stub the llm sub-module so stages can be imported without needing real
 # API keys.  engine.providers.images is NOT stubbed — its PlaceholderProvider
 # works without any credentials and the image tests test the real module.
-_stub("engine.providers.llm", for_task=lambda *_: None)
+#
+# The stub has to satisfy every name the import chain pulls from it, not just the
+# one the stages call: engine.main -> api.channels -> workflows.channel_launch and
+# api.models both import module-level constants and classes from here.
+_stub(
+    "engine.providers.llm",
+    for_task=lambda *_: None,
+    DEFAULT_OLLAMA_URL="http://localhost:11434",
+    LLM=type("LLM", (), {}),
+    ProviderUnavailable=type("ProviderUnavailable", (Exception,), {}),
+    probe_ollama=lambda *_a, **_kw: None,
+)

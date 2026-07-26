@@ -1,0 +1,1773 @@
+{
+  "components": {
+    "schemas": {
+      "AddModel": {
+        "properties": {
+          "base_url": {
+            "default": "",
+            "title": "Base Url",
+            "type": "string"
+          },
+          "context": {
+            "default": 128000,
+            "exclusiveMinimum": 0.0,
+            "title": "Context",
+            "type": "integer"
+          },
+          "input_per_m": {
+            "default": 0.0,
+            "title": "Input Per M",
+            "type": "number"
+          },
+          "json_mode": {
+            "default": true,
+            "title": "Json Mode",
+            "type": "boolean"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "output_per_m": {
+            "default": 0.0,
+            "title": "Output Per M",
+            "type": "number"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "model"
+        ],
+        "title": "AddModel",
+        "type": "object"
+      },
+      "ApplyRequest": {
+        "properties": {
+          "confirm_channel_created": {
+            "default": false,
+            "title": "Confirm Channel Created",
+            "type": "boolean"
+          },
+          "launch_id": {
+            "title": "Launch Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "launch_id"
+        ],
+        "title": "ApplyRequest",
+        "type": "object"
+      },
+      "AutoScheduleRequest": {
+        "properties": {
+          "horizon_days": {
+            "default": 28,
+            "title": "Horizon Days",
+            "type": "integer"
+          },
+          "long_per_week": {
+            "default": 1,
+            "title": "Long Per Week",
+            "type": "integer"
+          },
+          "shorts_per_week": {
+            "default": 3,
+            "title": "Shorts Per Week",
+            "type": "integer"
+          },
+          "videos": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Videos",
+            "type": "array"
+          }
+        },
+        "required": [
+          "videos"
+        ],
+        "title": "AutoScheduleRequest",
+        "type": "object"
+      },
+      "BulkRoute": {
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "title": "BulkRoute",
+        "type": "object"
+      },
+      "CalendarResponse": {
+        "properties": {
+          "quota_by_day": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Quota By Day",
+            "type": "object"
+          },
+          "scheduled": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduledVideo"
+            },
+            "title": "Scheduled",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scheduled",
+          "quota_by_day"
+        ],
+        "title": "CalendarResponse",
+        "type": "object"
+      },
+      "EditRequest": {
+        "properties": {
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "stage",
+          "value"
+        ],
+        "title": "EditRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "JobRequest": {
+        "properties": {
+          "aspect": {
+            "default": "9:16",
+            "pattern": "^(9:16|16:9|1:1)$",
+            "title": "Aspect",
+            "type": "string"
+          },
+          "format": {
+            "default": "short",
+            "pattern": "^(short|long)$",
+            "title": "Format",
+            "type": "string"
+          },
+          "target_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Seconds"
+          },
+          "topic": {
+            "maxLength": 300,
+            "minLength": 3,
+            "title": "Topic",
+            "type": "string"
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice"
+          },
+          "workflow": {
+            "default": "video",
+            "title": "Workflow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "title": "JobRequest",
+        "type": "object"
+      },
+      "LaunchRequest": {
+        "properties": {
+          "country": {
+            "default": "US",
+            "title": "Country",
+            "type": "string"
+          },
+          "language": {
+            "default": "en",
+            "title": "Language",
+            "type": "string"
+          },
+          "niche": {
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Niche",
+            "type": "string"
+          }
+        },
+        "required": [
+          "niche"
+        ],
+        "title": "LaunchRequest",
+        "type": "object"
+      },
+      "PublishRequest": {
+        "description": "Choices the operator makes at the approval gate.\n\nAll optional: the defaults publish the top-scored title and first thumbnail\nimmediately and publicly, which is the common case.",
+        "properties": {
+          "chosen_thumbnail_index": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Chosen Thumbnail Index",
+            "type": "integer"
+          },
+          "chosen_title_index": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Chosen Title Index",
+            "type": "integer"
+          },
+          "made_for_kids": {
+            "default": false,
+            "title": "Made For Kids",
+            "type": "boolean"
+          },
+          "playlist_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playlist Id"
+          },
+          "privacy": {
+            "default": "public",
+            "pattern": "^(public|unlisted|private)$",
+            "title": "Privacy",
+            "type": "string"
+          },
+          "publish_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publish At"
+          }
+        },
+        "title": "PublishRequest",
+        "type": "object"
+      },
+      "QuotaResponse": {
+        "description": "The daily YouTube budget.\n\nA response model rather than a bare dict because this is the one payload the\nweb app does arithmetic on \u2014 without it the generated TypeScript types every\nfield as `unknown` and the UI has to cast, which is the hand-written mirror\n`packages/contracts` exists to prevent.",
+        "properties": {
+          "breakdown": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Breakdown",
+            "type": "object"
+          },
+          "by_day": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Day",
+            "type": "object"
+          },
+          "day": {
+            "title": "Day",
+            "type": "string"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "integer"
+          },
+          "uploads_left": {
+            "title": "Uploads Left",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "day",
+          "limit",
+          "spent",
+          "remaining",
+          "uploads_left",
+          "breakdown",
+          "by_day"
+        ],
+        "title": "QuotaResponse",
+        "type": "object"
+      },
+      "RouteUpdate": {
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "model"
+        ],
+        "title": "RouteUpdate",
+        "type": "object"
+      },
+      "ScheduleRequest": {
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "at"
+        ],
+        "title": "ScheduleRequest",
+        "type": "object"
+      },
+      "ScheduledVideo": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "at"
+        ],
+        "title": "ScheduledVideo",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Studio Engine",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/v1/analytics/audience": {
+      "get": {
+        "description": "The publish-time profile the scheduler uses, and where it came from.",
+        "operationId": "audience_v1_analytics_audience_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Audience V1 Analytics Audience Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Audience",
+        "tags": [
+          "insights"
+        ]
+      }
+    },
+    "/v1/analytics/daily": {
+      "get": {
+        "operationId": "daily_v1_analytics_daily_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 28,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Daily V1 Analytics Daily Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Daily",
+        "tags": [
+          "insights"
+        ]
+      }
+    },
+    "/v1/analytics/retention/{video_id}": {
+      "get": {
+        "description": "The retention curve with script beats located on it.",
+        "operationId": "retention_v1_analytics_retention__video_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retention V1 Analytics Retention  Video Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retention",
+        "tags": [
+          "insights"
+        ]
+      }
+    },
+    "/v1/auth/google": {
+      "get": {
+        "operationId": "begin_auth_v1_auth_google_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Begin Auth V1 Auth Google Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Begin Auth",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/auth/google/callback": {
+      "get": {
+        "operationId": "finish_auth_v1_auth_google_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "title": "State",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Finish Auth",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/calendar": {
+      "get": {
+        "operationId": "calendar_v1_calendar_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Calendar",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/calendar/auto": {
+      "post": {
+        "description": "Fill the calendar automatically.\n\nReturns a *plan*, and does not apply it. Scheduling a month of uploads is exactly\nthe kind of thing that should be reviewed before it happens.",
+        "operationId": "auto_v1_calendar_auto_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Auto V1 Calendar Auto Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Auto",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/calendar/auto/apply": {
+      "post": {
+        "operationId": "apply_plan_v1_calendar_auto_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Apply Plan V1 Calendar Auto Apply Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Plan",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/calendar/schedule": {
+      "post": {
+        "description": "A manual drag. Validated, and warned about even when permitted.",
+        "operationId": "schedule_one_v1_calendar_schedule_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Schedule One V1 Calendar Schedule Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Schedule One",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/calendar/schedule/{video_id}": {
+      "delete": {
+        "operationId": "unschedule_v1_calendar_schedule__video_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Unschedule V1 Calendar Schedule  Video Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unschedule",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/calendar/slots": {
+      "get": {
+        "description": "Ranked publish times, so the calendar can show *why* a slot is good.",
+        "operationId": "slots_v1_calendar_slots_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 14,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Slots V1 Calendar Slots Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Slots",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/channels": {
+      "get": {
+        "operationId": "list_channels_v1_channels_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Channels V1 Channels Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Channels",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/channels/launch": {
+      "post": {
+        "operationId": "launch_v1_channels_launch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaunchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Launch V1 Channels Launch Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Launch",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/v1/channels/launch/apply": {
+      "post": {
+        "description": "Push what the API can actually set onto a connected channel.\n\nOnly the description, keywords and country. The name and handle are not settable\nthrough the Data API at all \u2014 those stay on the manual checklist permanently.",
+        "operationId": "apply_v1_channels_launch_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Apply V1 Channels Launch Apply Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/v1/channels/launch/{launch_id}": {
+      "get": {
+        "operationId": "get_launch_v1_channels_launch__launch_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "launch_id",
+            "required": true,
+            "schema": {
+              "title": "Launch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Launch V1 Channels Launch  Launch Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Launch",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/v1/channels/limits": {
+      "get": {
+        "description": "The constraints the designer works within, so the UI can show live counters.",
+        "operationId": "limits_v1_channels_limits_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Limits V1 Channels Limits Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Limits",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/v1/insights": {
+      "get": {
+        "description": "Findings, each carrying its verdict and sample size.\n\nSuggestive findings are returned so the user can see them; only confirmed ones\nare ever fed back into generation.",
+        "operationId": "insights_v1_insights_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Insights V1 Insights Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Insights",
+        "tags": [
+          "insights"
+        ]
+      }
+    },
+    "/v1/insights/refresh": {
+      "post": {
+        "description": "Pull the last 90 days and re-join metrics onto stored provenance.",
+        "operationId": "refresh_insights_v1_insights_refresh_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Refresh Insights V1 Insights Refresh Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Refresh Insights",
+        "tags": [
+          "insights"
+        ]
+      }
+    },
+    "/v1/jobs": {
+      "post": {
+        "operationId": "create_job_v1_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Job V1 Jobs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Job"
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_v1_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Job V1 Jobs  Job Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job"
+      }
+    },
+    "/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancel_job_v1_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Job V1 Jobs  Job Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Job"
+      }
+    },
+    "/v1/jobs/{job_id}/edit": {
+      "post": {
+        "description": "Accept a user edit and re-run from that point.\n\nThis is the interaction the Create screen is built around: change the hook, and\neverything downstream regenerates while the research above it is left alone.",
+        "operationId": "edit_stage_v1_jobs__job_id__edit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Edit Stage V1 Jobs  Job Id  Edit Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit Stage"
+      }
+    },
+    "/v1/jobs/{job_id}/events": {
+      "get": {
+        "description": "Live progress.\n\nPast events are replayed first so a reload mid-render shows the full pipeline\nrather than resuming from a blank screen.\n\nEach subscriber holds a cursor into `job[\"events\"]` \u2014 the log is the only\nsource of truth, and reading it by position is what makes this correct for\nmore than one viewer. The previous version replayed the log *and then* drained\na shared queue that still held those same events, so everything before a\nsubscriber connected arrived twice; and because a queue hands each item to\nexactly one consumer, two open tabs split the stream between them and both\nrendered an incomplete pipeline.",
+        "operationId": "stream_job_v1_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Job"
+      }
+    },
+    "/v1/jobs/{job_id}/publish": {
+      "post": {
+        "description": "Publish a finished video. **This is the approval gate.**\n\n`CLAUDE.md` non-negotiable #3: nothing publishes without an explicit approval\ngate. That gate is this endpoint \u2014 it is never a stage of the `video` workflow,\nbecause a workflow that publishes as its last step has no gate at all.\n\nAuto-publish (`automation.py`) calls the same function, so manual and unattended\npublishing share one code path and one set of blockers. Skipping the checks is\nnot offered: a series with `auto_publish=True` skips the *waiting*, not the\n*checks*.",
+        "operationId": "publish_job_v1_jobs__job_id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publish Job V1 Jobs  Job Id  Publish Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Job"
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "description": "Everything the Models screen needs in one call.",
+        "operationId": "list_models_v1_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Models V1 Models Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Models",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/catalogue": {
+      "post": {
+        "description": "Register any model \u2014 a new Ollama pull, an OpenAI-compatible gateway, whatever.\n\nThe catalogue is a starting point, not a whitelist.",
+        "operationId": "add_model_v1_models_catalogue_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Add Model V1 Models Catalogue Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Model",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/ollama": {
+      "get": {
+        "description": "What Ollama actually has installed, so the UI offers real models.",
+        "operationId": "ollama_v1_models_ollama_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "base_url",
+            "required": false,
+            "schema": {
+              "default": "http://localhost:11434",
+              "title": "Base Url",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ollama V1 Models Ollama Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ollama",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/ollama/register": {
+      "post": {
+        "description": "Add every installed Ollama model to the catalogue in one go.\n\n`json_mode` is set true because Ollama constrains decoding with `format: json`,\nwhich is what makes small local models usable for the structured stages. It is\nnot a promise the output will be *good*.",
+        "operationId": "register_ollama_v1_models_ollama_register_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "base_url",
+            "required": false,
+            "schema": {
+              "default": "http://localhost:11434",
+              "title": "Base Url",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Register Ollama V1 Models Ollama Register Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Ollama",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/route": {
+      "put": {
+        "operationId": "set_route_v1_models_route_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Set Route V1 Models Route Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Route",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/route/all": {
+      "put": {
+        "description": "Route every task to one model \u2014 the 'run it all locally' button.",
+        "operationId": "set_all_v1_models_route_all_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkRoute"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Set All V1 Models Route All Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set All",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/route/reset": {
+      "post": {
+        "operationId": "reset_v1_models_route_reset_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reset V1 Models Route Reset Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Reset",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/models/test": {
+      "post": {
+        "description": "Round-trip one model so a broken route is found here, not mid-render.",
+        "operationId": "test_model_v1_models_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkRoute"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Test Model V1 Models Test Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test Model",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/v1/quota": {
+      "get": {
+        "operationId": "quota_v1_quota_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Quota",
+        "tags": [
+          "publishing"
+        ]
+      }
+    },
+    "/v1/workflows/{name}": {
+      "get": {
+        "description": "The stage graph, so the UI can render the pipeline before anything runs.",
+        "operationId": "describe_workflow_v1_workflows__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Describe Workflow V1 Workflows  Name  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Describe Workflow"
+      }
+    }
+  }
+}

@@ -12,8 +12,8 @@ Nothing in this module weakens that gate.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class Summary:
     @property
     def variance(self) -> float:
         """Sample variance (std²)."""
-        return self.std ** 2
+        return self.std**2
 
 
 @dataclass(frozen=True)
@@ -44,8 +44,8 @@ class Comparison:
     b: Summary
     t: float
     p_value: float
-    lift: float   # percentage points: (a.mean - b.mean) / |b.mean| * 100
-    df: float     # Welch–Satterthwaite degrees of freedom
+    lift: float  # percentage points: (a.mean - b.mean) / |b.mean| * 100
+    df: float  # Welch–Satterthwaite degrees of freedom
 
     @property
     def ci95(self) -> tuple[float, float]:
@@ -53,7 +53,7 @@ class Comparison:
         diff = self.a.mean - self.b.mean
         if self.df == 0.0 or self.a.n == 0 or self.b.n == 0:
             return (diff, diff)
-        se = math.sqrt(self.a.std ** 2 / self.a.n + self.b.std ** 2 / self.b.n)
+        se = math.sqrt(self.a.std**2 / self.a.n + self.b.std**2 / self.b.n)
         if se == 0.0:
             return (diff, diff)
         try:
@@ -88,23 +88,18 @@ def summarize(values: Sequence[float]) -> Summary:
 def two_tailed_p(t_stat: float, df: float) -> float:
     """Two-tailed p-value from a t-statistic and degrees of freedom.
 
-    Uses scipy when available; falls back to Python's built-in
-    ``math.betainc`` (Python 3.12+) for an exact result without any
-    third-party dependency.
+    Requires scipy, which is a hard dependency for exactly this reason. There
+    used to be a ``math.betainc`` fallback here "for an exact result without any
+    third-party dependency" — but no released CPython has ``math.betainc``, so
+    that branch raised ``AttributeError`` every time it was reached. A wrong
+    p-value silently trains the Phase 8 feedback loop on noise, which is worse
+    than a missing package, so this fails loudly instead of approximating.
 
     Formula: P(|T| > |t| | df) = I(df / (df + t²); df/2, 1/2)
     """
-    try:
-        from scipy.stats import t as t_dist  # type: ignore[import]
+    from scipy.stats import t as t_dist  # type: ignore[import]
 
-        return float(2 * t_dist.sf(abs(t_stat), df))
-    except ImportError:
-        pass
-    t_abs = abs(t_stat)
-    if t_abs == 0.0:
-        return 1.0
-    x = df / (df + t_abs ** 2)
-    return math.betainc(df / 2.0, 0.5, x)
+    return float(2 * t_dist.sf(abs(t_stat), df))
 
 
 def welch_t_test(a_values: Sequence[float], b_values: Sequence[float]) -> Comparison:
@@ -126,8 +121,8 @@ def welch_t_test(a_values: Sequence[float], b_values: Sequence[float]) -> Compar
     if sa.n < 2 or sb.n < 2:
         return Comparison(a=sa, b=sb, t=0.0, p_value=1.0, lift=lift, df=0.0)
 
-    var_a = sa.std ** 2 / sa.n
-    var_b = sb.std ** 2 / sb.n
+    var_a = sa.std**2 / sa.n
+    var_b = sb.std**2 / sb.n
     pooled = var_a + var_b
 
     if pooled == 0:
@@ -140,9 +135,7 @@ def welch_t_test(a_values: Sequence[float], b_values: Sequence[float]) -> Compar
     t_stat = (sa.mean - sb.mean) / math.sqrt(pooled)
 
     # Welch–Satterthwaite degrees of freedom
-    df = pooled ** 2 / (
-        (var_a ** 2) / (sa.n - 1) + (var_b ** 2) / (sb.n - 1)
-    )
+    df = pooled**2 / ((var_a**2) / (sa.n - 1) + (var_b**2) / (sb.n - 1))
 
     p_value = two_tailed_p(t_stat, df)
 

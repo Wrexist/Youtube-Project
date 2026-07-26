@@ -20,7 +20,6 @@ from engine.ideas import (
     similarity,
 )
 
-
 # ── _cosine ──────────────────────────────────────────────────────────────────
 
 
@@ -69,9 +68,7 @@ class TestFindDuplicateAsyncJaccard:
 
     @pytest.mark.asyncio
     async def test_empty_existing_never_flags(self):
-        dup, score, method = await find_duplicate_async(
-            "any topic", [], ollama_base_url=None
-        )
+        dup, score, method = await find_duplicate_async("any topic", [], ollama_base_url=None)
         assert dup is None
 
     @pytest.mark.asyncio
@@ -124,9 +121,8 @@ class TestFindDuplicateAsyncEmbedding:
 
         # Stub _get_embedding to return identical vectors (cosine = 1.0).
         import engine.ideas as ideas_mod
-        monkeypatch.setattr(
-            ideas_mod, "_get_embedding", lambda *_a, **_kw: _return([1.0, 0.0])
-        )
+
+        monkeypatch.setattr(ideas_mod, "_get_embedding", lambda *_a, **_kw: _return([1.0, 0.0]))
 
         dup, score, method = await find_duplicate_async(
             self._TOPIC, self._EXISTING, ollama_base_url="http://fake-ollama"
@@ -142,9 +138,8 @@ class TestFindDuplicateAsyncEmbedding:
         self._assert_in_ambiguous_zone()
 
         import engine.ideas as ideas_mod
-        monkeypatch.setattr(
-            ideas_mod, "_get_embedding", lambda *_a, **_kw: _return(None)
-        )
+
+        monkeypatch.setattr(ideas_mod, "_get_embedding", lambda *_a, **_kw: _return(None))
 
         dup, score, method = await find_duplicate_async(
             self._TOPIC, self._EXISTING, ollama_base_url="http://fake-ollama"
@@ -159,6 +154,7 @@ class TestFindDuplicateAsyncEmbedding:
         self._assert_in_ambiguous_zone()
 
         import engine.ideas as ideas_mod
+
         # Topic gets [1,0], candidate gets [0,1] — cosine = 0.0 (clearly unrelated).
         call_count = {"n": 0}
 
@@ -243,7 +239,9 @@ class TestBuildBacklogAsync:
             published_topics=[],
             suggestions=[],
         )
-        first_rejected = next((i for i, idea in enumerate(out) if idea.status is IdeaStatus.REJECTED), len(out))
+        first_rejected = next(
+            (i for i, idea in enumerate(out) if idea.status is IdeaStatus.REJECTED), len(out)
+        )
         last_non_rejected = max(
             (i for i, idea in enumerate(out) if idea.status is not IdeaStatus.REJECTED), default=-1
         )

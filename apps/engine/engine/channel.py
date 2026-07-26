@@ -155,9 +155,7 @@ def validate(identity: ChannelIdentity) -> list[Problem]:
     return problems
 
 
-def trim_keywords(
-    keywords: list[str], *, suggestions: list[str] | None = None
-) -> list[str]:
+def trim_keywords(keywords: list[str], *, suggestions: list[str] | None = None) -> list[str]:
     """Drop keywords past the 500-character budget, keeping the highest-value ones.
 
     When autocomplete suggestions are provided the list is re-ranked by position

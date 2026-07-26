@@ -19,6 +19,10 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta, timezone
 
+from loguru import logger
+
+from engine.settings import get_settings
+
 # Documented unit costs. Anything not listed defaults to 1 (the read-op cost).
 COSTS: dict[str, int] = {
     "videos.insert": 1600,
@@ -34,6 +38,8 @@ COSTS: dict[str, int] = {
     "playlistItems.list": 1,
 }
 
+# Google's default grant. The effective ceiling is `ledger.limit`, which reads
+# STUDIO_YOUTUBE_DAILY_QUOTA — read that, not this, when comparing against spend.
 DAILY_LIMIT = 10_000
 PACIFIC = timezone(timedelta(hours=-8))  # PST; DST shifts this by an hour
 
@@ -65,11 +71,25 @@ def quota_day(moment: datetime | None = None) -> date:
 
 @dataclass
 class QuotaLedger:
-    """In-memory ledger. Phase 1 moves this to a Postgres table; the interface is
-    the same so the swap stays inside this module."""
+    """Postgres-backed, with the day's entries cached in memory.
 
-    limit: int = DAILY_LIMIT
+    Reads (`spent`, `remaining`, `can_afford`, `check`) stay synchronous and hit
+    the cache — they are called from sync code in `automation.py` and from the
+    hot path in `youtube.py`, and making them async would ripple through both for
+    no benefit. Writes are async and durable before they return: this is the one
+    table where losing a row means silently overrunning Google's daily ceiling.
+
+    `load()` hydrates the cache at startup. Without it a restart forgets the day's
+    spend and the next upload overruns — the single worst consequence of §5.1.
+    """
+
+    # Reads STUDIO_YOUTUBE_DAILY_QUOTA. The setting existed and was read by
+    # nothing, so a granted quota extension (KNOWN-ISSUES §3.2) could not be
+    # configured — the 10,000 ceiling was hardcoded here.
+    limit: int = field(default_factory=lambda: get_settings().youtube_daily_quota)
     entries: list[Entry] = field(default_factory=list)
+    # Tests construct bare ledgers and must not need a database.
+    persist: bool = True
 
     def cost_of(self, operation: str) -> int:
         return COSTS.get(operation, 1)
@@ -91,7 +111,7 @@ class QuotaLedger:
         if cost > remaining:
             raise QuotaExceeded(operation, cost, remaining)
 
-    def record(
+    async def record(
         self,
         operation: str,
         *,
@@ -99,6 +119,12 @@ class QuotaLedger:
         channel_id: str = "",
         note: str = "",
     ) -> Entry:
+        """Meter a call. Durable before it returns.
+
+        Deliberately not fire-and-forget: the row is the only record that these
+        units were spent, and a crash between the API call and an unflushed write
+        is exactly the case that leads to a silent overrun tomorrow.
+        """
         entry = Entry(
             operation=operation,
             cost=self.cost_of(operation),
@@ -107,7 +133,61 @@ class QuotaLedger:
             note=note,
         )
         self.entries.append(entry)
+
+        if self.persist:
+            from engine.db import session
+            from engine.tables import QuotaEntry
+
+            try:
+                async with session() as s:
+                    s.add(
+                        QuotaEntry(
+                            operation=entry.operation,
+                            cost=entry.cost,
+                            at=entry.at,
+                            channel_id=entry.channel_id,
+                            note=entry.note,
+                        )
+                    )
+            except Exception:
+                # The spend already happened at Google. Dropping the in-memory
+                # entry too would double-count the remaining budget, so keep it
+                # and make the persistence failure loud instead.
+                logger.exception("failed to persist quota entry for {}", operation)
+
         return entry
+
+    async def load(self, days: int = 35) -> int:
+        """Hydrate the cache from the database. Call once at startup.
+
+        Loads a little more than the 28 days `usage_by_day` charts, so the
+        calendar's history survives a restart along with today's spend.
+        """
+        from sqlalchemy import select
+
+        from engine.db import session
+        from engine.tables import QuotaEntry
+
+        since = datetime.now(UTC) - timedelta(days=days)
+        async with session() as s:
+            rows = (await s.execute(select(QuotaEntry).where(QuotaEntry.at >= since))).scalars()
+            self.entries = [
+                Entry(
+                    operation=r.operation,
+                    cost=r.cost,
+                    at=r.at if r.at.tzinfo else r.at.replace(tzinfo=UTC),
+                    channel_id=r.channel_id,
+                    note=r.note,
+                )
+                for r in rows
+            ]
+
+        logger.info(
+            "quota ledger restored: {} entries, {} units spent today",
+            len(self.entries),
+            self.spent(),
+        )
+        return len(self.entries)
 
     def uploads_left(self, day: date | None = None) -> int:
         """How many more videos can be published today.

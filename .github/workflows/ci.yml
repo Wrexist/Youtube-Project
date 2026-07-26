@@ -11,6 +11,23 @@ jobs:
     defaults:
       run:
         working-directory: apps/engine
+    # The persistence suite falls back to SQLite without this, which would let a
+    # Postgres-only problem through — JSON columns and timezone handling differ.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: studio
+          POSTGRES_PASSWORD: studio
+          POSTGRES_DB: studio
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U studio"
+          --health-interval 5s
+          --health-retries 10
+    env:
+      STUDIO_PERSIST: "false"
+      STUDIO_TEST_DATABASE_URL: postgresql+asyncpg://studio:studio@localhost:5432/studio
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,6 +37,36 @@ jobs:
       - run: ruff check engine tests
       - run: ruff format --check engine tests
       - run: pytest -q
+      # A migration that does not apply cleanly is a broken deploy, not a broken test.
+      #
+      # Its own database, deliberately. The persistence fixture calls
+      # `create_all` on the `studio` database, so running this against that same
+      # one fails with `relation "channel_launches" already exists` — and would
+      # only fail *sometimes*, depending on step order. A dedicated database also
+      # makes the check mean what it says: migrations applied to an empty schema.
+      - name: Migrations apply to an empty database
+        run: |
+          PGPASSWORD=studio createdb -h localhost -U studio migrations_check
+          alembic upgrade head
+        env:
+          STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@localhost:5432/migrations_check
+      # The committed schema is what generates the web app's types. If a route
+      # changed without re-exporting, the contract silently lies.
+      - name: openapi.json matches the app
+        run: python scripts/export_openapi.py --check
+
+  # vendor/moneyprinterturbo is a read-only reference snapshot. Nothing may import
+  # it — the house rules in CLAUDE.md apply only to code that has been ported out.
+  vendor-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No imports from vendor/
+        run: |
+          if grep -rnE '^\s*(from|import)\s+vendor|from vendor\.' apps/; then
+            echo "::error::apps/ imports from vendor/ — port the code into engine/services instead"
+            exit 1
+          fi
 
   web:
     runs-on: ubuntu-latest
@@ -30,5 +77,16 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # A stale contract is silent drift: the web app keeps compiling against types
+      # the engine no longer serves. Fail the build instead.
+      - name: Generated types match openapi.json
+        run: npm run check --workspace=@studio/contracts
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      # Deliberately `critical`, not `high`. There are 14 standing high advisories,
+      # all transitive build/dev dependencies whose fixes need an upstream Next or
+      # eslint-config-next release — see AUDIT.md §4.7 for what each one exposes.
+      # Failing on `high` would mean a permanently red build that nobody reads;
+      # this still fails the moment something critical appears.
+      - run: npm audit --audit-level=critical

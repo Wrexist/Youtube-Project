@@ -1,3 +1,15 @@
+# Two ways to run this.
+#
+#   docker compose up -d                    just the infrastructure; you run the
+#                                           engine and web yourself — best for
+#                                           development, hot reload works
+#
+#   docker compose --profile full up -d     everything, including the engine, the
+#                                           render worker and the web app
+#
+# Neither is required to try the app. With nothing running here the engine falls
+# back to SQLite and runs renders in-process. See SETUP.md.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -21,6 +33,54 @@ services:
       interval: 5s
       retries: 10
 
+  engine:
+    profiles: ["full"]
+    build: ./apps/engine
+    ports: ["8080:8080"]
+    env_file: [.env]
+    environment:
+      # Inside the compose network the services have names, not localhost. These
+      # override .env, which is written for running on the host.
+      STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@postgres:5432/studio
+      STUDIO_REDIS_URL: redis://redis:6379/0
+      STUDIO_STORAGE_ROOT: /data
+    volumes: [studio-storage:/data]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\""]
+      interval: 10s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    profiles: ["full"]
+    build: ./apps/engine
+    command: ["python", "-m", "arq", "engine.worker.WorkerSettings"]
+    env_file: [.env]
+    environment:
+      STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@postgres:5432/studio
+      STUDIO_REDIS_URL: redis://redis:6379/0
+      STUDIO_STORAGE_ROOT: /data
+    # The same volume as the engine, deliberately: the worker writes the rendered
+    # file and the engine serves it, so they have to see one filesystem.
+    volumes: [studio-storage:/data]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  web:
+    profiles: ["full"]
+    build: ./apps/web
+    ports: ["3000:3000"]
+    environment:
+      # Resolved by the browser, not inside the network, so it is the host address.
+      NEXT_PUBLIC_ENGINE_URL: http://localhost:8080
+    depends_on:
+      engine: {condition: service_started}
+
 volumes:
   studio-pg:
   studio-redis:
+  studio-storage:

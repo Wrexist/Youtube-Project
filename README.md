@@ -3,39 +3,42 @@
 Idea → researched script → narrated, subtitled, rendered video → grounded SEO package
 → scheduled to YouTube → measured → fed back into the next video.
 
+- [SETUP.md](SETUP.md) — **start here.** One command, then two API keys.
 - [PLAN.md](PLAN.md) — phases and what is built
 - [CLAUDE.md](CLAUDE.md) — architecture, conventions, hard API limits
 - [docs/UI-DESIGN.md](docs/UI-DESIGN.md) — design system and screens
 - [KNOWN-ISSUES.md](KNOWN-ISSUES.md) — what's unverified, broken, or needs a human
+- [AUDIT.md](AUDIT.md) — **full-system audit, 20 findings, phased plan with fixes**
 - [FIX-TASKS.md](FIX-TASKS.md) — paste-able agent prompts to fix all of it
 
 ## Run it
 
-The web app runs on demo data with **no engine and no API keys**. That is
-deliberate — a design you can't look at is a design you can't judge.
-
 ```bash
-npm install
-npm run dev
+./scripts/setup.sh
 ```
 
-Engine and infrastructure:
+That is the whole setup: venv, both toolchains, `.env`, database schema, tests.
+**No Docker needed** — the engine defaults to SQLite and runs renders in-process.
+It finishes by listing anything still missing, which will be two API keys.
+See [SETUP.md](SETUP.md).
 
 ```bash
-docker compose up -d
+npm run dev                                                              # :3000
+apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 ```
 
-```bash
-cd apps/engine && python -m venv .venv && .venv/Scripts/python -m pip install -e ".[dev]"
-```
+Check what is configured at any time:
 
 ```bash
-apps/engine/.venv/Scripts/python -m uvicorn engine.main:app --reload --port 8080
+apps/engine/.venv/bin/python apps/engine/scripts/doctor.py
 ```
 
-```bash
-apps/engine/.venv/Scripts/python -m pytest apps/engine/tests -q
-```
+Upgrades, both optional: `docker compose up -d` for Postgres and Redis, then
+`apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings` to run renders
+in a worker so restarting the API cannot kill one. Or
+`docker compose --profile full up -d` for the whole stack in containers.
+
+On Windows the interpreter is at `.venv/Scripts/python`.
 
 ## Layout
 
@@ -43,6 +46,7 @@ apps/engine/.venv/Scripts/python -m pytest apps/engine/tests -q
 apps/web/      Next.js 16 · Tailwind 4 · dark and light
 apps/engine/   FastAPI · arq workers · owns generation, rendering, publishing
 docs/          design spec
+vendor/        MoneyPrinterTurbo, read-only reference. Never imported.
 ```
 
 ## The parts that carry the weight
@@ -58,6 +62,9 @@ docs/          design spec
 | [insights.py](apps/engine/engine/insights.py) | Metrics attributed back to the title strategy and hook device that produced them |
 | [automation.py](apps/engine/engine/automation.py) | Series cadence, approval gates, spend ceilings |
 | [ideas.py](apps/engine/engine/ideas.py) | Backlog scoring and duplicate detection |
+| [services/stock.py](apps/engine/engine/services/stock.py) | Pexels then Pixabay, orientation enforced, no clip reused across a video |
+| [services/effects.py](apps/engine/engine/services/effects.py) | Ken Burns and fades — what stops stock footage looking like stock footage |
+| [services/bgm.py](apps/engine/engine/services/bgm.py) | Music bed, off by default because nothing here ships licensed music |
 
 ## Three things worth knowing before relying on it
 
@@ -72,6 +79,15 @@ docs/          design spec
 
 ## Status
 
-Phases 0–10 are code-complete. **Neither Google API has been exercised against a live
-account** — upload, captions and analytics are reviewed code, not proven code. That
-needs OAuth credentials from a Google Cloud project.
+Phases 0–10 are code-complete; 314 engine tests pass. **Neither Google API has been
+exercised against a live account** — upload, captions and analytics are reviewed
+code, not proven code. That needs OAuth credentials from a Google Cloud project.
+
+Motion, crossfades and the music bed were verified by a real MoviePy render with
+measurements, not by eye — see [KNOWN-ISSUES.md](KNOWN-ISSUES.md) §2. That render
+used synthetic clips and tones; the pipeline has still not been run end to end
+against live Pexels footage and edge-tts audio.
+
+State survives a restart (Postgres), renders run in an arq worker, and the web app
+reads live engine data with a labelled demo fallback. See [AUDIT.md](AUDIT.md) for
+what was found, fixed and measured.

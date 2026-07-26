@@ -27,7 +27,7 @@ infra/          docker-compose: postgres, redis, engine, web.
 
 ## The render core
 
-`apps/engine/engine/services/` is derived from **MoneyPrinterTurbo** (`C:\Users\IsacC\Downloads\MoneyPrinterTurbo-Portable-Windows-1.3.2\MoneyPrinterTurbo`). Consult the original when behavior is unclear — especially `app/services/{video,voice,material,subtitle}.py`.
+`apps/engine/engine/services/` and `engine/render/compose.py` are derived from **MoneyPrinterTurbo**. The upstream source is vendored at [`vendor/moneyprinterturbo/`](vendor/moneyprinterturbo/README.md) — consult it when behavior is unclear, especially `app/services/{video,voice,material,subtitle}.py`. It is reference only: nothing imports it, ruff and pytest never see it, and it is not edited.
 
 Rules for that code:
 - Our public contract is `RenderRequest`, not MPT's `VideoParams`. `VideoParams` is an internal adapter detail and must not leak into API responses or the web app.
@@ -58,9 +58,13 @@ Rules for that code:
 ```bash
 docker compose up -d                        # postgres + redis
 npm run dev                                 # web on :3000
-apps/engine/.venv/Scripts/python -m uvicorn engine.main:app --reload --port 8080
-apps/engine/.venv/Scripts/python -m pytest apps/engine/tests -q
+apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
+apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
+apps/engine/.venv/bin/python -m alembic upgrade head       # schema
+apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings   # render worker
 ```
+
+On Windows the interpreter is at `.venv/Scripts/python` instead of `.venv/bin/python`.
 
 The web app runs entirely on demo data (`apps/web/lib/demo.ts`) with no engine and no
 API keys — that is deliberate, so the design can be judged before the plumbing exists.

@@ -17,7 +17,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
 
 # Hard cap: more than this many uploads in one day harms the channel.
 MAX_PUBLISHES_PER_DAY: int = 3
@@ -38,7 +37,7 @@ _COMPETE_WARNING_HOURS: int = 20
 
 def _default_hourly() -> list[float]:
     """Gaussian audience curve centred at 19:00, std = 3 hours."""
-    return [math.exp(-((h - _DEFAULT_PEAK_HOUR) ** 2) / (2 * 3.0 ** 2)) for h in range(24)]
+    return [math.exp(-((h - _DEFAULT_PEAK_HOUR) ** 2) / (2 * 3.0**2)) for h in range(24)]
 
 
 @dataclass
@@ -59,7 +58,7 @@ class AudienceProfile:
         cls,
         hourly_weights: list[float],
         daily_weights: list[float],
-    ) -> "AudienceProfile":
+    ) -> AudienceProfile:
         """Build a measured profile from Analytics hourly/daily weight vectors.
 
         Args:
@@ -107,9 +106,7 @@ def candidate_slots(
     slots: list[Slot] = []
 
     for d in range(days):
-        day_base = (start + timedelta(days=d)).replace(
-            minute=0, second=0, microsecond=0
-        )
+        day_base = (start + timedelta(days=d)).replace(minute=0, second=0, microsecond=0)
         for h in range(24):
             at = day_base.replace(hour=h)
             if at < start:
@@ -223,10 +220,7 @@ def auto_schedule(
                 continue
 
             # Minimum gap from every booked time (existing + new assignments).
-            too_close = any(
-                abs((slot.at - t).total_seconds()) < min_gap_s
-                for t in booked_times
-            )
+            too_close = any(abs((slot.at - t).total_seconds()) < min_gap_s for t in booked_times)
             if too_close:
                 continue
 
@@ -237,9 +231,9 @@ def auto_schedule(
 
             # Quota exhausted for this day.
             if constraints.quota_used_by_day:
-                from engine.quota import DAILY_LIMIT  # noqa: PLC0415
+                from engine.quota import ledger  # noqa: PLC0415
 
-                if constraints.quota_used_by_day.get(day, 0) >= DAILY_LIMIT:
+                if constraints.quota_used_by_day.get(day, 0) >= ledger.limit:
                     continue
 
             # Weekly cadence.
@@ -310,14 +304,13 @@ def validate_move(
 
     # Hard block: quota already exhausted for that day.
     if quota_used_by_day:
-        from engine.quota import DAILY_LIMIT  # noqa: PLC0415
+        from engine.quota import ledger  # noqa: PLC0415
 
         day = at.date()
-        if quota_used_by_day.get(day, 0) >= DAILY_LIMIT:
+        if quota_used_by_day.get(day, 0) >= ledger.limit:
             return (
                 False,
-                f"The YouTube upload quota for {day} is exhausted; "
-                f"choose a different day.",
+                f"The YouTube upload quota for {day} is exhausted; choose a different day.",
             )
 
     # Soft warning: too close to another scheduled upload.

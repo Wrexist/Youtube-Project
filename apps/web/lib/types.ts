@@ -1,14 +1,20 @@
-/** Mirrors the engine's stage serialisation in apps/engine/engine/main.py.
- *  Phase 0 generates this from the OpenAPI schema; until then it is hand-kept and
- *  deliberately minimal so drift is obvious. */
+/**
+ * View types for the web app.
+ *
+ * `StageStatus` and `JobStatus` are re-exported from `@studio/contracts`, which
+ * generates them from the engine's OpenAPI document — they are not redeclared
+ * here, so an engine change surfaces as a type error rather than as drift.
+ *
+ * `Stage`, `Variant` and `Job` are *view* shapes, not API mirrors. The engine
+ * types `/v1/jobs/{id}` as `-> dict`, so its schema says `object` and nothing
+ * more; these describe what the screens render, including fields the API does not
+ * send yet (`variants`, `detail`). When the engine grows response models these
+ * collapse into generated types — see the note in `packages/contracts/src/index.ts`.
+ */
 
-export type StageStatus =
-  | "pending"
-  | "running"
-  | "done"
-  | "stale"
-  | "failed"
-  | "skipped";
+import type { JobStatus, StageStatus } from "@studio/contracts";
+
+export type { JobStatus, StageStatus };
 
 export interface Stage {
   name: string;
@@ -33,7 +39,7 @@ export interface Variant {
 
 export interface Job {
   id: string;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: JobStatus;
   topic: string;
   format: "short" | "long";
   stages: Stage[];

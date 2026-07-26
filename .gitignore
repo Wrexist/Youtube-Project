@@ -3,6 +3,7 @@ node_modules/
 out/
 dist/
 build/
+*.tsbuildinfo
 
 __pycache__/
 *.py[cod]
@@ -26,3 +27,7 @@ storage/
 Thumbs.db
 .claude/worktrees/
 .claude/settings.local.json
+
+# Local Postgres and Redis data from the dev/test harness
+pgdata/
+dump.rdb

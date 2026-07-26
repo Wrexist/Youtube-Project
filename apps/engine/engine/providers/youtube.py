@@ -157,7 +157,7 @@ class YouTube:
         headers = {**(await self._headers()), **kwargs.pop("headers", {})}
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.request(method, url, headers=headers, **kwargs)
-        ledger.record(operation, channel_id=self.creds.channel_id)
+        await ledger.record(operation, channel_id=self.creds.channel_id)
 
         if resp.status_code >= 400:
             raise YouTubeError(f"{operation} failed ({resp.status_code}): {resp.text[:300]}")
@@ -266,7 +266,7 @@ class YouTube:
                     )
 
                     if resp.status_code in (200, 201):
-                        ledger.record(
+                        await ledger.record(
                             "videos.insert", channel_id=self.creds.channel_id, note=title[:60]
                         )
                         return resp.json()["id"]
