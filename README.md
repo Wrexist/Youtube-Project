@@ -27,16 +27,20 @@ docker compose up -d
 ```
 
 ```bash
-cd apps/engine && python -m venv .venv && .venv/Scripts/python -m pip install -e ".[dev]"
+cd apps/engine && python -m venv .venv && .venv/bin/python -m pip install -e ".[dev]"
 ```
 
 ```bash
-apps/engine/.venv/Scripts/python -m uvicorn engine.main:app --reload --port 8080
+apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 ```
 
 ```bash
-apps/engine/.venv/Scripts/python -m pytest apps/engine/tests -q
+apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
 ```
+
+> **Windows:** a venv puts its interpreter in `.venv/Scripts/` rather than
+> `.venv/bin/`. Substitute that in the three commands above; everything else is
+> identical.
 
 ## Layout
 

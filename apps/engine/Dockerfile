@@ -1,14 +1,17 @@
 FROM python:3.11-slim
 
-# MoviePy shells out to ffmpeg, and ImageMagick backs its TextClip subtitle
-# rendering. Neither is optional — the render stage fails at runtime without them.
+# MoviePy shells out to ffmpeg. Not optional — the render stage fails without it.
+# fonts-dejavu-core is the fallback engine/services/fonts.py resolves to, and a
+# missing font fails TextClip at construction, i.e. after the footage is downloaded.
+#
+# ImageMagick used to be installed here, with a sed patching its policy.xml so
+# TextClip's @-file reads would work. That was MoviePy 1.x behaviour: MoviePy 2
+# renders text through Pillow and never invokes ImageMagick. The patch was also
+# targeting /etc/ImageMagick-6/, which does not exist on current Debian — the
+# `|| true` had been hiding that for as long as it has been here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg imagemagick fonts-dejavu-core \
+      ffmpeg fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
-
-# Debian's ImageMagick policy blocks the @-file reads TextClip relies on.
-RUN sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@*"/' \
-      /etc/ImageMagick-6/policy.xml || true
 
 WORKDIR /app
 COPY pyproject.toml ./

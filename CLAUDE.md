@@ -58,9 +58,11 @@ Rules for that code:
 ```bash
 docker compose up -d                        # postgres + redis
 npm run dev                                 # web on :3000
-apps/engine/.venv/Scripts/python -m uvicorn engine.main:app --reload --port 8080
-apps/engine/.venv/Scripts/python -m pytest apps/engine/tests -q
+apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
+apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
 ```
+
+On Windows the interpreter is at `.venv/Scripts/python` instead of `.venv/bin/python`.
 
 The web app runs entirely on demo data (`apps/web/lib/demo.ts`) with no engine and no
 API keys — that is deliberate, so the design can be judged before the plumbing exists.

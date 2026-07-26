@@ -3,10 +3,11 @@
 What is unverified, what is knowingly incomplete, and what will need a human.
 Ordered by how likely it is to bite you.
 
-> **A full-system audit on 2026-07-26 found 20 issues this file does not list** —
-> including that the **publish workflow is unreachable dead code**, so nothing in the
-> repo can upload to YouTube, and that **CI is red on every push**. See
-> [AUDIT.md](AUDIT.md) for the evidence and the phased fix plan. Read that first.
+> **A full-system audit on 2026-07-26 found 20 issues this file did not list.**
+> **15 are now fixed** — publishing is wired up and gated, CI is green, SSE no longer
+> duplicates events, and every setting either works or is gone. The 5 that remain are
+> Phase 5: Postgres, arq workers, and the web↔engine wiring. See
+> [AUDIT.md](AUDIT.md) for the evidence, the fixes, and what is left.
 
 Last updated after vendoring the MoneyPrinterTurbo reference and porting the render
 services that were missing from it (`engine/services/`).

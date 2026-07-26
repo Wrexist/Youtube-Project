@@ -7,6 +7,12 @@ verbatim.
 
 **20 findings. One of them means the product cannot do the thing it exists to do.**
 
+> **Status — Phases 0-4 are done.** 15 of the 20 findings are fixed and verified;
+> the 5 that remain are Phase 5 (Postgres, arq, web↔engine wiring), which is
+> genuinely 1-2 weeks of work and is scoped below. Engine tests went 156 → 285 and
+> every CI step is green for the first time. Each finding below carries its own
+> status line.
+
 Each finding below has: what is wrong, the evidence that proves it, the fix, and a
 **Done when** that can be checked. Phases are ordered by dependency — P0 first
 because CI being red makes every later verification untrustworthy.
@@ -19,7 +25,7 @@ Stated first so the list below is read in proportion.
 
 | Area | Status | Evidence |
 |---|---|---|
-| Engine unit tests | **223 pass** | `pytest -q`, 7.5s |
+| Engine unit tests | **223 pass** (now 285) | `pytest -q`, 7.5s |
 | Web typecheck | **clean** | `tsc --noEmit`, no output |
 | Web build | **clean** | Next 16.2.11, 8 static routes |
 | Web render | **all 8 routes 200** | headless Chromium, no console errors |
@@ -40,6 +46,8 @@ then never connected.
 Nothing else can be verified while CI is red. Half a day.
 
 ### 0.1 · CI fails on every push — `ruff check` (P0)
+
+> **FIXED** — 14 → 0.
 
 `ruff check engine tests` reports **14 errors**; the CI step fails.
 
@@ -64,6 +72,8 @@ raising), three line wraps, one unused import.
 
 ### 0.2 · CI fails on every push — `ruff format --check` (P0)
 
+> **FIXED** — 7 files reformatted in one commit.
+
 7 files would be reformatted: `automation.py`, `channel.py`, `scheduling.py`,
 `stats.py`, `workflows/media.py`, `tests/test_semantic_dedup.py`,
 `tests/test_subtitles.py`.
@@ -74,6 +84,8 @@ else**, so it stays reviewable.
 **Done when** `ruff format --check engine tests` exits 0.
 
 ### 0.3 · `npm run lint` is broken (P1)
+
+> **FIXED** — ESLint 9 flat config, `--max-warnings 0`, now in CI.
 
 Next 16 removed `next lint`. The script now resolves `lint` as a *directory*:
 
@@ -91,6 +103,8 @@ all** right now.
 
 ### 0.4 · Add a CI guard for the vendored tree (P2)
 
+> **DONE** — `vendor-isolation` job.
+
 `vendor/moneyprinterturbo/` is reference-only. Nothing enforces that.
 
 **Fix.** CI step: `! grep -rn "from vendor\|import vendor" apps/`.
@@ -104,6 +118,8 @@ all** right now.
 **This is the headline finding.** One to two days.
 
 ### 1.1 · The publish workflow is unreachable dead code (P0 — blocking)
+
+> **FIXED** — `PUBLISH_WORKFLOW` registered; `POST /v1/jobs/{job_id}/publish` is the gate.
 
 `engine/workflows/publish.py` defines four fully-written stages — `UploadStage`,
 `ThumbnailSetStage`, `CaptionsStage`, `PlaylistStage` — and `PUBLISH_STAGES` at line
@@ -151,6 +167,8 @@ graph.
 
 ### 1.2 · `/v1/auth/google` hands out a broken OAuth URL (P1)
 
+> **FIXED** — 409 naming the missing variables.
+
 With no credentials set, the endpoint cheerfully returns:
 
 ```
@@ -169,6 +187,8 @@ when `google_client_id` or `google_client_secret` is empty.
 broken URL.
 
 ### 1.3 · `GOOGLE_REDIRECT_URI` in `.env.example` is silently ignored (P1)
+
+> **FIXED** — `validation_alias` added; verified against the old behaviour.
 
 `Settings` declares:
 
@@ -211,6 +231,8 @@ Verified by attribute-level grep across `engine/`, then re-checked individually:
 
 ### 2.1 · `storage_backend: "s3"` silently writes to local disk (P1)
 
+> **FIXED** — option B: `Literal["local"]`, rejected at startup; `s3_*` deleted.
+
 `ObjectStore` is local-filesystem only. `storage_backend`, `s3_bucket`,
 `s3_endpoint`, `s3_access_key`, `s3_secret_key` are read by nothing.
 `CLAUDE.md` states storage "goes through an `ObjectStore` interface — local FS in
@@ -231,6 +253,8 @@ Do **not** leave it as-is.
 
 ### 2.2 · `youtube_daily_quota` is dead; the ceiling is hardcoded (P2)
 
+> **FIXED** — `ledger.limit` reads it; all three other call sites updated.
+
 `quota.py:37` is `DAILY_LIMIT = 10_000`. The setting is never read. `KNOWN-ISSUES`
 §3.2 anticipates a granted quota extension — which could not be configured.
 
@@ -239,6 +263,8 @@ Do **not** leave it as-is.
 **Done when** setting `STUDIO_YOUTUBE_DAILY_QUOTA=50000` changes `/v1/quota`.
 
 ### 2.3 · `max_concurrent_renders` is not enforced (P2)
+
+> **FIXED** — semaphore in `RenderStage`, with a "waiting for a render slot" progress line.
 
 `CLAUDE.md` calls the guardrails load-bearing: *"A runaway workflow is a billing
 incident."* `max_cost_per_video_usd` **is** enforced. `max_concurrent_renders` is
@@ -250,6 +276,8 @@ acquired inside the stage so queued jobs still stream "waiting for a render slot
 **Done when** the N+1th concurrent render waits instead of starting.
 
 ### 2.4 · `tts_provider` is decorative (P2)
+
+> **FIXED** — narrowed to `Literal["edge"]`; `elevenlabs_api_key` and `AZURE_SPEECH_*` removed.
 
 The `Literal` promises `edge | azure | elevenlabs | gemini`. The only use is
 recording it in provenance:
@@ -272,6 +300,8 @@ Phase 6 work. Either way the provenance must not record a provider that did not 
 
 ### 2.5 · `llm_provider` / `llm_fast_model` / `llm_model` do nothing (P2)
 
+> **FIXED** — all four deleted (incl. `llm_base_url`); `/health` reports routed models.
+
 Model selection comes from the routing table in `models.py`, not from Settings.
 `llm_provider` and `llm_fast_model` have zero references; `llm_model` is only echoed
 back by `/health`, which makes `/health` actively misleading — it reports a model
@@ -291,6 +321,8 @@ The pipeline's first stage fails in a way that tells the operator nothing. Half 
 day.
 
 ### 3.1 · Keyword grounding swallows every exception (P1)
+
+> **FIXED** — failures counted and classified per source; message names the cause.
 
 `research/keywords.py:57-60`:
 
@@ -327,6 +359,8 @@ actionable messages.
 
 ### 3.2 · Grounding has a single point of failure with no key and no fallback (P2)
 
+> **OPEN** — still one unauthenticated source. §3.1 now makes the failure legible, which was the urgent half.
+
 Both sources are unauthenticated scraped endpoints:
 `suggestqueries.google.com` and `html.duckduckgo.com`. The code comment says this
 "keeps first-run setup to zero configuration" — true, and the trade is that both
@@ -344,6 +378,8 @@ between them. Surface which source produced the evidence in provenance.
 **Done when** grounding survives either source being unavailable.
 
 ### 3.3 · SSE delivers every pre-subscribe event twice (P1)
+
+> **FIXED** — cursor-per-subscriber fan-out; verified with two concurrent curl clients.
 
 `main.py` `stream_job()` replays `job["events"]` and then drains `job["queue"]` —
 but `emit()` writes to **both**, and nothing consumed the queue. Everything that
@@ -382,6 +418,8 @@ Two hours.
 
 ### 4.1 · Every documented Python command is Windows-only (P1)
 
+> **FIXED** — POSIX paths, Windows noted once.
+
 `README.md` (3×), `CLAUDE.md` (2×) and `AGENTS.md` (2×) all say:
 
 ```bash
@@ -402,6 +440,8 @@ apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
 **Done when** a fresh clone on Linux can be set up by copy-paste.
 
 ### 4.2 · `.env.example` documents four settings that do not exist (P2)
+
+> **FIXED** — regenerated, and a test now fails on drift.
 
 | Entry | Reality |
 |---|---|
@@ -427,6 +467,8 @@ def test_env_example_matches_settings():
 
 ### 4.3 · `.claude/settings.json` allow-lists a path that no longer exists (P3)
 
+> **FIXED** — points at `vendor/`.
+
 ```json
 "Read(//C/Users/IsacC/Downloads/MoneyPrinterTurbo-Portable-Windows-1.3.2/...)"
 ```
@@ -436,6 +478,8 @@ The reference is now vendored in-repo.
 **Fix.** Replace with `Read(./vendor/moneyprinterturbo/**)`.
 
 ### 4.4 · Declared workspace `packages/*` does not exist (P3)
+
+> **OPEN** — belongs with Phase 5's web wiring.
 
 Root `package.json` declares `workspaces: ["apps/web", "packages/*"]` and `CLAUDE.md`
 says *"Types come from `packages/contracts`. Never hand-write a type that mirrors an
@@ -448,10 +492,14 @@ CI, and delete the hand-written mirrors. Pair this with Phase 5.
 
 ### 4.5 · Committed build artifact (P3)
 
+> **FIXED** — untracked and gitignored.
+
 `apps/web/tsconfig.tsbuildinfo` is tracked.
 **Fix.** `git rm --cached`, add to `.gitignore`.
 
 ### 4.6 · Dockerfile carries a dependency MoviePy 2 does not use (P3)
+
+> **FIXED** — ImageMagick and the sed removed.
 
 ```dockerfile
 # MoviePy shells out to ffmpeg, and ImageMagick backs its TextClip subtitle rendering.
@@ -472,6 +520,8 @@ verified.
 
 ### 4.7 · Three high-severity npm advisories (P3)
 
+> **OPEN** — waiting on a Next patch release.
+
 Via `next@16.2.11` → `postcss` (arbitrary file read via `sourceMappingURL`,
 CVSS 7.5) and `sharp`. `npm audit fix` offers only a downgrade to `next@9`.
 
@@ -487,6 +537,8 @@ The two largest structural gaps. Already in `KNOWN-ISSUES` §5.4 and §5.5; rest
 here with the dependency order that matters. One to two weeks.
 
 ### 5.1 · All state is in module-level dicts (P1)
+
+> **OPEN** — Phase 5.
 
 `JOBS`, `CHANNELS`, `SCHEDULE`, `RECORDS`, `LAUNCHES`. A restart loses every job,
 channel, schedule and quota record. `database_url` and `redis_url` are configured and
@@ -504,6 +556,8 @@ quota overrun on restart.
 
 ### 5.2 · Jobs run as in-process asyncio tasks, not arq workers (P2)
 
+> **OPEN** — Phase 5.
+
 `arq` and `redis` are dependencies; neither is imported. `create_task` means a
 long render dies with the web process, and `max_concurrent_renders` (§2.3) cannot be
 enforced across processes.
@@ -512,6 +566,8 @@ enforced across processes.
 Redis pub/sub.
 
 ### 5.3 · The web app is not connected to the engine at all (P1)
+
+> **OPEN** — Phase 5. Unblocked now that §3.3 is fixed.
 
 Every screen renders from `apps/web/lib/demo.ts`. There is **no** `fetch`, no
 `EventSource`, no Server Action against the engine — only an env passthrough in
@@ -549,17 +605,28 @@ Not defects; scope that was consciously left out. Tracked so it is not rediscove
 ## Suggested order
 
 ```
-Phase 0  ▸  half a day   ▸  CI green — everything after this is verifiable
-Phase 1  ▸  1–2 days     ▸  the product can publish
-Phase 3  ▸  half a day   ▸  failures explain themselves  (do before Phase 5 ③)
-Phase 2  ▸  1 day        ▸  settings stop lying
-Phase 4  ▸  2 hours      ▸  a new contributor can start
-Phase 5  ▸  1–2 weeks    ▸  survives a restart; UI is real
-Phase 6  ▸  —            ▸  deferred by choice
+Phase 0  ✅ done  ▸  CI green — everything after this is verifiable
+Phase 1  ✅ done  ▸  the product can publish
+Phase 3  ✅ done  ▸  failures explain themselves  (unblocks Phase 5 ④)
+Phase 2  ✅ done  ▸  settings stop lying
+Phase 4  ✅ done  ▸  a new contributor can start
+Phase 5  ▸ 1–2 weeks  ▸  survives a restart; UI is real
+Phase 6  ▸ —          ▸  deferred by choice
 ```
 
-Phases 2, 3 and 4 are independent of each other and can run in parallel. Phase 5 ④
-is blocked on Phase 3.3.
+Phase 5 is the only remaining work, and it is the largest. Do it in this order —
+each step unblocks the next:
+
+1. **`packages/contracts` from OpenAPI** (§4.4). The schema is already complete and
+   served; generating types is the cheapest step and everything in the UI depends
+   on it.
+2. **Postgres** (§5.1). The quota ledger table first — it is the only thing standing
+   between the system and a quota overrun after a restart. The dict shapes were kept
+   deliberately compatible, so this is a swap rather than a redesign.
+3. **arq workers** (§5.2). Needed before `max_concurrent_renders` can mean anything
+   across processes.
+4. **Web → engine** (§5.3). Read paths, then Server Actions, then the live job view
+   on `EventSource` — that last one was blocked on the SSE fix and no longer is.
 
 ---
 
@@ -578,3 +645,22 @@ is blocked on Phase 3.3.
 API calls (no credentials), keyword grounding against live sources (sandbox egress
 policy denies both hosts — confirmed via the proxy's own status endpoint), and the
 pipeline against real Pexels footage and edge-tts audio (no keys).
+
+### Verification of the fixes
+
+Everything claimed FIXED above was re-checked after the change, most of it live
+rather than by unit test alone:
+
+| Fix | How it was confirmed |
+|---|---|
+| CI green | all six steps run locally: ruff check, ruff format, pytest (285), npm lint, typecheck, build |
+| Publish reachable | `/health` lists it; `/v1/workflows/publish` serves a 21-stage graph ending upload → thumbnail_set → captions → playlist |
+| Approval gate | 10 endpoint tests: running job, wrong workflow, no channel, quality blockers, exhausted quota, and the happy path |
+| SSE duplication | live curl: `workflow.started` and `stage.started` once each, previously twice |
+| SSE multi-viewer | two concurrent curl subscribers received byte-identical 8-event streams |
+| Grounding message | live failure now reads `youtube_autocomplete 27/27 requests failed (ProxyError)` — it correctly identified this sandbox's egress proxy |
+| `GOOGLE_REDIRECT_URI` | set the env var, read it back; then `git stash` and showed the old code ignoring the same var |
+| `storage_backend=s3` | rejected at startup with a message naming the field |
+| Quota configurable | `STUDIO_YOUTUBE_DAILY_QUOTA=50000` → ledger limit 50000, uploads_left 24 |
+| `/health` honesty | reports the routed draft and tags models instead of a dead setting |
+| Settings sweep | a test now fails when any field is added and never read |
