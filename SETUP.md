@@ -125,6 +125,7 @@ and country. Name, handle, avatar and banner stay manual permanently.
 | | Why you might | Cost |
 |---|---|---|
 | `docker compose up -d` | Postgres instead of SQLite, and renders in a worker so restarting the API cannot kill one mid-encode. Worth it once you are rendering regularly. | 1 command |
+| `OPENAI_API_KEY` | **Real thumbnail backgrounds**, via GPT Image. With no key, thumbnails are composed correctly but over a flat panel. There is no separate image key and nothing to configure — `STUDIO_IMAGE_PROVIDER` defaults to `auto` and picks this up. Budget ~$0.57 per video for three variants. `GEMINI_API_KEY` works as a cheaper alternative (~$0.12) and is used only if there is no OpenAI key. | 2 min |
 | `STUDIO_BGM_ENABLED=true` | Background music. The directory is empty on purpose — nothing here ships licensed music, and publishing over an unlicensed bed is a copyright strike. Drop your own tracks in `storage/bgm`. | your own audio |
 | `KEYWORD_API_URL` | A fallback keyword source. Only matters if you are on a datacenter or VPN network — YouTube autocomplete and DuckDuckGo block those, and grounding is the first stage of the only workflow. `doctor.py` tells you if this affects you. | depends |
 | Quota extension | Google grants 10,000 units/day, and an upload costs 1,600 — about **4 publishes a day** once thumbnails and captions are counted. More needs an audited application that takes weeks. | weeks |
@@ -168,5 +169,8 @@ Honest about the edges, because you will hit them before I would:
   The render core is verified by measurement (see `KNOWN-ISSUES.md` §2) but with
   synthetic clips and tones.
 - **Ollama is implemented and unit-tested but no real daemon has been called.**
-- **Thumbnails are placeholder compositions.** No image model is wired in, so the
-  layout and safe zones are right but the background is flat colour.
+- **No image API has been called for real.** The two transports are written against
+  OpenAI's `images/generations` and Imagen's `:predict`, and both are covered by
+  tests against recorded response shapes — but like the Google clients, they are
+  reviewed code, not proven code, until a live key runs through them. The
+  composition either side of the call *is* proven: see the note below.

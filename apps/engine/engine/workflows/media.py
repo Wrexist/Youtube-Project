@@ -233,7 +233,20 @@ class ThumbnailStage(Stage[list]):
     depends_on = ("titles", "revision")
     optional = True
     timeout_s = 300.0
-    estimated_cost_usd = 0.25
+
+    @property
+    def estimated_cost_usd(self) -> float:  # type: ignore[override]
+        """The concept call plus three backgrounds.
+
+        Computed rather than fixed because the image half swings between $0 and
+        $0.57 depending on which provider is configured, and `Workflow.run` refuses
+        a stage whose estimate would breach the budget — a flat 0.25 would either
+        block a run that costs nothing or wave through one that costs twice that.
+        """
+        from engine.providers import images
+
+        spec = images.selected()
+        return 0.06 + (3 * spec.cost_per_image if spec else 0.0)
 
     async def run(self, ctx: WorkflowContext) -> StageOutput[list]:
         from engine.providers import llm
@@ -261,16 +274,26 @@ Return: {{"concepts": [{{"image_prompt": str, "overlay_text": str,
         )
 
         variants = []
+        image_cost = 0.0
         for i, concept in enumerate(concepts["concepts"][:3]):
             await ctx.progress(f"rendering concept {i + 1}/3", (i + 1) / 3)
-            key = await compose.make_thumbnail(concept, job_id=ctx.job_id, index=i)
-            variants.append({**concept, "key": key})
+            thumb = await compose.make_thumbnail(concept, job_id=ctx.job_id, index=i)
+            image_cost += thumb.cost_usd
+            variants.append({**concept, "key": thumb.key, "image_model": thumb.image_model})
 
+        # Two models produce a thumbnail — one designs the concept, one paints the
+        # background — so recording only the first would attribute a winning
+        # thumbnail to the wrong half of the work in Phase 8.
+        image_model = next((v["image_model"] for v in variants if v["image_model"]), "")
         return StageOutput(
             value=variants,
-            cost_usd=completion.cost_usd,
+            cost_usd=completion.cost_usd + image_cost,
             artifacts={f"thumbnail_{i}": v["key"] for i, v in enumerate(variants)},
-            provenance=Provenance(model=completion.model, prompt=completion.prompt),
+            provenance=Provenance(
+                model=completion.model,
+                prompt=completion.prompt,
+                params={"image_model": image_model} if image_model else {},
+            ),
         )
 
 

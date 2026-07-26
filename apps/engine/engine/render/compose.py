@@ -8,11 +8,14 @@ screen's pipeline view depends on that progress actually arriving.
 from __future__ import annotations
 
 import asyncio
+import io
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 
+from engine.providers import images
 from engine.services import bgm, effects, fonts
 from engine.settings import get_settings
 from engine.storage import store
@@ -206,41 +209,174 @@ async def transcribe(audio_path: Path) -> list[dict]:
     return await asyncio.to_thread(_run)
 
 
-async def make_thumbnail(concept: dict, *, job_id: str, index: int) -> str:
-    """Generate the image, then compose the type ourselves.
+THUMB_W, THUMB_H = 1280, 720
+
+# The type column. Left-weighted, because the bottom-right ~15% is covered by the
+# duration badge and the concept's focal point is meant to sit on the right.
+TEXT_LEFT, TEXT_RIGHT = 70, 760
+TEXT_TOP, TEXT_BOTTOM = 80, 640
+MAX_TYPE_PX = 150
+
+
+@dataclass
+class Thumbnail:
+    """A composed thumbnail and how its background came to exist.
+
+    The image model and its prompt travel with the result rather than being looked up
+    later: CLAUDE.md's provenance rule covers every generated artifact, and the
+    background is a separate generation from the LLM call that designed the concept.
+    """
+
+    key: str
+    image_model: str = ""
+    image_prompt: str = ""
+    cost_usd: float = 0.0
+
+    @property
+    def generated(self) -> bool:
+        return bool(self.image_model)
+
+
+async def make_thumbnail(concept: dict, *, job_id: str, index: int) -> Thumbnail:
+    """Generate the background, then compose the type ourselves.
 
     Overlay text is drawn here rather than requested from the image model: generated
     typography is unreliable, and a separate text layer is what lets Phase 8 swap
     variants without regenerating anything.
+
+    With no image provider configured the background is a flat panel. That is a
+    deliberate downgrade, not a failure — a first run with no API keys still produces
+    a correctly composed thumbnail.
     """
-    from PIL import Image, ImageDraw, ImageFont
+    background = await images.generate(concept["image_prompt"])
+    data = await asyncio.to_thread(
+        _compose_thumbnail, concept, background.data if background else None
+    )
 
-    def _run() -> bytes:
-        # Placeholder background until an image provider is wired in. The composition,
-        # safe zones, and type treatment are the parts worth getting right first.
-        canvas = Image.new("RGB", (1280, 720), (18, 18, 21))
-        draw = ImageDraw.Draw(canvas)
+    key = f"thumbnails/{job_id}-{index}.jpg"
+    await store.put_bytes(data, key)
+    if background is None:
+        return Thumbnail(key=key)
+    return Thumbnail(
+        key=key,
+        image_model=background.model,
+        image_prompt=background.prompt,
+        cost_usd=background.cost_usd,
+    )
 
-        words = concept["overlay_text"].upper().split()[:5]
-        try:
-            font = ImageFont.truetype(fonts.cached_resolve(), 150)
-        except (OSError, RuntimeError):
-            # A thumbnail in the default bitmap font is ugly but recoverable;
-            # the render it belongs to has already succeeded by this point.
-            font = ImageFont.load_default(size=150)
 
-        # Left-weighted: the bottom-right ~15% is covered by the duration badge.
-        y = 180
-        for word in words:
-            draw.text((70, y), word, font=font, fill="white", stroke_width=8, stroke_fill="black")
-            y += 160
+def _compose_thumbnail(concept: dict, background: bytes | None) -> bytes:
+    """Background, scrim, then type. Synchronous — Pillow work belongs in a thread."""
+    from PIL import ImageDraw
 
-        import io
+    canvas = _background_layer(background)
+    # A scrim under the text. Without it, legibility depends on whatever the image
+    # model happened to put on the left of the frame, which is not something to leave
+    # to chance on the one asset that decides whether the video gets clicked.
+    canvas.alpha_composite(_scrim())
+    draw = ImageDraw.Draw(canvas)
 
-        buffer = io.BytesIO()
-        canvas.save(buffer, "JPEG", quality=88, optimize=True)
-        return buffer.getvalue()
+    words = concept["overlay_text"].upper().split()[:5]
+    font, line_h = _fit_type(draw, words)
 
-    data = await asyncio.to_thread(_run)
-    path = await store.put_bytes(data, f"thumbnails/{job_id}-{index}.jpg")
-    return f"thumbnails/{job_id}-{index}.jpg" if path else ""
+    # Vertically centred in the band, so a two-word overlay and a five-word one are
+    # both anchored the same way instead of both starting at a fixed y.
+    block_h = line_h * len(words)
+    y = TEXT_TOP + max(0, (TEXT_BOTTOM - TEXT_TOP - block_h) // 2)
+    stroke = max(2, round(font.size * 0.055)) if hasattr(font, "size") else 8
+    for word in words:
+        draw.text(
+            (TEXT_LEFT, y), word, font=font, fill="white", stroke_width=stroke, stroke_fill="black"
+        )
+        y += line_h
+
+    buffer = io.BytesIO()
+    # JPEG cannot hold the alpha the scrim needed, and YouTube's 2MB thumbnail
+    # ceiling makes PNG the wrong output for a photographic background.
+    canvas.convert("RGB").save(buffer, "JPEG", quality=88, optimize=True)
+    return buffer.getvalue()
+
+
+def _fit_type(draw, words: list[str]):
+    """The largest size at which every word fits the column and the block fits the band.
+
+    Previously this drew at a fixed 150px from a fixed y=180 in fixed 160px steps,
+    which silently ran off the canvas: the prompt asks for 3-5 words, and at four the
+    last line is already half cut off, at five it is drawn entirely below the frame.
+    Nobody noticed while the background was a flat panel nobody looked at.
+    """
+    from PIL import ImageFont
+
+    try:
+        path = fonts.cached_resolve()
+    except (OSError, RuntimeError):
+        path = None
+
+    def _at(size: int):
+        if path is None:
+            # A thumbnail in the default bitmap font is ugly but recoverable; the
+            # render it belongs to has already succeeded by this point.
+            return ImageFont.load_default(size=size)
+        return ImageFont.truetype(path, size)
+
+    for size in range(MAX_TYPE_PX, 39, -4):
+        font = _at(size)
+        line_h = round(size * 1.06)
+        if line_h * len(words) > TEXT_BOTTOM - TEXT_TOP:
+            continue
+        if any(draw.textlength(word, font=font) > TEXT_RIGHT - TEXT_LEFT for word in words):
+            continue
+        return font, line_h
+
+    # Five very long words genuinely cannot be set large. Smallest is still better
+    # than overflowing, and the concept prompt caps this at 3-5 short words anyway.
+    return _at(40), round(40 * 1.06)
+
+
+def _background_layer(background: bytes | None):
+    """The generated image cover-fitted to 16:9, or a flat panel when there is none."""
+    from PIL import Image
+
+    if background is None:
+        return Image.new("RGBA", (THUMB_W, THUMB_H), (18, 18, 21, 255))
+
+    try:
+        source = Image.open(io.BytesIO(background)).convert("RGBA")
+    except OSError:
+        # Unreadable bytes from a provider must not lose a thumbnail that is
+        # otherwise fine; the composed type is the part that carries the meaning.
+        logger.warning("generated thumbnail background could not be decoded; using a flat panel")
+        return Image.new("RGBA", (THUMB_W, THUMB_H), (18, 18, 21, 255))
+
+    # Cover, not fit: neither provider offers exactly 1280x720, and letterboxing a
+    # thumbnail wastes the little area it has.
+    scale = max(THUMB_W / source.width, THUMB_H / source.height)
+    resized = source.resize(
+        (max(THUMB_W, round(source.width * scale)), max(THUMB_H, round(source.height * scale))),
+        Image.LANCZOS,
+    )
+    left = (resized.width - THUMB_W) // 2
+    top = (resized.height - THUMB_H) // 2
+    return resized.crop((left, top, left + THUMB_W, top + THUMB_H))
+
+
+def _scrim():
+    """A left-to-right dark gradient, opaque under the type and clear by mid-frame."""
+    from PIL import Image
+
+    gradient = Image.new("L", (THUMB_W, 1))
+    # Fully dark for the first 8%, then easing out to nothing at 65% — past the text
+    # column but well short of the focal point the concept describes.
+    fade_start, fade_end = int(THUMB_W * 0.08), int(THUMB_W * 0.65)
+    for x in range(THUMB_W):
+        if x <= fade_start:
+            alpha = 205
+        elif x >= fade_end:
+            alpha = 0
+        else:
+            alpha = round(205 * (1 - (x - fade_start) / (fade_end - fade_start)))
+        gradient.putpixel((x, 0), alpha)
+
+    layer = Image.new("RGBA", (THUMB_W, THUMB_H), (0, 0, 0, 255))
+    layer.putalpha(gradient.resize((THUMB_W, THUMB_H)))
+    return layer

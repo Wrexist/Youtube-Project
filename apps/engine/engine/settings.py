@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # shots — it reads as a slideshow. Non-zero gives a true crossfade.
     transition_fade_s: float = Field(default=0.0, ge=0.0, le=2.0)
 
+    # Thumbnail backgrounds. "auto" resolves to whichever of OPENAI_API_KEY /
+    # GEMINI_API_KEY is set, so nobody has to name a provider — and with neither,
+    # thumbnails compose over a flat background instead of failing. GPT Image wins a
+    # tie: dearer, but the thumbnail is what decides whether the video gets clicked.
+    image_provider: Literal["auto", "openai", "gemini", "none"] = "auto"
+
     # Background music. Off by default and empty by design: nothing ships with
     # music, and publishing over an unlicensed bed is a copyright strike.
     # See KNOWN-ISSUES.md §3.3.
