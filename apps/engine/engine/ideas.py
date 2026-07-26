@@ -20,10 +20,21 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
+import httpx
+
 # Below this Jaccard similarity on content words, two topics are distinct enough.
 # Tuned so "why bridges collapse" vs "the reason bridges fail" is caught (0.5+)
 # while "why bridges collapse" vs "why dams fail" is not.
 DUPLICATE_THRESHOLD = 0.45
+
+# Jaccard range where Ollama embedding similarity is consulted for a second opinion.
+# Below SEMANTIC_LOWER the topics are clearly distinct; above DUPLICATE_THRESHOLD they
+# are clearly the same.  The band in between catches "why bridges collapse" vs "the
+# reason bridges fail" — same meaning, different words, Jaccard ~0.30.
+SEMANTIC_LOWER = 0.20
+SEMANTIC_EMBEDDING_THRESHOLD = 0.90  # cosine similarity that confirms a duplicate
+
+_DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 
 # Words that carry no topical meaning and would inflate every similarity score.
 STOPWORDS = frozenset(
@@ -147,6 +158,140 @@ def score_idea(
         idea.freshness = 1.0 if any(tokens & tokenize(t) for t in trending_terms) else 0.0
 
     return idea
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two equal-length embedding vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+async def _get_embedding(
+    text: str,
+    *,
+    base_url: str,
+    model: str = _DEFAULT_EMBEDDING_MODEL,
+) -> list[float] | None:
+    """Fetch an embedding from Ollama.  Returns None gracefully on any failure.
+
+    Ollama must be running and the model must be pulled.  The caller never has
+    to check: returning None causes the embedding path to be skipped entirely.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url.rstrip('/')}/api/embeddings",
+                json={"model": model, "prompt": text},
+            )
+            resp.raise_for_status()
+            return resp.json()["embedding"]
+    except Exception:  # noqa: BLE001 — any failure → graceful fallback
+        return None
+
+
+async def find_duplicate_async(
+    topic: str,
+    existing: list[str],
+    *,
+    ollama_base_url: str | None = None,
+) -> tuple[str | None, float, str]:
+    """Like find_duplicate() but layers an Ollama embedding check for ambiguous pairs.
+
+    Jaccard runs first — it is fast and free.  If the best Jaccard score sits in
+    the ambiguous zone (SEMANTIC_LOWER ≤ score < DUPLICATE_THRESHOLD) and Ollama
+    is available, an embedding similarity check is made for those candidates.  A
+    cosine similarity ≥ SEMANTIC_EMBEDDING_THRESHOLD then confirms a duplicate.
+
+    Returns ``(duplicate_or_None, similarity_score, method_description)``.  The
+    method description is shown on the idea card so the user understands why
+    something was flagged.
+
+    Graceful degradation: if Ollama is not running or returns an error, falls
+    through to Jaccard-only.
+    """
+    best_topic: str | None = None
+    best_score: float = 0.0
+    ambiguous: list[tuple[str, float]] = []
+
+    for candidate in existing:
+        score = similarity(topic, candidate)
+        if score > best_score:
+            best_topic, best_score = candidate, score
+        if SEMANTIC_LOWER <= score < DUPLICATE_THRESHOLD and ollama_base_url:
+            ambiguous.append((candidate, score))
+
+    if best_score >= DUPLICATE_THRESHOLD:
+        return (best_topic, best_score, f"Jaccard {best_score:.2f}")
+
+    if ambiguous and ollama_base_url:
+        topic_emb = await _get_embedding(topic, base_url=ollama_base_url)
+        if topic_emb is not None:
+            emb_best_candidate: str | None = None
+            emb_best_cos: float = 0.0
+            emb_best_jac: float = 0.0
+            for candidate, jac in ambiguous:
+                cand_emb = await _get_embedding(candidate, base_url=ollama_base_url)
+                if cand_emb is None:
+                    continue
+                cos = _cosine(topic_emb, cand_emb)
+                if cos > emb_best_cos:
+                    emb_best_candidate, emb_best_cos, emb_best_jac = candidate, cos, jac
+            if emb_best_candidate and emb_best_cos >= SEMANTIC_EMBEDDING_THRESHOLD:
+                return (
+                    emb_best_candidate,
+                    emb_best_cos,
+                    f"Jaccard {emb_best_jac:.2f} / embedding {emb_best_cos:.2f}",
+                )
+
+    return (None, best_score, "Jaccard")
+
+
+async def build_backlog_async(
+    candidates: list[str],
+    *,
+    published_topics: list[str],
+    suggestions: list[str],
+    competitor_counts: dict[str, int] | None = None,
+    trending_terms: list[str] | None = None,
+    ollama_base_url: str | None = None,
+) -> list[Idea]:
+    """Like build_backlog() but with optional Ollama-based semantic deduplication.
+
+    The ``ollama_base_url`` is optional — if not provided, or if Ollama is not
+    running, the function falls through to Jaccard-only deduplication, identical
+    to ``build_backlog()``.
+    """
+    counts = competitor_counts or {}
+    seen: list[str] = list(published_topics)
+    out: list[Idea] = []
+
+    for topic in candidates:
+        idea = score_idea(
+            topic,
+            suggestions=suggestions,
+            competitor_count=counts.get(topic, 0),
+            channel_topics=published_topics,
+            trending_terms=trending_terms,
+        )
+        duplicate, score, method = await find_duplicate_async(
+            topic, seen, ollama_base_url=ollama_base_url
+        )
+        if duplicate:
+            idea.duplicate_of = duplicate
+            idea.similarity = round(score, 3)
+            idea.status = IdeaStatus.REJECTED
+            idea.notes = f'too similar to "{duplicate}" ({method})'
+        else:
+            seen.append(topic)
+        idea.similarity = idea.similarity or round(score, 3)
+        out.append(idea)
+
+    out.sort(key=lambda i: (i.status is IdeaStatus.REJECTED, -i.score))
+    return out
 
 
 def build_backlog(

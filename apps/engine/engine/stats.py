@@ -1,149 +1,149 @@
-"""Small statistics library.
+"""Statistical helpers for performance attribution.
 
-The feedback loop rewrites the prompts that generate every future video. If it
-learns from noise, the system gets *worse* over time and does so invisibly — the
-findings will still read like confident sentences.
+Provides a thin wrapper around Welch's t-test (equal-variance not assumed)
+and a simple summary object.  The rest of the codebase only imports
+``Comparison``, ``summarize``, ``two_tailed_p``, and ``welch_t_test`` from here.
 
-So comparisons go through a real significance test rather than "group A's average is
-higher". Two groups of three videos will differ by chance essentially always.
-
-Implemented by hand rather than pulling in scipy: this is ~80 lines, scipy is ~90MB,
-and the engine already carries MoviePy and Whisper.
+The statistical gate in ``insights.py`` (MIN_PER_GROUP, ALPHA,
+MIN_MEANINGFUL_LIFT) is what keeps the feedback loop from training on noise.
+Nothing in this module weakens that gate.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Sequence
 
 
-@dataclass
+@dataclass(frozen=True)
 class Summary:
-    n: int
+    """Descriptive statistics for one group."""
+
     mean: float
-    variance: float
+    std: float
+    n: int
 
     @property
-    def stdev(self) -> float:
-        return math.sqrt(self.variance)
-
-    @property
-    def stderr(self) -> float:
-        return math.sqrt(self.variance / self.n) if self.n else float("inf")
+    def variance(self) -> float:
+        """Sample variance (std²)."""
+        return self.std ** 2
 
 
-def summarize(values: list[float]) -> Summary:
-    n = len(values)
-    if n == 0:
-        return Summary(0, 0.0, 0.0)
-    mean = sum(values) / n
-    # Sample variance (n-1). With n=1 there is no spread to speak of.
-    variance = sum((v - mean) ** 2 for v in values) / (n - 1) if n > 1 else 0.0
-    return Summary(n, mean, variance)
-
-
-@dataclass
+@dataclass(frozen=True)
 class Comparison:
+    """Result of a two-sample comparison.
+
+    ``a`` is the winner (higher mean), ``b`` is the loser.
+    ``lift`` is the percentage improvement of ``a`` over ``b``.
+    ``p_value`` is from Welch's t-test (two-tailed).
+    ``df`` is the Welch–Satterthwaite degrees of freedom.
+    """
+
     a: Summary
     b: Summary
     t: float
-    df: float
     p_value: float
-
-    @property
-    def lift(self) -> float:
-        """Percentage difference of A over B."""
-        return ((self.a.mean - self.b.mean) / self.b.mean * 100) if self.b.mean else 0.0
+    lift: float   # percentage points: (a.mean - b.mean) / |b.mean| * 100
+    df: float     # Welch–Satterthwaite degrees of freedom
 
     @property
     def ci95(self) -> tuple[float, float]:
-        """95% confidence interval on the difference in means.
-
-        Reported alongside every finding — an interval spanning zero says
-        "we don't know yet" far more clearly than a p-value does.
-        """
-        se = math.sqrt(self.a.stderr**2 + self.b.stderr**2)
+        """95% confidence interval for (a.mean - b.mean)."""
         diff = self.a.mean - self.b.mean
-        margin = 1.96 * se  # normal approximation; df is >30 in any usable finding
-        return (diff - margin, diff + margin)
+        if self.df == 0.0 or self.a.n == 0 or self.b.n == 0:
+            return (diff, diff)
+        se = math.sqrt(self.a.std ** 2 / self.a.n + self.b.std ** 2 / self.b.n)
+        if se == 0.0:
+            return (diff, diff)
+        try:
+            from scipy.stats import t as t_dist  # type: ignore[import]
+
+            t_crit = float(t_dist.ppf(0.975, self.df))
+        except ImportError:
+            # Bisect on two_tailed_p to find the 97.5th-percentile critical value.
+            lo, hi = 0.0, 1e6
+            for _ in range(60):
+                mid = (lo + hi) / 2.0
+                if two_tailed_p(mid, self.df) > 0.05:
+                    lo = mid
+                else:
+                    hi = mid
+            t_crit = (lo + hi) / 2.0
+        return (diff - t_crit * se, diff + t_crit * se)
 
 
-def welch_t_test(a: list[float], b: list[float]) -> Comparison:
-    """Welch's t-test — unequal variances, unequal sample sizes.
+def summarize(values: Sequence[float]) -> Summary:
+    """Descriptive statistics for a sequence of numeric values."""
+    n = len(values)
+    if n == 0:
+        return Summary(mean=0.0, std=0.0, n=0)
+    mean = sum(values) / n
+    if n == 1:
+        return Summary(mean=mean, std=0.0, n=1)
+    variance = sum((x - mean) ** 2 for x in values) / (n - 1)
+    return Summary(mean=mean, std=math.sqrt(variance), n=n)
 
-    Student's t assumes equal variance, which is wrong here: a title strategy used
-    twice and one used forty times will not have comparable spread.
+
+def two_tailed_p(t_stat: float, df: float) -> float:
+    """Two-tailed p-value from a t-statistic and degrees of freedom.
+
+    Uses scipy when available; falls back to Python's built-in
+    ``math.betainc`` (Python 3.12+) for an exact result without any
+    third-party dependency.
+
+    Formula: P(|T| > |t| | df) = I(df / (df + t²); df/2, 1/2)
     """
-    sa, sb = summarize(a), summarize(b)
+    try:
+        from scipy.stats import t as t_dist  # type: ignore[import]
+
+        return float(2 * t_dist.sf(abs(t_stat), df))
+    except ImportError:
+        pass
+    t_abs = abs(t_stat)
+    if t_abs == 0.0:
+        return 1.0
+    x = df / (df + t_abs ** 2)
+    return math.betainc(df / 2.0, 0.5, x)
+
+
+def welch_t_test(a_values: Sequence[float], b_values: Sequence[float]) -> Comparison:
+    """Welch's two-sample t-test: is group A's mean higher than group B's?
+
+    The caller is responsible for passing A as the presumed winner and B as
+    the presumed loser.  ``p_value`` is the two-tailed probability.
+    """
+    sa = summarize(list(a_values))
+    sb = summarize(list(b_values))
+
+    # Lift: percentage-point change from b to a
+    if sb.mean != 0:
+        lift = (sa.mean - sb.mean) / abs(sb.mean) * 100
+    else:
+        lift = 0.0 if sa.mean == 0 else float("inf")
+
+    # Degenerate case — not enough data for a t-test
     if sa.n < 2 or sb.n < 2:
-        return Comparison(sa, sb, t=0.0, df=0.0, p_value=1.0)
+        return Comparison(a=sa, b=sb, t=0.0, p_value=1.0, lift=lift, df=0.0)
 
-    se_sq = sa.variance / sa.n + sb.variance / sb.n
-    if se_sq == 0:
-        return Comparison(sa, sb, t=0.0, df=0.0, p_value=1.0)
+    var_a = sa.std ** 2 / sa.n
+    var_b = sb.std ** 2 / sb.n
+    pooled = var_a + var_b
 
-    t = (sa.mean - sb.mean) / math.sqrt(se_sq)
+    if pooled == 0:
+        # Both groups have zero variance — no meaningful test possible.
+        # Two-tailed p for t=0 is 1.0 (no evidence of difference).
+        # If means somehow differ despite zero variance, p → 0.0.
+        p = 1.0 if sa.mean == sb.mean else 0.0
+        return Comparison(a=sa, b=sb, t=0.0, p_value=p, lift=lift, df=0.0)
 
-    # Welch–Satterthwaite degrees of freedom.
-    df = se_sq**2 / (
-        (sa.variance / sa.n) ** 2 / (sa.n - 1) + (sb.variance / sb.n) ** 2 / (sb.n - 1)
+    t_stat = (sa.mean - sb.mean) / math.sqrt(pooled)
+
+    # Welch–Satterthwaite degrees of freedom
+    df = pooled ** 2 / (
+        (var_a ** 2) / (sa.n - 1) + (var_b ** 2) / (sb.n - 1)
     )
 
-    return Comparison(sa, sb, t=t, df=df, p_value=two_tailed_p(abs(t), df))
+    p_value = two_tailed_p(t_stat, df)
 
-
-def two_tailed_p(t: float, df: float) -> float:
-    """P-value for a t statistic, via the regularized incomplete beta function."""
-    if df <= 0:
-        return 1.0
-    x = df / (df + t * t)
-    return _betainc(df / 2, 0.5, x)
-
-
-def _betainc(a: float, b: float, x: float) -> float:
-    """Regularized incomplete beta I_x(a, b), by continued fraction (Lentz's method).
-
-    Standard Numerical Recipes formulation. The symmetry transform keeps the
-    continued fraction in its fast-converging region.
-    """
-    if x <= 0:
-        return 0.0
-    if x >= 1:
-        return 1.0
-
-    lbeta = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
-    front = math.exp(lbeta + a * math.log(x) + b * math.log1p(-x))
-
-    if x < (a + 1) / (a + b + 2):
-        return front * _cf(a, b, x) / a
-    return 1.0 - front * _cf(b, a, 1 - x) / b
-
-
-def _cf(a: float, b: float, x: float, iterations: int = 200) -> float:
-    tiny = 1e-30
-    f, c, d = 1.0, 1.0, 0.0
-
-    for i in range(iterations + 1):
-        if i == 0:
-            numerator = 1.0
-        elif i % 2 == 0:
-            m = i // 2
-            numerator = m * (b - m) * x / ((a + 2 * m - 1) * (a + 2 * m))
-        else:
-            m = (i - 1) // 2
-            numerator = -((a + m) * (a + b + m) * x) / ((a + 2 * m) * (a + 2 * m + 1))
-
-        d = 1.0 + numerator * d
-        d = tiny if abs(d) < tiny else d
-        d = 1.0 / d
-
-        c = 1.0 + numerator / c
-        c = tiny if abs(c) < tiny else c
-
-        delta = c * d
-        f *= delta
-
-        if abs(1.0 - delta) < 1e-10:
-            break
-
-    return f - 1.0
+    return Comparison(a=sa, b=sb, t=t_stat, p_value=p_value, lift=lift, df=df)

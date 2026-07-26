@@ -113,16 +113,59 @@ def score_title(text: str, keyword: str) -> tuple[float, dict[str, float]]:
     return round(total, 3), reasons
 
 
-def validate_tags(tags: list[str]) -> list[str]:
-    """Trim to the 500-character total budget, keeping the highest-value tags."""
+def validate_tags(
+    tags: list[str],
+    *,
+    exact_title: str | None = None,
+    suggestions: list[str] | None = None,
+) -> list[str]:
+    """Trim to the 500-character total budget, keeping the highest-value tags.
+
+    ``exact_title`` is pinned at the front unconditionally — YouTube weights
+    the exact-match title tag most heavily and it must survive the budget cut.
+
+    When ``suggestions`` are provided the remaining tags are ranked by position
+    in the autocomplete list (lower index = higher search volume signal).  Tags
+    absent from the autocomplete data are sorted to the end rather than
+    discarded, preserving any head terms the model generated.
+
+    Fills greedily: a tag that would exceed the budget is skipped so that
+    shorter high-value terms aren't lost because of one long tag.
+    """
+    title_norm = exact_title.lower().strip() if exact_title else None
+
+    # Separate the exact-title tag so it is always placed first.
+    pinned: list[str] = []
+    rest: list[str] = []
+    for tag in tags:
+        if title_norm and tag.lower().strip() == title_norm:
+            pinned = [tag]
+        else:
+            rest.append(tag)
+
+    if suggestions:
+        suggestion_rank: dict[str, int] = {s.lower(): i for i, s in enumerate(suggestions)}
+
+        def _tag_rank(tag: str) -> int:
+            lower = tag.lower()
+            if lower in suggestion_rank:
+                return suggestion_rank[lower]
+            tag_words = set(lower.split())
+            for phrase, rank in suggestion_rank.items():
+                phrase_words = set(phrase.split())
+                if tag_words <= phrase_words or phrase_words <= tag_words:
+                    return rank
+            return len(suggestions)
+
+        rest = sorted(rest, key=_tag_rank)
+
     out: list[str] = []
     used = 0
-    for tag in tags:
+    for tag in pinned + rest:
         cost = len(tag) + 1  # comma separator
-        if used + cost > TAGS_TOTAL_MAX:
-            break
-        out.append(tag)
-        used += cost
+        if used + cost <= TAGS_TOTAL_MAX:
+            out.append(tag)
+            used += cost
     return out
 
 
@@ -312,7 +355,11 @@ Return: {{"tags": [str]}}""",
             max_tokens=1200,
         )
 
-        tags = validate_tags([t.strip() for t in result["tags"] if t.strip()])
+        tags = validate_tags(
+            [t.strip() for t in result["tags"] if t.strip()],
+            exact_title=variants[0].text,
+            suggestions=evidence.suggestions,
+        )
         return StageOutput(
             value=tags,
             cost_usd=completion.cost_usd,

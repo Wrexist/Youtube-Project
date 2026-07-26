@@ -155,16 +155,47 @@ def validate(identity: ChannelIdentity) -> list[Problem]:
     return problems
 
 
-def trim_keywords(keywords: list[str]) -> list[str]:
-    """Drop keywords past the 500-character budget, keeping the earliest."""
+def trim_keywords(
+    keywords: list[str], *, suggestions: list[str] | None = None
+) -> list[str]:
+    """Drop keywords past the 500-character budget, keeping the highest-value ones.
+
+    When autocomplete suggestions are provided the list is re-ranked by position
+    in that list before trimming — lower index means YouTube surfaced the query
+    first, which is the closest free proxy for search volume.  Keywords that do
+    not appear in the autocomplete data are sorted to the end.
+
+    The budget is filled greedily: a keyword that doesn't fit is skipped rather
+    than stopping the loop, so shorter high-value terms aren't lost because one
+    long term came first.
+    """
+    if suggestions:
+        suggestion_rank: dict[str, int] = {s.lower(): i for i, s in enumerate(suggestions)}
+
+        def _keyword_rank(kw: str) -> int:
+            lower = kw.lower()
+            if lower in suggestion_rank:
+                return suggestion_rank[lower]
+            # Word-level subset match: all words of the keyword appear in a
+            # suggestion phrase or vice versa.  Substring matching is intentionally
+            # avoided — "known" is a substring of "unknown", which would give
+            # unrelated terms a false high rank.
+            kw_words = set(lower.split())
+            for phrase, rank in suggestion_rank.items():
+                phrase_words = set(phrase.split())
+                if kw_words <= phrase_words or phrase_words <= kw_words:
+                    return rank
+            return len(suggestions)  # not in autocomplete — lowest priority
+
+        keywords = sorted(keywords, key=_keyword_rank)
+
     out: list[str] = []
     used = 0
     for keyword in keywords:
-        cost = len(keyword) + (3 if " " in keyword else 1)
-        if used + cost > KEYWORDS_MAX:
-            break
-        out.append(keyword)
-        used += cost
+        cost = len(keyword) + (3 if " " in keyword else 1)  # mirrors keywords_string()
+        if used + cost <= KEYWORDS_MAX:
+            out.append(keyword)
+            used += cost
     return out
 
 

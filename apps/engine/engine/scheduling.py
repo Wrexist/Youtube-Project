@@ -1,178 +1,146 @@
-"""Automatic publish scheduling.
+"""Publish-time scheduling.
 
-Placing a video on the calendar is a real optimisation, not a formality: publish into
-a dead hour and the first-hour click-through — which is most of what the recommender
-uses to decide whether to push the video further — never happens.
+Two public surfaces:
 
-The scheduler balances four things that genuinely conflict:
+* **``candidate_slots``** — rank every hour in the coming horizon by expected
+  audience size, so the calendar can show *why* a slot is good.
 
-  1. **Audience activity.** Publish shortly *before* the audience peak, not during it,
-     so the video has accumulated impressions by the time traffic arrives.
-  2. **Spacing.** Two uploads too close together compete with each other in the same
-     subscribers' feeds.
-  3. **Quota.** An upload costs 1,600 of 10,000 daily units. Six a day is the wall.
-  4. **Cadence.** The user asked for 3 shorts and 1 long-form a week, and that shape
-     should survive contact with the other three constraints.
+* **``auto_schedule``** — greedily assign videos to the best available slots,
+  respecting cadence, minimum gaps, daily upload caps, and quota limits.
 
-Everything here is pure — no I/O, no clock reads beyond what's passed in — which is
-what makes it testable and what makes the calendar's preview honest.
+* **``validate_move``** — check a manual calendar drag for hard blockers and
+  soft warnings before applying it.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
-from engine.quota import COSTS, DAILY_LIMIT
+# Hard cap: more than this many uploads in one day harms the channel.
+MAX_PUBLISHES_PER_DAY: int = 3
 
-# Publish this far ahead of the audience peak so impressions accumulate first.
-PEAK_LEAD_HOURS = 2
+# Publish this many hours before the audience peak so the video has time to
+# surface in recommendations before most of the audience shows up.
+_LEAD_HOURS: int = 2
 
-# Below this gap, two uploads compete in the same feed.
-MIN_GAP_HOURS = 20
+# Default prime-time hour for viewing (7 pm local / UTC approximate).
+_DEFAULT_PEAK_HOUR: int = 19
 
-# Whole-sequence cost: insert + thumbnail + captions.
-PUBLISH_COST = COSTS["videos.insert"] + COSTS["thumbnails.set"] + COSTS["captions.insert"]
-MAX_PUBLISHES_PER_DAY = DAILY_LIMIT // PUBLISH_COST  # 4 with the default quota
+# Gap below which a manually-dragged video earns a "compete" warning.
+_COMPETE_WARNING_HOURS: int = 20
 
-# Fallback audience curve, used until real analytics exist: relative activity by hour
-# in the channel's primary timezone. Evening-weighted, which is typical but is a
-# *guess* — it is replaced by measured data as soon as Phase 8 has 28 days of it.
-DEFAULT_HOURLY = [
-    0.15,
-    0.10,
-    0.07,
-    0.05,
-    0.05,
-    0.08,
-    0.18,
-    0.32,
-    0.45,
-    0.48,
-    0.46,
-    0.50,
-    0.58,
-    0.55,
-    0.52,
-    0.56,
-    0.68,
-    0.82,
-    0.94,
-    1.00,
-    0.96,
-    0.82,
-    0.58,
-    0.32,
-]
 
-# Weekday multipliers. Sunday and Thursday-Saturday evenings tend to run hotter.
-DEFAULT_WEEKDAY = [0.92, 0.90, 0.94, 1.00, 1.04, 1.02, 0.98]  # Mon..Sun
+# ── audience profile ─────────────────────────────────────────────────────────
+
+
+def _default_hourly() -> list[float]:
+    """Gaussian audience curve centred at 19:00, std = 3 hours."""
+    return [math.exp(-((h - _DEFAULT_PEAK_HOUR) ** 2) / (2 * 3.0 ** 2)) for h in range(24)]
 
 
 @dataclass
 class AudienceProfile:
-    """When this channel's viewers are actually watching.
+    """Hour-of-day and day-of-week audience weights.
 
-    `source` is carried so the UI can be honest about whether a recommendation rests
-    on measured data or on the default curve.
+    Use the default constructor for an estimated curve.  Use
+    ``from_analytics()`` to build a measured profile from real Analytics data.
     """
 
-    hourly: list[float] = field(default_factory=lambda: list(DEFAULT_HOURLY))
-    weekday: list[float] = field(default_factory=lambda: list(DEFAULT_WEEKDAY))
-    source: str = "default_heuristic"
+    hourly: list[float] = field(default_factory=_default_hourly)
+    daily: list[float] = field(default_factory=lambda: [1.0] * 7)
+    is_measured: bool = False
+    source: str = "estimated"
 
     @classmethod
-    def from_analytics(cls, hourly: list[float], weekday: list[float]) -> AudienceProfile:
-        if len(hourly) != 24 or len(weekday) != 7:
-            raise ValueError("expected 24 hourly and 7 weekday values")
-        return cls(hourly=hourly, weekday=weekday, source="measured")
+    def from_analytics(
+        cls,
+        hourly_weights: list[float],
+        daily_weights: list[float],
+    ) -> "AudienceProfile":
+        """Build a measured profile from Analytics hourly/daily weight vectors.
 
-    @property
-    def is_measured(self) -> bool:
-        return self.source == "measured"
-
-    def peak_hour(self, weekday: int) -> int:
-        return max(range(24), key=lambda h: self.hourly[h])
-
-    def score(self, moment: datetime) -> float:
-        """Score a candidate publish time.
-
-        The lookup is shifted by PEAK_LEAD_HOURS: publishing at 17:00 is scored on the
-        audience present at 19:00, because that is who the video needs to reach.
+        Args:
+            hourly_weights:  24 floats, one per hour of day (index 0 = midnight).
+            daily_weights:   7 floats, one per ISO weekday (index 0 = Monday).
         """
-        target = (moment.hour + PEAK_LEAD_HOURS) % 24
-        return self.hourly[target] * self.weekday[moment.weekday()]
+        return cls(
+            hourly=list(hourly_weights),
+            daily=list(daily_weights),
+            is_measured=True,
+            source="measured",
+        )
+
+    def score_for(self, at: datetime) -> float:
+        """Audience score for publishing at *at* (assumes a fixed lead time)."""
+        view_hour = (at.hour + _LEAD_HOURS) % 24
+        weekday = at.weekday()  # 0 = Monday, 6 = Sunday
+        h = self.hourly[view_hour] if self.hourly else 1.0
+        d = self.daily[weekday] if self.daily else 1.0
+        return round(h * d, 6)
+
+
+# ── slots ────────────────────────────────────────────────────────────────────
 
 
 @dataclass
 class Slot:
+    """One candidate publish time with its audience score."""
+
     at: datetime
     score: float
     reason: str
-
-    def summary(self) -> str:
-        return f"{self.at:%a %d %b %H:%M} · {self.score:.2f}"
-
-
-@dataclass
-class Pending:
-    """A finished video waiting for a publish time."""
-
-    id: str
-    title: str
-    format: str = "short"  # short | long
-    duration_s: float = 0.0
-    ready_at: datetime | None = None  # cannot publish before this
 
 
 def candidate_slots(
     start: datetime,
     days: int,
     profile: AudienceProfile,
-    *,
-    hours: tuple[int, ...] = (9, 12, 15, 17, 19, 21),
 ) -> list[Slot]:
-    """Score every candidate publish time in the window, best first.
+    """Return all hourly slots for the next *days* days, ranked best-first.
 
-    Candidate hours are deliberately coarse. Minute-level precision is false accuracy
-    — the recommender does not care whether a video went out at 17:00 or 17:12.
+    Slots before *start* are omitted.  The ``reason`` field names the profile
+    source ("estimated" or "measured") so the UI can display provenance.
     """
     slots: list[Slot] = []
-    for offset in range(days):
-        day = (start + timedelta(days=offset)).date()
-        for hour in hours:
-            at = datetime.combine(day, time(hour), tzinfo=start.tzinfo)
-            if at <= start:
+
+    for d in range(days):
+        day_base = (start + timedelta(days=d)).replace(
+            minute=0, second=0, microsecond=0
+        )
+        for h in range(24):
+            at = day_base.replace(hour=h)
+            if at < start:
                 continue
-            score = profile.score(at)
-            slots.append(
-                Slot(
-                    at=at,
-                    score=round(score, 4),
-                    reason=(
-                        f"{'measured' if profile.is_measured else 'estimated'} audience "
-                        f"peak at {(hour + PEAK_LEAD_HOURS) % 24:02d}:00"
-                    ),
-                )
+            score = profile.score_for(at)
+            reason = (
+                f"{profile.source} audience score {score:.3f} "
+                f"at {at.strftime('%H:%M')} ({at.strftime('%A')})"
             )
+            slots.append(Slot(at=at, score=score, reason=reason))
+
     return sorted(slots, key=lambda s: s.score, reverse=True)
 
 
-@dataclass
-class Constraints:
-    shorts_per_week: int = 3
-    long_per_week: int = 1
-    min_gap_hours: int = MIN_GAP_HOURS
-    max_per_day: int = MAX_PUBLISHES_PER_DAY
-    quota_used_by_day: dict[date, int] = field(default_factory=dict)
+# ── scheduling objects ───────────────────────────────────────────────────────
 
-    def budget_left(self, day: date) -> int:
-        used = self.quota_used_by_day.get(day, 0)
-        return (DAILY_LIMIT - used) // PUBLISH_COST
+
+@dataclass
+class Pending:
+    """A video waiting to be placed on the calendar."""
+
+    id: str
+    title: str
+    format: str = "short"  # "short" | "long"
+    ready_at: datetime | None = None
 
 
 @dataclass
 class Assignment:
+    """One confirmed calendar entry."""
+
     video_id: str
     at: datetime
     score: float
@@ -180,15 +148,24 @@ class Assignment:
 
 
 @dataclass
-class Plan:
-    assignments: list[Assignment] = field(default_factory=list)
-    unplaced: list[tuple[str, str]] = field(default_factory=list)  # (video_id, why)
+class SchedulePlan:
+    """Output of ``auto_schedule``."""
 
-    def summary(self) -> str:
-        placed = len(self.assignments)
-        return f"{placed} scheduled" + (
-            f" · {len(self.unplaced)} unplaced" if self.unplaced else ""
-        )
+    assignments: list[Assignment]
+    unplaced: list[tuple[str, str]]  # (video_id, human-readable reason)
+
+
+@dataclass
+class Constraints:
+    """Scheduling rules for a series."""
+
+    shorts_per_week: int = 3
+    long_per_week: int = 1
+    min_gap_hours: int = 20
+    quota_used_by_day: dict[date, int] | None = None
+
+
+# ── auto-scheduler ───────────────────────────────────────────────────────────
 
 
 def auto_schedule(
@@ -199,115 +176,158 @@ def auto_schedule(
     constraints: Constraints | None = None,
     existing: list[datetime] | None = None,
     horizon_days: int = 28,
-) -> Plan:
-    """Assign publish times to a set of finished videos.
+) -> SchedulePlan:
+    """Assign each pending video to the best available slot.
 
-    Long-form goes first: it takes more effort to produce, benefits more from a good
-    slot, and there is less of it, so giving it first pick costs the shorts very
-    little.
+    Long-form videos are processed first so they capture the highest-scored
+    times (they are more expensive to produce and benefit more from a prime
+    slot).  Short-form fills in around them.
 
-    A video that cannot be placed is reported with the reason rather than silently
-    dropped — a scheduler that quietly loses work is worse than one that refuses it.
+    Videos that cannot be placed are reported in ``plan.unplaced`` with a
+    human-readable explanation so the user can act on them.
     """
-    profile = profile or AudienceProfile()
-    constraints = constraints or Constraints()
-    taken: list[datetime] = list(existing or [])
-    plan = Plan()
+    if profile is None:
+        profile = AudienceProfile()
+    if constraints is None:
+        constraints = Constraints()
+    if existing is None:
+        existing = []
 
-    slots = candidate_slots(start, horizon_days, profile)
-    ordered = sorted(pending, key=lambda p: (p.format != "long", p.id))
+    # Long-form gets priority over the slot list.
+    ordered = sorted(pending, key=lambda p: (0 if p.format == "long" else 1, p.id))
 
+    all_slots = candidate_slots(start, horizon_days, profile)
+
+    # Mutable state tracking the placement so far.
+    booked_times: list[datetime] = list(existing)
     per_day: dict[date, int] = {}
-    for moment in taken:
-        per_day[moment.date()] = per_day.get(moment.date(), 0) + 1
+    week_shorts: dict[tuple[int, int], int] = {}  # (iso_year, iso_week) → count
+    week_longs: dict[tuple[int, int], int] = {}
+    assigned_slot_ats: set[datetime] = set()
 
-    weekly_used: dict[tuple[int, str], int] = {}
+    assignments: list[Assignment] = []
+    unplaced: list[tuple[str, str]] = []
+
+    min_gap_s = constraints.min_gap_hours * 3600
 
     for video in ordered:
         placed = False
-        for slot in slots:
-            if any(
-                abs((slot.at - t).total_seconds()) < constraints.min_gap_hours * 3600 for t in taken
-            ):
-                continue
-            if video.ready_at and slot.at < video.ready_at:
+
+        for slot in all_slots:
+            # Slot already taken by another assignment in this run.
+            if slot.at in assigned_slot_ats:
                 continue
 
+            # Video isn't ready yet.
+            if video.ready_at is not None and slot.at < video.ready_at:
+                continue
+
+            # Minimum gap from every booked time (existing + new assignments).
+            too_close = any(
+                abs((slot.at - t).total_seconds()) < min_gap_s
+                for t in booked_times
+            )
+            if too_close:
+                continue
+
+            # Daily cap.
             day = slot.at.date()
-            if per_day.get(day, 0) >= constraints.max_per_day:
-                continue
-            if constraints.budget_left(day) - per_day.get(day, 0) <= 0:
+            if per_day.get(day, 0) >= MAX_PUBLISHES_PER_DAY:
                 continue
 
-            week = slot.at.isocalendar()[1]
-            cap = (
-                constraints.long_per_week if video.format == "long" else constraints.shorts_per_week
-            )
-            if weekly_used.get((week, video.format), 0) >= cap:
-                continue
+            # Quota exhausted for this day.
+            if constraints.quota_used_by_day:
+                from engine.quota import DAILY_LIMIT  # noqa: PLC0415
 
-            plan.assignments.append(
-                Assignment(video_id=video.id, at=slot.at, score=slot.score, reason=slot.reason)
+                if constraints.quota_used_by_day.get(day, 0) >= DAILY_LIMIT:
+                    continue
+
+            # Weekly cadence.
+            iso = slot.at.isocalendar()
+            week_key: tuple[int, int] = (iso[0], iso[1])
+
+            if video.format == "long":
+                if week_longs.get(week_key, 0) >= constraints.long_per_week:
+                    continue
+            else:
+                if week_shorts.get(week_key, 0) >= constraints.shorts_per_week:
+                    continue
+
+            # ── slot accepted ──
+            assignments.append(
+                Assignment(
+                    video_id=video.id,
+                    at=slot.at,
+                    score=slot.score,
+                    reason=slot.reason,
+                )
             )
-            taken.append(slot.at)
+            booked_times.append(slot.at)
+            assigned_slot_ats.add(slot.at)
             per_day[day] = per_day.get(day, 0) + 1
-            weekly_used[(week, video.format)] = weekly_used.get((week, video.format), 0) + 1
+
+            if video.format == "long":
+                week_longs[week_key] = week_longs.get(week_key, 0) + 1
+            else:
+                week_shorts[week_key] = week_shorts.get(week_key, 0) + 1
+
             placed = True
             break
 
         if not placed:
-            plan.unplaced.append(
+            unplaced.append(
                 (
                     video.id,
-                    f"no slot within {horizon_days} days satisfies cadence "
-                    f"({cadence_text(video.format, constraints)}), the "
-                    f"{constraints.min_gap_hours}h spacing rule, and the daily quota",
+                    "weekly cadence limit reached — no slot available within horizon",
                 )
             )
 
-    plan.assignments.sort(key=lambda a: a.at)
-    return plan
+    return SchedulePlan(assignments=assignments, unplaced=unplaced)
 
 
-def cadence_text(fmt: str, constraints: Constraints) -> str:
-    n = constraints.long_per_week if fmt == "long" else constraints.shorts_per_week
-    return f"{n} {fmt}/week"
+# ── manual drag validation ────────────────────────────────────────────────────
 
 
 def validate_move(
-    moment: datetime,
+    at: datetime,
     *,
     existing: list[datetime],
     quota_used_by_day: dict[date, int] | None = None,
-    min_gap_hours: int = MIN_GAP_HOURS,
     now: datetime | None = None,
 ) -> tuple[bool, str]:
-    """Check a manual drag on the calendar.
+    """Validate a manual calendar drag before applying it.
 
-    Returns `(ok, message)`. The message is shown either way — a permitted move that
-    is merely a bad idea should say so rather than silently accepting it.
+    Returns ``(ok, message)`` where *ok* is whether the move is permitted and
+    *message* is either a blocking reason (when ``not ok``) or a soft warning
+    (when ``ok`` but the move is inadvisable).  An empty string means no issue.
     """
-    now = now or datetime.now(moment.tzinfo)
-    if moment <= now:
-        return False, "that time has already passed"
+    if now is None:
+        now = datetime.now(UTC)
 
-    day = moment.date()
-    used = (quota_used_by_day or {}).get(day, 0)
-    same_day = sum(1 for t in existing if t.date() == day)
-    if (DAILY_LIMIT - used) // PUBLISH_COST <= same_day:
-        return False, (
-            f"{day:%d %b} has no upload quota left — an upload costs "
-            f"{PUBLISH_COST:,} of {DAILY_LIMIT:,} daily units"
-        )
+    # Hard block: time is in the past.
+    if at < now:
+        return (False, f"The requested time has already passed ({at.isoformat()}).")
 
-    conflict = next(
-        (t for t in existing if abs((moment - t).total_seconds()) < min_gap_hours * 3600),
-        None,
-    )
-    if conflict:
-        gap = abs((moment - conflict).total_seconds()) / 3600
-        return True, (
-            f"only {gap:.0f}h from another upload — they'll compete in the same subscriber feeds"
-        )
+    # Hard block: quota already exhausted for that day.
+    if quota_used_by_day:
+        from engine.quota import DAILY_LIMIT  # noqa: PLC0415
 
-    return True, ""
+        day = at.date()
+        if quota_used_by_day.get(day, 0) >= DAILY_LIMIT:
+            return (
+                False,
+                f"The YouTube upload quota for {day} is exhausted; "
+                f"choose a different day.",
+            )
+
+    # Soft warning: too close to another scheduled upload.
+    for t in existing:
+        gap_hours = abs((at - t).total_seconds()) / 3600
+        if gap_hours < _COMPETE_WARNING_HOURS:
+            return (
+                True,
+                f"This video will compete with one scheduled {gap_hours:.0f}h away — "
+                f"uploads this close split each other's audience.",
+            )
+
+    return (True, "")

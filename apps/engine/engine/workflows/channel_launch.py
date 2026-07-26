@@ -13,8 +13,9 @@ real search queries and the channels already ranking in the niche, not invented.
 from __future__ import annotations
 
 from engine import channel as ch
-from engine.ideas import build_backlog
+from engine.ideas import build_backlog_async
 from engine.providers import llm
+from engine.providers.llm import DEFAULT_OLLAMA_URL
 from engine.research import keywords as kw
 from engine.workflows.base import Provenance, Stage, StageOutput, WorkflowContext
 
@@ -180,7 +181,7 @@ Return: {{"tagline": str, "description": str, "keywords": [str]}}""",
             max_tokens=2000,
         )
 
-        result["keywords"] = ch.trim_keywords(result["keywords"])
+        result["keywords"] = ch.trim_keywords(result["keywords"], suggestions=evidence.suggestions)
         return StageOutput(
             value=result,
             cost_usd=completion.cost_usd,
@@ -301,10 +302,12 @@ Return: {{"topics": [str]}}""",
 
         # Runs through the same duplicate detection as every other backlog — a fresh
         # channel is exactly where thirty near-identical ideas would slip through.
-        ideas = build_backlog(
+        # Ollama embedding check is used when available; falls back to Jaccard-only.
+        ideas = await build_backlog_async(
             result["topics"],
             published_topics=[],
             suggestions=evidence.suggestions,
+            ollama_base_url=DEFAULT_OLLAMA_URL,
         )
         return StageOutput(
             value=ideas,

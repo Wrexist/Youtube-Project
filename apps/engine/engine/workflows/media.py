@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,7 +64,7 @@ class VoiceoverStage(Stage[Voiceover]):
         voice = ctx.inputs.get("voice") or settings.tts_voice
 
         await ctx.progress("synthesising speech")
-        audio_path, cues = await _synthesize(script.full_text, voice)
+        audio_path, cues = await _synthesize(script.full_text, voice, original_text=script.full_text)
 
         key = await store.put_file(audio_path, f"voiceover/{ctx.job_id}.mp3")
         duration = cues[-1]["end"] if cues else 0.0
@@ -243,7 +244,9 @@ Return: {{"concepts": [{{"image_prompt": str, "overlay_text": str,
 # ── providers ───────────────────────────────────────────────────────────────
 
 
-async def _synthesize(text: str, voice: str) -> tuple[Path, list[dict]]:
+async def _synthesize(
+    text: str, voice: str, *, original_text: str | None = None
+) -> tuple[Path, list[dict]]:
     """Edge TTS with boundary capture.
 
     Boundary events are what give us subtitle cues without a transcription pass.
@@ -251,6 +254,10 @@ async def _synthesize(text: str, voice: str) -> tuple[Path, list[dict]]:
     edge-tts 7 defaults `boundary` to "SentenceBoundary", which yields one cue per
     sentence — a wall of text on screen. We ask for word boundaries explicitly, and
     still handle sentence boundaries, because not every voice honours the request.
+
+    ``original_text`` is the pre-synthesis source before edge-tts strips punctuation
+    from WordBoundary events.  Passing it enables _restore_punctuation(), which makes
+    the sentence-break logic in _group_cues() actually fire.
     """
     import edge_tts
 
@@ -277,13 +284,65 @@ async def _synthesize(text: str, voice: str) -> tuple[Path, list[dict]]:
                 (words if kind == "WordBoundary" else sentences).append(cue)
 
     if words:
-        return path, _group_cues(words)
+        src = original_text or text
+        return path, _group_cues(_restore_punctuation(words, src))
     if sentences:
         logger.info("voice {} returned sentence boundaries only; splitting", voice)
         return path, _split_sentence_cues(sentences)
     # No timings at all — SubtitlesStage falls back to Whisper.
     logger.warning("voice {} returned no boundary events", voice)
     return path, []
+
+
+_TRAILING_SENT = re.compile(r"([.!?]+)$")
+_LEADING_STRIP = re.compile(r"^[^\w']+")  # strip leading punct; keep apostrophe
+
+
+def _restore_punctuation(word_cues: list[dict], original_text: str) -> list[dict]:
+    """Re-attach sentence-ending punctuation that edge-tts strips from WordBoundary events.
+
+    edge-tts produces WordBoundary events with the bare word — "bridge." becomes
+    "bridge" — so the sentence-break check in _group_cues() tests for terminal
+    punctuation that is never there.
+
+    We walk the original text sequentially, with a small forward look-ahead to
+    survive minor alignment drift (contractions, hyphenated compounds), and copy
+    any trailing [.!?]+ back onto the matching cue.  The cue list is returned as
+    a new list; input cues are not mutated.
+    """
+    orig_tokens: list[tuple[str, str]] = []
+    for raw in re.split(r"\s+", original_text.strip()):
+        if not raw:
+            continue
+        m = _TRAILING_SENT.search(raw)
+        punct = m.group(1) if m else ""
+        word = _TRAILING_SENT.sub("", raw)
+        word = _LEADING_STRIP.sub("", word)
+        if word:
+            orig_tokens.append((word.lower(), punct))
+
+    out: list[dict] = []
+    orig_idx = 0
+
+    for cue in word_cues:
+        cue_lower = cue["text"].lower().strip()
+        matched_punct = ""
+
+        # Scan a small window to stay aligned despite minor drift.
+        window = min(orig_idx + 6, len(orig_tokens))
+        for i in range(orig_idx, window):
+            orig_word, orig_punct = orig_tokens[i]
+            # Match: exact, or one is a prefix of the other (handles truncated cues).
+            if orig_word == cue_lower or orig_word.startswith(cue_lower) or cue_lower.startswith(orig_word):
+                matched_punct = orig_punct
+                orig_idx = i + 1
+                break
+        else:
+            orig_idx = min(orig_idx + 1, len(orig_tokens))
+
+        out.append({**cue, "text": cue["text"] + matched_punct} if matched_punct else cue)
+
+    return out
 
 
 def _group_cues(word_cues: list[dict], max_chars: int = 42) -> list[dict]:
