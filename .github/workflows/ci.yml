@@ -38,10 +38,18 @@ jobs:
       - run: ruff format --check engine tests
       - run: pytest -q
       # A migration that does not apply cleanly is a broken deploy, not a broken test.
+      #
+      # Its own database, deliberately. The persistence fixture calls
+      # `create_all` on the `studio` database, so running this against that same
+      # one fails with `relation "channel_launches" already exists` — and would
+      # only fail *sometimes*, depending on step order. A dedicated database also
+      # makes the check mean what it says: migrations applied to an empty schema.
       - name: Migrations apply to an empty database
-        run: alembic upgrade head
+        run: |
+          PGPASSWORD=studio createdb -h localhost -U studio migrations_check
+          alembic upgrade head
         env:
-          STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@localhost:5432/studio
+          STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@localhost:5432/migrations_check
       # The committed schema is what generates the web app's types. If a route
       # changed without re-exporting, the contract silently lies.
       - name: openapi.json matches the app
