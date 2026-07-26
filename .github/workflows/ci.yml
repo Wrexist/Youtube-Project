@@ -11,6 +11,23 @@ jobs:
     defaults:
       run:
         working-directory: apps/engine
+    # The persistence suite falls back to SQLite without this, which would let a
+    # Postgres-only problem through — JSON columns and timezone handling differ.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: studio
+          POSTGRES_PASSWORD: studio
+          POSTGRES_DB: studio
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U studio"
+          --health-interval 5s
+          --health-retries 10
+    env:
+      STUDIO_PERSIST: "false"
+      STUDIO_TEST_DATABASE_URL: postgresql+asyncpg://studio:studio@localhost:5432/studio
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,6 +37,11 @@ jobs:
       - run: ruff check engine tests
       - run: ruff format --check engine tests
       - run: pytest -q
+      # A migration that does not apply cleanly is a broken deploy, not a broken test.
+      - name: Migrations apply to an empty database
+        run: alembic upgrade head
+        env:
+          STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@localhost:5432/studio
 
   # vendor/moneyprinterturbo is a read-only reference snapshot. Nothing may import
   # it — the house rules in CLAUDE.md apply only to code that has been ported out.

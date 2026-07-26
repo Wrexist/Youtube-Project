@@ -31,9 +31,8 @@ _SWEEP_EXEMPT = {
     # STUDIO_STORAGE_BACKEND=s3 fails at startup instead of silently writing to
     # local disk. Nothing needs to *read* it while there is one backend.
     "storage_backend",
-    # Phase 5. Declared so docker-compose and .env stay meaningful; deliberately
-    # unused until Postgres and arq land. Tracked in AUDIT.md §5.1/§5.2.
-    "database_url",
+    # Phase 5.2. Declared so docker-compose and .env stay meaningful; unused
+    # until the arq worker lands. Tracked in AUDIT.md §5.2.
     "redis_url",
 }
 

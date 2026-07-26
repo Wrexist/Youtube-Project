@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from typing import Any
 
@@ -18,7 +18,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from engine import automation
+from engine import automation, db, repository
 from engine.api import publishing as channels
 from engine.api.channels import router as channels_router
 from engine.api.insights import router as insights_router
@@ -30,7 +30,38 @@ from engine.settings import get_settings
 from engine.workflows import video
 from engine.workflows.base import StageStatus, WorkflowError
 
-app = FastAPI(title="Studio Engine", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Restore state, then release the pool on the way out.
+
+    Everything below used to live in module-level dicts, so a restart forgot every
+    job, channel, booking — and the day's quota spend, which then silently
+    overran Google's ceiling on the next upload. `STUDIO_PERSIST=false` skips it
+    for tests and for anyone who genuinely wants a scratch instance.
+    """
+    if get_settings().persist:
+        try:
+            await ledger.load()
+            JOBS.update(await repository.load_jobs(video.get))
+            channels.CHANNELS.update(await repository.load_channels())
+            channels.SCHEDULE.update(await repository.load_schedule())
+        except Exception:
+            # A missing migration must not look like an empty database — starting
+            # with a blank quota ledger is exactly how the ceiling gets overrun.
+            logger.exception("failed to restore state; refusing to start")
+            raise
+    else:
+        logger.warning("STUDIO_PERSIST=false — state is in-process only and dies with it")
+        ledger.persist = False
+
+    yield
+
+    if get_settings().persist:
+        await db.dispose()
+
+
+app = FastAPI(title="Studio Engine", version="0.1.0", lifespan=lifespan)
 app.include_router(publishing_router)
 app.include_router(insights_router)
 app.include_router(channels_router)
@@ -72,8 +103,9 @@ class PublishRequest(BaseModel):
     made_for_kids: bool = False
 
 
-# In-process job registry. Phase 1 replaces this with Postgres-backed records; the
-# shape is kept identical so the swap is contained to this module.
+# Live mirror of the `jobs` table, hydrated by the lifespan handler and written
+# through on every stage boundary. It holds what a row cannot: the asyncio.Event
+# subscribers wait on, the running Task, and a publish job's YouTube client.
 JOBS: dict[str, dict[str, Any]] = {}
 
 
@@ -161,6 +193,10 @@ async def _run_job(job_id: str, start_from: str | None = None) -> None:
         # cursor, so one append serves every viewer exactly once — see stream_job.
         job["events"].append(event)
         _wake(job)
+        # Persist on stage boundaries rather than every progress tick: a render
+        # emits hundreds of those, and the resume point only moves on a boundary.
+        if event["type"].startswith(("stage.completed", "stage.failed", "workflow.")):
+            await _persist(job)
 
     try:
         await job["workflow"].run(
@@ -182,7 +218,23 @@ async def _run_job(job_id: str, start_from: str | None = None) -> None:
     finally:
         # Status is already final here, so a woken subscriber sees "not running"
         # and closes its stream rather than waiting for an event that never comes.
+        await _persist(job)
         _wake(job)
+
+
+async def _persist(job: dict) -> None:
+    """Save a job, without ever letting a database problem kill the run.
+
+    A render that completed and then failed to save is a bad outcome; a render
+    that was *aborted* because the save failed is a worse one, and the work is
+    already done by the time this is called.
+    """
+    if not get_settings().persist:
+        return
+    try:
+        await repository.save_job(job)
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to persist job {}", job["id"])
 
 
 @app.get("/v1/jobs/{job_id}")

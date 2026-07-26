@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     )
 
     env: Literal["development", "production"] = "development"
+    # Off only for tests and throwaway instances. With this false a restart loses
+    # every job, channel, booking and — worst — the day's quota spend, so the next
+    # upload silently overruns Google's ceiling.
+    persist: bool = True
     database_url: str = "postgresql+asyncpg://studio:studio@localhost:5432/studio"
     redis_url: str = "redis://localhost:6379/0"
     secret_key: str = "dev-only-do-not-use-in-production-000"

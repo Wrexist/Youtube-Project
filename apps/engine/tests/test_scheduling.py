@@ -28,10 +28,10 @@ START = datetime(2026, 8, 3, 8, 0, tzinfo=UTC)  # a Monday
 # ── quota ───────────────────────────────────────────────────────────────────
 
 
-def test_upload_cost_caps_the_day():
-    led = QuotaLedger()
+async def test_upload_cost_caps_the_day():
+    led = QuotaLedger(persist=False)
     for _ in range(6):
-        led.record("videos.insert")
+        await led.record("videos.insert")
     assert led.spent() == 9600
     assert led.remaining() == 400
     with pytest.raises(QuotaExceeded):
@@ -41,15 +41,15 @@ def test_upload_cost_caps_the_day():
 def test_uploads_left_counts_the_whole_publish_sequence():
     """Publishing a video then failing to set its thumbnail is not a useful outcome,
     so the estimate reserves the full sequence."""
-    led = QuotaLedger()
+    led = QuotaLedger(persist=False)
     # insert 1600 + thumbnail 50 + captions 400 = 2050 per publish
     assert led.uploads_left() == DAILY_LIMIT // 2050 == 4
 
 
-def test_search_competes_with_uploads_for_the_same_budget():
-    led = QuotaLedger()
+async def test_search_competes_with_uploads_for_the_same_budget():
+    led = QuotaLedger(persist=False)
     for _ in range(40):
-        led.record("search.list")  # 100 each — competitor mining
+        await led.record("search.list")  # 100 each — competitor mining
     assert led.spent() == 4000
     assert led.uploads_left() == 2  # halved by research
 
@@ -61,11 +61,11 @@ def test_quota_day_uses_pacific_not_utc():
     assert quota_day(early_utc) == date(2026, 8, 3)
 
 
-def test_breakdown_attributes_spend():
-    led = QuotaLedger()
-    led.record("videos.insert")
-    led.record("search.list")
-    led.record("search.list")
+async def test_breakdown_attributes_spend():
+    led = QuotaLedger(persist=False)
+    await led.record("videos.insert")
+    await led.record("search.list")
+    await led.record("search.list")
     assert led.breakdown() == {"videos.insert": 1600, "search.list": 200}
 
 

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from engine import repository
 from engine.providers import youtube
 from engine.quota import ledger, quota_day
 from engine.scheduling import (
@@ -23,10 +24,15 @@ from engine.settings import get_settings
 
 router = APIRouter(prefix="/v1", tags=["publishing"])
 
-# Channel store and OAuth state. Postgres-backed in Phase 1; the shape is stable.
+# In-process mirrors of the `channels` and `schedule` tables, hydrated by the
+# lifespan handler and written through on every mutation. Reads stay synchronous
+# and local; the row is the durable record.
 CHANNELS: dict[str, youtube.Credentials] = {}
-_STATES: set[str] = set()
 SCHEDULE: dict[str, datetime] = {}  # video_id -> publish time
+
+# Deliberately *not* persisted: an in-flight OAuth state is meaningless after a
+# restart, and keeping it would widen the window for a replayed callback.
+_STATES: set[str] = set()
 
 
 class ScheduleRequest(BaseModel):
@@ -84,6 +90,7 @@ async def finish_auth(code: str = Query(...), state: str = Query(...)):
         raise HTTPException(400, str(exc)) from exc
 
     CHANNELS["default"] = creds
+    await repository.save_channel("default", creds)
     return RedirectResponse("http://localhost:3000/calendar?connected=1")
 
 
@@ -149,6 +156,7 @@ async def schedule_one(body: ScheduleRequest) -> dict:
         raise HTTPException(409, message)
 
     SCHEDULE[body.video_id] = body.at
+    await repository.save_slot(body.video_id, body.at)
 
     # Cheap (50 units), so rescheduling can be used freely once the video is up.
     creds = CHANNELS.get("default")
@@ -161,6 +169,7 @@ async def schedule_one(body: ScheduleRequest) -> dict:
 @router.delete("/calendar/schedule/{video_id}")
 async def unschedule(video_id: str) -> dict:
     SCHEDULE.pop(video_id, None)
+    await repository.delete_slot(video_id)
     return {"video_id": video_id, "scheduled": False}
 
 
@@ -212,5 +221,7 @@ async def auto(body: AutoScheduleRequest) -> dict:
 @router.post("/calendar/auto/apply")
 async def apply_plan(body: dict) -> dict:
     for assignment in body.get("assignments", []):
-        SCHEDULE[assignment["video_id"]] = datetime.fromisoformat(assignment["at"])
+        at = datetime.fromisoformat(assignment["at"])
+        SCHEDULE[assignment["video_id"]] = at
+        await repository.save_slot(assignment["video_id"], at)
     return {"applied": len(body.get("assignments", []))}
