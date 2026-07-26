@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from engine.services import stock
 from engine.services.stock import (
     _matches_orientation,
     _parse_pexels,
@@ -153,3 +154,37 @@ def test_pixabay_ignores_renditions_with_missing_fields():
 def test_pixabay_tolerates_an_empty_payload():
     assert _parse_pixabay({}, "bridges", "9:16") == []
     assert _parse_pixabay({"hits": []}, "bridges", "9:16") == []
+
+
+# ── download ────────────────────────────────────────────────────────────────
+
+
+async def test_a_clip_with_no_url_does_not_take_the_render_down():
+    """Regression: the handler used to re-index the key that failed.
+
+    `_download` read `clip["url"]` inside its own `except`, so a clip missing
+    that key raised KeyError *from the error path*, escaped `asyncio.gather`,
+    and killed the whole render instead of logging one skipped clip. Found by
+    an actual render, not by review.
+    """
+    clips = [{"id": "no-url"}, {"id": "also-none"}]
+    await stock.download_all(clips)
+    assert all("path" not in c for c in clips)
+
+
+async def test_a_clip_that_already_has_a_file_is_not_refetched(tmp_path):
+    """The resume path: re-downloading is exactly what resuming should avoid."""
+    existing = tmp_path / "clip.mp4"
+    existing.write_bytes(b"stub")
+    clip = {"id": "cached", "path": str(existing), "url": "https://example.test/x.mp4"}
+
+    await stock.download_all([clip])
+    assert clip["path"] == str(existing)
+
+
+async def test_an_empty_clip_list_makes_no_client(monkeypatch):
+    def explode(*_args, **_kwargs):
+        raise AssertionError("should not open an HTTP client for zero clips")
+
+    monkeypatch.setattr(stock.httpx, "AsyncClient", explode)
+    await stock.download_all([])

@@ -67,13 +67,23 @@ These were actually executed on this machine, not assumed:
 - **Edge TTS + subtitle cues.** Real audio, real word-boundary timings, correctly
   grouped into readable lines. Fixed a real bug — see 4.2.
 - **FastAPI app imports** with all routes registered.
-- **217 unit tests**, covering the workflow framework, scheduling, quota arithmetic,
+- **223 unit tests**, covering the workflow framework, scheduling, quota arithmetic,
   statistics, attribution, automation, model routing, and — new — stock-provider
   response parsing, Ken Burns ramps, font resolution and BGM path safety.
+- **A real render of the new features**, measured rather than eyeballed:
+  - 1080×1920 MP4, 9.04s against 9.0s of narration — the crossfade overlap does
+    not shorten the timeline.
+  - Ken Burns: mean frame delta 46 over 1.5s, against 16 for the same source with
+    motion off. The zoom is doing something beyond the source's own movement.
+  - BGM: 220 Hz bed measurable under a 440 Hz narration, still present at 6s from
+    a 3s file (so the loop works), and absent when disabled.
+  - Crossfade: seam luma 117 against 121 mid-clip — it blends, it does not blink.
+  - A landscape source in a portrait render fills all four edges. No letterboxing.
+  - 16:9 and 1:1 render at the right dimensions; thumbnail is 1280×720 and 12 KB.
 
-**Not executed:** Ken Burns motion, cross-clip fades and the BGM mix are new and
-have unit tests for their arithmetic and path handling only. None has been through
-a real MoviePy render. Do one short before trusting the look.
+**Still not executed:** every Google API call (1.1), and the pipeline end to end
+with real Pexels/Pixabay footage and real edge-tts audio. The render was driven
+with synthetic clips and tones.
 
 ---
 
@@ -140,6 +150,23 @@ job's progress stream. Moved to a thread.
 ### 4.4 Retention mapping used indexing where it needed interpolation
 Any beat shorter than one curve sample reported a drop of exactly zero — so short
 beats, often the ones that lose people, could never be flagged.
+
+### 4.7 Cross-clip fades dipped to black at every cut
+The first cut of the transition code used `FadeOut` on the outgoing clip and
+`FadeIn` on the incoming one. Sequential clips do not overlap, so the timeline went
+to **luma 3.7 out of 255** at each seam — a blink on every cut, twenty of them in a
+long-form video. Reviewing the code would never have caught it; a render measured
+it. Now `CrossFadeIn` on the incoming clip plus negative `concatenate` padding, so
+the two clips are on screen together while the dissolve runs.
+
+The default is also now **0 (hard cuts)**. Fast-cut faceless video does not dissolve
+between shots, and upstream defaults to no transition either.
+
+### 4.8 The download error handler raised from inside the error handler
+`stock._download` logged failures with `clip["url"]` — re-indexing the key whose
+absence caused the failure. A clip without a `url` therefore raised `KeyError` from
+the `except` block, escaped `asyncio.gather`, and killed the whole render instead of
+skipping one clip. Also found by running it, not by reading it.
 
 ### 4.6 The p-value fallback could never have run
 `two_tailed_p` claimed to fall back to `math.betainc` "for an exact result without

@@ -76,9 +76,11 @@ vendor/        MoneyPrinterTurbo, read-only reference. Never imported.
 
 ## Status
 
-Phases 0–10 are code-complete; 217 engine tests pass. **Neither Google API has been
+Phases 0–10 are code-complete; 223 engine tests pass. **Neither Google API has been
 exercised against a live account** — upload, captions and analytics are reviewed
 code, not proven code. That needs OAuth credentials from a Google Cloud project.
 
-The render additions above (motion, fades, music, Pixabay) have unit tests but have
-not been through a real MoviePy render. See [KNOWN-ISSUES.md](KNOWN-ISSUES.md) §2.
+Motion, crossfades and the music bed were verified by a real MoviePy render with
+measurements, not by eye — see [KNOWN-ISSUES.md](KNOWN-ISSUES.md) §2. That render
+used synthetic clips and tones; the pipeline has still not been run end to end
+against live Pexels footage and edge-tts audio.

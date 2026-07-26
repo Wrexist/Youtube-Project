@@ -23,6 +23,7 @@ Three deliberate differences from upstream:
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -246,13 +247,26 @@ async def download_all(clips: list[dict], *, concurrency: int = 6) -> None:
 
 
 async def _download(client: httpx.AsyncClient, clip: dict) -> None:
+    # A clip that already points at a readable file needs nothing — this is the
+    # resume path, and re-fetching it would undo the point of resuming.
+    existing = clip.get("path")
+    if existing and Path(existing).is_file():
+        return
+
+    url = clip.get("url")
+    if not url:
+        logger.warning("clip {} has no url; skipping", clip.get("id", "<unknown>"))
+        return
+
     key = f"materials/{clip['id']}.mp4"
     if await store.exists(key):
         clip["path"] = str(await store.local_path(key))
         return
     try:
-        resp = await client.get(clip["url"])
+        resp = await client.get(url)
         resp.raise_for_status()
         clip["path"] = str(await store.put_bytes(resp.content, key))
     except Exception as exc:  # noqa: BLE001 — compose skips clips with no path
-        logger.warning("failed to download {}: {}", clip["url"], exc)
+        # Read `url` from the local, never re-index the dict: a KeyError raised
+        # inside this handler escapes the gather and takes the render with it.
+        logger.warning("failed to download {}: {}", url, exc)

@@ -23,8 +23,9 @@ KenBurns = Literal["none", "in", "out", "alternate"]
 # starts to show source compression artefacts as it magnifies them.
 ZOOM_MAX_SCALE = 1.2
 
-# Cross-clip fade. Long enough to register, short enough not to eat a beat.
-DEFAULT_FADE_S = 0.35
+# Cross-clip dissolve, when one is asked for. The default is 0 — see
+# `crossfade_bounds` for why hard cuts are the right default for this format.
+DEFAULT_FADE_S = 0.0
 
 
 def zoom_factor(elapsed: float, duration: float, direction: str) -> float:
@@ -55,16 +56,37 @@ def direction_for(index: int, mode: KenBurns) -> str:
     return mode
 
 
-def fade_bounds(index: int, count: int, fade_s: float) -> tuple[float, float]:
-    """(fade-in, fade-out) for clip `index` of `count`.
+def crossfade_bounds(index: int, count: int, fade_s: float) -> float:
+    """Dissolve applied to the head of clip `index`, in seconds. 0 means a cut.
 
-    The first clip does not fade in and the last does not fade out — the video
-    opens on the hook and ends on the audio, and fading either is a retention
-    cost for no visual gain.
+    This is a *cross*fade, deliberately. The obvious implementation — `FadeOut`
+    on the outgoing clip and `FadeIn` on the incoming one — is wrong for
+    sequential clips: they do not overlap, so the timeline dips to black at
+    every seam. A real render measured luma 3.7 out of 255 at a cut. On a video
+    with twenty cuts that is twenty blinks.
+
+    The dissolve therefore goes on the incoming clip only, and the caller
+    overlaps the timeline by `concat_padding` so the two clips are on screen
+    together while it runs.
+
+    The first clip never gets one — there is nothing to dissolve from, and the
+    hook has to land on frame one.
+
+    `fade_s` defaults to 0. Fast-cut faceless video uses hard cuts; a dissolve
+    on every cut reads as a slideshow. Upstream defaults to no transition too.
     """
-    if fade_s <= 0 or count <= 1:
-        return (0.0, 0.0)
-    return (0.0 if index == 0 else fade_s, 0.0 if index == count - 1 else fade_s)
+    if fade_s <= 0 or count <= 1 or index == 0:
+        return 0.0
+    return fade_s
+
+
+def concat_padding(count: int, fade_s: float) -> float:
+    """Negative padding for `concatenate_videoclips`, so dissolves overlap.
+
+    Returns 0 for hard cuts. Otherwise `-fade_s`: each clip starts `fade_s`
+    before its predecessor ends, which is the window the dissolve needs.
+    """
+    return -fade_s if fade_s > 0 and count > 1 else 0.0
 
 
 def _zoom_frame(frame, scale: float):
@@ -117,29 +139,30 @@ def apply_ken_burns(clip, direction: str):
     return clip.transform(transform)
 
 
-def apply_fades(clip, fade_in_s: float, fade_out_s: float):
-    """Fade a clip in and/or out, skipping effects with a zero duration.
+def apply_crossfade(clip, fade_s: float):
+    """Dissolve the clip in over `fade_s`. A zero is a no-op.
 
-    A zero-length `FadeIn` is not a no-op in MoviePy 2 — it divides by the
-    duration — so the guards are load-bearing.
+    `CrossFadeIn`, not `FadeIn`: the former ramps the clip's *mask* so whatever
+    is underneath shows through, the latter ramps toward black. With the
+    negative padding from `concat_padding`, what is underneath is the previous
+    clip — which is the whole point.
+
+    The guard is load-bearing: a zero-duration effect divides by its duration.
     """
+    if fade_s <= 0:
+        return clip
+
     from moviepy import vfx
 
-    effects = []
-    if fade_in_s > 0:
-        effects.append(vfx.FadeIn(fade_in_s))
-    if fade_out_s > 0:
-        effects.append(vfx.FadeOut(fade_out_s))
-    return clip.with_effects(effects) if effects else clip
+    return clip.with_effects([vfx.CrossFadeIn(fade_s)])
 
 
 def style_segment(clip, *, index: int, count: int, ken_burns: KenBurns, fade_s: float):
     """Everything a single timeline segment gets, in one call.
 
-    Ken Burns before the fades: the fade operates on opacity and the zoom on
-    geometry, and applying geometry to an already-composited fade would resample
-    the blend rather than the source.
+    Ken Burns before the dissolve: the zoom is a geometry transform and the
+    dissolve is a mask, and applying geometry after the mask would resample the
+    blend instead of the source.
     """
     styled = apply_ken_burns(clip, direction_for(index, ken_burns))
-    fade_in_s, fade_out_s = fade_bounds(index, count, fade_s)
-    return apply_fades(styled, fade_in_s, fade_out_s)
+    return apply_crossfade(styled, crossfade_bounds(index, count, fade_s))

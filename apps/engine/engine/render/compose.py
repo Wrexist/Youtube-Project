@@ -81,6 +81,7 @@ def _render_sync(
     # Lay clips out along the timeline in beat order, giving each beat a share of the
     # runtime proportional to its estimated length. This is what keeps footage
     # aligned with what is being said — the single biggest visual-quality lever.
+    fade_s = settings.transition_fade_s
     segments = []
     beat_spans = _beat_spans(beats, total)
     for index, (start, end) in enumerate(beat_spans):
@@ -95,28 +96,35 @@ def _render_sync(
             except Exception as exc:  # noqa: BLE001 — a bad download must not kill the render
                 logger.warning("skipping unreadable clip {}: {}", clip["path"], exc)
                 continue
-            take = min(per_clip, source.duration)
+            # Dissolves overlap the timeline, so each clip has to carry the extra
+            # `fade_s` that the overlap eats. Without it the video finishes short
+            # of the narration and freezes on the last frame.
+            take = min(per_clip + fade_s, source.duration)
             segments.append(_fit(source.subclipped(0, take), width, height))
         report(0.25 + 0.45 * (index + 1) / max(len(beat_spans), 1), f"beat {index + 1}")
 
     if not segments:
         raise RuntimeError("no usable clips after download")
 
-    # Motion and fades go on after the whole timeline is known — the first and last
-    # segments are treated differently, and that cannot be decided mid-loop.
-    report(0.70, "applying motion")
+    # Motion and dissolves go on after the whole timeline is known — the first
+    # segment is treated differently, and that cannot be decided mid-loop.
+    report(0.72, "applying motion")
     segments = [
         effects.style_segment(
             segment,
             index=index,
             count=len(segments),
             ken_burns=settings.ken_burns,
-            fade_s=settings.transition_fade_s,
+            fade_s=fade_s,
         )
         for index, segment in enumerate(segments)
     ]
 
-    video = concatenate_videoclips(segments, method="compose").with_duration(total)
+    video = concatenate_videoclips(
+        segments,
+        method="compose",
+        padding=effects.concat_padding(len(segments), fade_s),
+    ).with_duration(total)
 
     track = bgm.resolve() if bgm.should_mix(settings.bgm_volume) else None
     video = video.with_audio(

@@ -11,8 +11,9 @@ import pytest
 
 from engine.services.effects import (
     ZOOM_MAX_SCALE,
+    concat_padding,
+    crossfade_bounds,
     direction_for,
-    fade_bounds,
     zoom_factor,
 )
 
@@ -71,22 +72,49 @@ def test_none_disables_motion_everywhere():
     assert [direction_for(i, "none") for i in range(3)] == ["none"] * 3
 
 
-# ── fades ───────────────────────────────────────────────────────────────────
+# ── dissolves ───────────────────────────────────────────────────────────────
 
 
-def test_the_video_does_not_open_or_close_on_a_fade():
-    """The hook has to land on frame one, and the end is cut to the audio."""
-    assert fade_bounds(0, 4, 0.35) == (0.0, 0.35)
-    assert fade_bounds(3, 4, 0.35) == (0.35, 0.0)
+def test_the_video_does_not_open_on_a_dissolve():
+    """The hook has to land on frame one."""
+    assert crossfade_bounds(0, 4, 0.35) == 0.0
 
 
-def test_interior_clips_fade_both_ways():
-    assert fade_bounds(1, 4, 0.35) == (0.35, 0.35)
+def test_every_later_clip_dissolves_in():
+    assert [crossfade_bounds(i, 4, 0.35) for i in range(4)] == [0.0, 0.35, 0.35, 0.35]
 
 
-def test_a_single_clip_video_has_no_fades_at_all():
-    assert fade_bounds(0, 1, 0.35) == (0.0, 0.0)
+def test_a_single_clip_video_has_no_dissolve():
+    assert crossfade_bounds(0, 1, 0.35) == 0.0
 
 
-def test_a_zero_fade_setting_disables_transitions():
-    assert fade_bounds(1, 4, 0.0) == (0.0, 0.0)
+def test_a_zero_setting_means_hard_cuts():
+    assert crossfade_bounds(1, 4, 0.0) == 0.0
+    assert concat_padding(4, 0.0) == 0.0
+
+
+def test_hard_cuts_are_the_default():
+    """A dissolve on every cut reads as a slideshow, so 0 is the shipped value."""
+    from engine.services.effects import DEFAULT_FADE_S
+    from engine.settings import Settings
+
+    assert DEFAULT_FADE_S == 0.0
+    assert Settings().transition_fade_s == 0.0
+
+
+def test_a_dissolve_overlaps_the_timeline_rather_than_dipping_to_black():
+    """The regression this whole API shape exists for.
+
+    FadeOut-then-FadeIn on sequential clips does not overlap them, so the
+    timeline goes to black at every seam — a real render measured luma 3.7/255
+    at a cut. Negative padding is what puts both clips on screen together.
+    """
+    fade = 0.35
+    assert concat_padding(4, fade) == pytest.approx(-fade)
+    # The dissolve is on the incoming clip only; the outgoing one is untouched,
+    # so nothing ever ramps toward black.
+    assert crossfade_bounds(1, 4, fade) == pytest.approx(fade)
+
+
+def test_padding_is_zero_when_there_is_nothing_to_overlap():
+    assert concat_padding(1, 0.35) == 0.0
