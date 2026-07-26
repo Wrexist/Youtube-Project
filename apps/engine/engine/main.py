@@ -118,13 +118,13 @@ async def create_job(body: JobRequest) -> dict:
         raise HTTPException(404, str(exc)) from exc
 
     job_id = uuid.uuid4().hex[:12]
-    queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    wake = asyncio.Event()
     JOBS[job_id] = {
         "id": job_id,
         "workflow": wf,
         "inputs": body.model_dump(),
         "states": wf.initial_states(),
-        "queue": queue,
+        "wake": wake,
         "events": [],
         "status": "running",
     }
@@ -134,12 +134,27 @@ async def create_job(body: JobRequest) -> dict:
     return {"job_id": job_id, "status": "running"}
 
 
+def _wake(job: dict) -> None:
+    """Release every subscriber waiting on this job, then arm a fresh signal.
+
+    Swapping the Event rather than set()/clear() closes the race where a
+    subscriber has drained the log but not yet awaited: it captured the old
+    Event, which this sets, so its wait returns immediately instead of hanging
+    until the next event.
+    """
+    waiting = job["wake"]
+    job["wake"] = asyncio.Event()
+    waiting.set()
+
+
 async def _run_job(job_id: str, start_from: str | None = None) -> None:
     job = JOBS[job_id]
 
     async def emit(event: dict) -> None:
-        job["events"].append(event)  # replayed to late subscribers
-        await job["queue"].put(event)
+        # The event log is the single source of truth. Subscribers read it by
+        # cursor, so one append serves every viewer exactly once — see stream_job.
+        job["events"].append(event)
+        _wake(job)
 
     try:
         await job["workflow"].run(
@@ -159,7 +174,9 @@ async def _run_job(job_id: str, start_from: str | None = None) -> None:
         logger.exception("job {} crashed", job_id)
         await emit({"type": "workflow.failed", "job_id": job_id, "error": str(exc)})
     finally:
-        await job["queue"].put(None)
+        # Status is already final here, so a woken subscriber sees "not running"
+        # and closes its stream rather than waiting for an event that never comes.
+        _wake(job)
 
 
 @app.get("/v1/jobs/{job_id}")
@@ -180,19 +197,34 @@ async def stream_job(job_id: str) -> EventSourceResponse:
 
     Past events are replayed first so a reload mid-render shows the full pipeline
     rather than resuming from a blank screen.
+
+    Each subscriber holds a cursor into `job["events"]` — the log is the only
+    source of truth, and reading it by position is what makes this correct for
+    more than one viewer. The previous version replayed the log *and then* drained
+    a shared queue that still held those same events, so everything before a
+    subscriber connected arrived twice; and because a queue hands each item to
+    exactly one consumer, two open tabs split the stream between them and both
+    rendered an incomplete pipeline.
     """
     job = _require(job_id)
 
     async def generator():
-        for event in list(job["events"]):
-            yield {"event": event["type"], "data": _json(event)}
-        if job["status"] != "running":
-            return
+        cursor = 0
         while True:
-            event = await job["queue"].get()
-            if event is None:
-                break
-            yield {"event": event["type"], "data": _json(event)}
+            # Captured before draining: if an event lands in the gap between the
+            # drain and the await, _wake fires this Event and the wait returns.
+            waiting = job["wake"]
+
+            events = job["events"]
+            while cursor < len(events):
+                event = events[cursor]
+                cursor += 1
+                yield {"event": event["type"], "data": _json(event)}
+
+            if job["status"] != "running":
+                return
+
+            await waiting.wait()
 
     return EventSourceResponse(generator())
 
@@ -241,7 +273,7 @@ async def publish_job(job_id: str, body: PublishRequest) -> dict:
 
     wf = video.get("publish")
     publish_id = uuid.uuid4().hex[:12]
-    queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    wake = asyncio.Event()
 
     # Seed with the source job's states so every video stage is already DONE and gets
     # replayed rather than re-run. Only the four publish stages actually execute.
@@ -260,7 +292,7 @@ async def publish_job(job_id: str, body: PublishRequest) -> dict:
             "source_job_id": job_id,
         },
         "states": states,
-        "queue": queue,
+        "wake": wake,
         "events": [],
         "status": "running",
     }

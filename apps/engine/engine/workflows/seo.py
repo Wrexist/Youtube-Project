@@ -184,9 +184,10 @@ class GroundingStage(Stage[keywords.KeywordEvidence]):
 
         evidence = await keywords.gather(topic, youtube_client=ctx.inputs.get("youtube_client"))
         if not evidence.is_grounded:
-            raise RuntimeError(
-                "no keyword evidence retrieved — refusing to write ungrounded SEO copy"
-            )
+            # The refusal is policy (CLAUDE.md: no ungrounded SEO copy). The
+            # diagnosis is so the operator knows which of network, rate-limit or
+            # topic to fix — this is the first stage of the only workflow.
+            raise RuntimeError(f"{evidence.diagnosis()} Refusing to write ungrounded SEO copy.")
 
         return StageOutput(
             value=evidence,
