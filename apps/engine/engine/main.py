@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from contextlib import suppress
+from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -17,10 +18,14 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from engine import automation
+from engine.api import publishing as channels
 from engine.api.channels import router as channels_router
 from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
+from engine.providers import youtube
+from engine.quota import ledger
 from engine.settings import get_settings
 from engine.workflows import video
 from engine.workflows.base import StageStatus, WorkflowError
@@ -50,6 +55,21 @@ class JobRequest(BaseModel):
 class EditRequest(BaseModel):
     stage: str
     value: Any
+
+
+class PublishRequest(BaseModel):
+    """Choices the operator makes at the approval gate.
+
+    All optional: the defaults publish the top-scored title and first thumbnail
+    immediately and publicly, which is the common case.
+    """
+
+    chosen_title_index: int = Field(default=0, ge=0)
+    chosen_thumbnail_index: int = Field(default=0, ge=0)
+    privacy: str = Field(default="public", pattern="^(public|unlisted|private)$")
+    publish_at: datetime | None = None
+    playlist_id: str | None = None
+    made_for_kids: bool = False
 
 
 # In-process job registry. Phase 1 replaces this with Postgres-backed records; the
@@ -175,6 +195,113 @@ async def stream_job(job_id: str) -> EventSourceResponse:
             yield {"event": event["type"], "data": _json(event)}
 
     return EventSourceResponse(generator())
+
+
+@app.post("/v1/jobs/{job_id}/publish", status_code=202)
+async def publish_job(job_id: str, body: PublishRequest) -> dict:
+    """Publish a finished video. **This is the approval gate.**
+
+    `CLAUDE.md` non-negotiable #3: nothing publishes without an explicit approval
+    gate. That gate is this endpoint — it is never a stage of the `video` workflow,
+    because a workflow that publishes as its last step has no gate at all.
+
+    Auto-publish (`automation.py`) calls the same function, so manual and unattended
+    publishing share one code path and one set of blockers. Skipping the checks is
+    not offered: a series with `auto_publish=True` skips the *waiting*, not the
+    *checks*.
+    """
+    source = _require(job_id)
+
+    if source["status"] != "completed":
+        raise HTTPException(409, f"job is {source['status']}; only a completed job can publish")
+    if source["workflow"].name != "video":
+        raise HTTPException(409, f"job ran the '{source['workflow'].name}' workflow, not 'video'")
+
+    creds = channels.CHANNELS.get("default")
+    if creds is None:
+        raise HTTPException(409, "no channel connected — authorise one at /v1/auth/google")
+
+    blockers = automation.publish_blockers(_video_state(job_id, source), _PUBLISH_SERIES)
+    if blockers:
+        raise HTTPException(
+            409,
+            {
+                "detail": "this video is not ready to publish",
+                "blockers": [{"code": b.code, "message": b.message} for b in blockers],
+            },
+        )
+
+    # Refuse before the spend, not after. An upload is 1,600 of 10,000 daily units.
+    if not ledger.can_afford("videos.insert"):
+        raise HTTPException(
+            429,
+            f"daily YouTube quota exhausted — {ledger.remaining()} units left, "
+            f"an upload costs {ledger.cost_of('videos.insert')}",
+        )
+
+    wf = video.get("publish")
+    publish_id = uuid.uuid4().hex[:12]
+    queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+    # Seed with the source job's states so every video stage is already DONE and gets
+    # replayed rather than re-run. Only the four publish stages actually execute.
+    states = wf.initial_states()
+    for name, state in source["states"].items():
+        if name in states:
+            states[name] = state
+
+    JOBS[publish_id] = {
+        "id": publish_id,
+        "workflow": wf,
+        "inputs": {
+            **source["inputs"],
+            **body.model_dump(exclude_none=True),
+            "youtube_client": youtube.YouTube(creds),
+            "source_job_id": job_id,
+        },
+        "states": states,
+        "queue": queue,
+        "events": [],
+        "status": "running",
+    }
+    JOBS[publish_id]["task"] = asyncio.create_task(_run_job(publish_id))
+
+    logger.info("publishing job {} as {}", job_id, publish_id)
+    return {"job_id": publish_id, "status": "running", "source_job_id": job_id}
+
+
+def _video_state(job_id: str, job: dict) -> automation.VideoState:
+    """Read the approval-gate inputs out of a finished job's stage outputs."""
+    states = job["states"]
+
+    def value(name: str, default=None):
+        state = states.get(name)
+        return state.output.value if state is not None and state.output else default
+
+    titles = value("titles") or []
+    sources = (value("research") or {}).get("sources", []) if value("research") else []
+    grounding = value("grounding")
+    critique = value("critique")
+
+    return automation.VideoState(
+        id=job_id,
+        series_id=job["inputs"].get("series_id", ""),
+        cost_usd=sum(s.output.cost_usd for s in states.values() if s.output),
+        has_sources=bool(sources),
+        source_count=len(sources),
+        has_thumbnail=bool(value("thumbnail")),
+        has_seo=bool(value("description") and value("tags")),
+        keyword_grounded=bool(grounding and getattr(grounding, "is_grounded", False)),
+        render_ok=bool(value("render")),
+        title=titles[0].text if titles else "",
+        critique_severity=getattr(critique, "severity", 0) or 0,
+    )
+
+
+# One-off videos are not part of a series, so they get a permissive series record.
+# The quality blockers in publish_blockers() do not depend on it — the parameter
+# exists for the auto-publish path, which passes the real series.
+_PUBLISH_SERIES = automation.Series(id="", name="ad-hoc", niche="", monthly_budget_usd=float("inf"))
 
 
 @app.post("/v1/jobs/{job_id}/edit")

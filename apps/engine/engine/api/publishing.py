@@ -19,6 +19,7 @@ from engine.scheduling import (
     candidate_slots,
     validate_move,
 )
+from engine.settings import get_settings
 
 router = APIRouter(prefix="/v1", tags=["publishing"])
 
@@ -45,6 +46,25 @@ class AutoScheduleRequest(BaseModel):
 
 @router.get("/auth/google")
 async def begin_auth() -> dict:
+    # Without credentials this used to hand back a URL with an empty client_id, and
+    # the operator met Google's "invalid client" page with nothing pointing at the
+    # cause. Fail here instead, the same way /v1/analytics/* reports no channel.
+    settings = get_settings()
+    missing = [
+        name
+        for name, value in (
+            ("GOOGLE_CLIENT_ID", settings.google_client_id),
+            ("GOOGLE_CLIENT_SECRET", settings.google_client_secret),
+        )
+        if not value
+    ]
+    if missing:
+        raise HTTPException(
+            409,
+            f"{' and '.join(missing)} not set — create an OAuth 2.0 client in Google "
+            "Cloud (YouTube Data API v3 + YouTube Analytics API) and add it to .env",
+        )
+
     state = secrets.token_urlsafe(24)
     _STATES.add(state)
     return {"url": youtube.authorize_url(state)}

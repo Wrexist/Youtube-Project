@@ -59,7 +59,13 @@ class Settings(BaseSettings):
 
     # YouTube
     youtube_daily_quota: int = 10_000
-    google_redirect_uri: str = "http://localhost:8080/v1/auth/google/callback"
+    # Unprefixed alias to match GOOGLE_CLIENT_ID/SECRET below. Without it this read
+    # STUDIO_GOOGLE_REDIRECT_URI while .env.example documented GOOGLE_REDIRECT_URI,
+    # so the value was silently ignored and OAuth failed with redirect_uri_mismatch.
+    google_redirect_uri: str = Field(
+        default="http://localhost:8080/v1/auth/google/callback",
+        validation_alias="GOOGLE_REDIRECT_URI",
+    )
 
     # Guardrails. A runaway workflow is a billing incident.
     max_cost_per_video_usd: float = Field(default=8.0, gt=0)

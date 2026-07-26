@@ -136,9 +136,21 @@ def _ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-PUBLISH_STAGES: list[Stage] = [
-    UploadStage(),
-    ThumbnailSetStage(),
-    CaptionsStage(),
-    PlaylistStage(),
-]
+def publish_stages() -> list[Stage]:
+    """Fresh stage instances for one workflow.
+
+    These cannot form a `Workflow` on their own: `UploadStage` depends on "render",
+    "titles", "description" and "tags", which are video stages, and
+    `Workflow._validate` requires dependencies to be defined earlier in the same
+    workflow. `engine.workflows.video.PUBLISH_WORKFLOW` composes them onto the
+    video stages, which is the only valid arrangement.
+    """
+    return [
+        UploadStage(),
+        ThumbnailSetStage(),
+        CaptionsStage(),
+        PlaylistStage(),
+    ]
+
+
+PUBLISH_STAGES: list[Stage] = publish_stages()
