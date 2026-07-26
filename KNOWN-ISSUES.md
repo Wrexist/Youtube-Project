@@ -3,6 +3,11 @@
 What is unverified, what is knowingly incomplete, and what will need a human.
 Ordered by how likely it is to bite you.
 
+> **A full-system audit on 2026-07-26 found 20 issues this file does not list** —
+> including that the **publish workflow is unreachable dead code**, so nothing in the
+> repo can upload to YouTube, and that **CI is red on every push**. See
+> [AUDIT.md](AUDIT.md) for the evidence and the phased fix plan. Read that first.
+
 Last updated after vendoring the MoneyPrinterTurbo reference and porting the render
 services that were missing from it (`engine/services/`).
 **217 engine tests passing. Web builds and typechecks clean.**
