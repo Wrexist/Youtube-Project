@@ -12,7 +12,6 @@ data outlives the process that wrote it. CI sets the Postgres URL.
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -20,32 +19,7 @@ import pytest
 from engine import db, repository
 from engine.quota import Entry, QuotaLedger
 from engine.settings import get_settings
-from engine.tables import Base
 from engine.workflows.base import StageState, StageStatus
-
-
-@pytest.fixture
-async def database(tmp_path, monkeypatch):
-    """A migrated, empty database, torn down after each test."""
-    url = os.environ.get("STUDIO_TEST_DATABASE_URL") or (
-        f"sqlite+aiosqlite:///{tmp_path / 'studio.db'}"
-    )
-    get_settings.cache_clear()
-    await db.dispose()
-    monkeypatch.setenv("STUDIO_DATABASE_URL", url)
-    # These tests are *about* persistence, so it has to be on. The suite runs
-    # with STUDIO_PERSIST=false ambiently, which now really does skip writes.
-    monkeypatch.setenv("STUDIO_PERSIST", "true")
-
-    async with db.engine().begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-
-    yield url
-
-    await db.dispose()
-    get_settings.cache_clear()
-
 
 # ── the quota ledger: the one that must not be lost ─────────────────────────
 
@@ -469,7 +443,6 @@ async def test_a_row_written_before_values_were_stored_reruns(database):
 
 
 async def test_schedule_writes_are_skipped_when_persistence_is_off(monkeypatch):
-    from engine.settings import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setenv("STUDIO_PERSIST", "false")
@@ -485,7 +458,6 @@ async def test_schedule_writes_are_skipped_when_persistence_is_off(monkeypatch):
 
 async def test_channel_writes_are_skipped_when_persistence_is_off(monkeypatch):
     from engine.providers.youtube import Credentials
-    from engine.settings import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setenv("STUDIO_PERSIST", "false")

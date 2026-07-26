@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from engine.crypto import decrypt, encrypt
+from engine.crypto import DecryptionFailed, decrypt, encrypt
 from engine.quota import ledger
 from engine.settings import get_settings
 
@@ -115,11 +115,22 @@ async def refresh(creds: Credentials) -> Credentials:
     """Refresh on demand. Never scheduled — an access token lasts an hour and
     scheduling refreshes just adds a way to be wrong."""
     s = get_settings()
+    try:
+        refresh_token = decrypt(creds.refresh_token_encrypted)
+    except DecryptionFailed as exc:
+        # The key changed, or the row was restored without storage/.secret_key
+        # beside it. Indistinguishable from a revoked grant from here, and the fix
+        # is the same one — so say that, rather than surfacing a 500 nobody can act on.
+        raise ChannelDisconnected(
+            "this channel's stored credential cannot be decrypted with the current "
+            "key — reconnect the channel to store a fresh one"
+        ) from exc
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
             TOKEN_URL,
             data={
-                "refresh_token": decrypt(creds.refresh_token_encrypted),
+                "refresh_token": refresh_token,
                 "client_id": s.google_client_id,
                 "client_secret": s.google_client_secret,
                 "grant_type": "refresh_token",
@@ -225,7 +236,10 @@ class YouTube:
             body["status"]["publishAt"] = publish_at.astimezone(UTC).isoformat()
 
         size = (await asyncio.to_thread(video_path.stat)).st_size
-        ledger.check("videos.insert")
+        # Freshly, not from this process's cache: the worker uploads and the API
+        # serves, so each would otherwise miss the other's spend and both could
+        # approve the same last 1,600 units.
+        await ledger.check_fresh("videos.insert")
 
         # 1. Open the resumable session.
         headers = {

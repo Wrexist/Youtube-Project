@@ -1080,6 +1080,44 @@
         ]
       }
     },
+    "/v1/files/{key}": {
+      "get": {
+        "description": "Serve a generated artifact.\n\n`ObjectStore.url()` has always pointed here and this route did not exist, so\nnothing could show a thumbnail or play a render \u2014 the Library and the variant\npicker had URLs that 404'd.\n\nThree separate checks, because this is the one endpoint that turns a string from\na client into a filesystem read: the prefix must be one we publish, the suffix\nmust be a media type we produce, and `store` must agree the resolved path is\nstill inside the storage root.",
+        "operationId": "get_file_v1_files__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get File"
+      }
+    },
     "/v1/insights": {
       "get": {
         "description": "Findings, each carrying its verdict and sample size.\n\nSuggestive findings are returned so the user can see them; only confirmed ones\nare ever fed back into generation.",

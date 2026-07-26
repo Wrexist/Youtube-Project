@@ -157,6 +157,28 @@ class QuotaLedger:
 
         return entry
 
+    async def check_fresh(self, operation: str) -> None:
+        """Re-read the day's spend from the database, then check.
+
+        `check()` reads an in-process cache hydrated at startup, which was correct
+        while one process did everything. The render worker is a separate process
+        and it is the one that uploads, so the API and the worker each accumulate
+        spend the other never sees: both can believe there is room for a
+        1,600-unit upload when between them there is not, and Google's ceiling is
+        breached silently — the exact failure this module exists to prevent.
+
+        Only the paths that are about to spend need this. Display reads can be a
+        few seconds stale without hurting anyone; an upload cannot.
+        """
+        if self.persist:
+            try:
+                await self.load()
+            except Exception:  # noqa: BLE001
+                # Refusing to upload because the ledger could not be re-read would
+                # be worse than proceeding on a cache that is at worst incomplete.
+                logger.warning("could not refresh the quota ledger; checking against the cache")
+        self.check(operation)
+
     async def load(self, days: int = 35) -> int:
         """Hydrate the cache from the database. Call once at startup.
 

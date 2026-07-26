@@ -10,6 +10,7 @@ import asyncio
 import uuid
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -27,6 +28,7 @@ from engine.api.publishing import router as publishing_router
 from engine.providers import youtube
 from engine.quota import ledger
 from engine.settings import get_settings
+from engine.storage import store
 from engine.workflows import video
 from engine.workflows.base import StageStatus, WorkflowError
 
@@ -522,3 +524,70 @@ def _json(event: dict) -> str:
     import json
 
     return json.dumps(event, default=str)
+
+
+# ── artifacts ───────────────────────────────────────────────────────────────
+
+#: Only what this app actually produces. An allowlist rather than `mimetypes.guess`
+#: because the storage root also holds the database, the encryption key and
+#: downloaded footage — none of which is a thing to hand out over HTTP.
+_SERVABLE = {
+    ".mp4": "video/mp4",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".srt": "application/x-subrip",
+    ".vtt": "text/vtt",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+}
+
+#: Directories a client may read from — every prefix this app actually writes,
+#: and no others. `store` already refuses a key that escapes the storage root, but
+#: "inside the root" also covers studio.db, .secret_key and `materials/`, which
+#: holds third-party stock footage that is not ours to re-serve.
+#:
+#: Kept honest by `test_every_written_prefix_is_either_servable_or_deliberately_not`:
+#: guessing these ("subtitles/", "audio/") silently 404'd the real `captions/` and
+#: `voiceover/` output, which is a dead link rather than an error anyone would see.
+_SERVABLE_ROOTS = ("thumbnails/", "renders/", "captions/", "voiceover/")
+
+
+@app.get("/v1/files/{key:path}")
+async def get_file(key: str):
+    """Serve a generated artifact.
+
+    `ObjectStore.url()` has always pointed here and this route did not exist, so
+    nothing could show a thumbnail or play a render — the Library and the variant
+    picker had URLs that 404'd.
+
+    Three separate checks, because this is the one endpoint that turns a string from
+    a client into a filesystem read: the prefix must be one we publish, the suffix
+    must be a media type we produce, and `store` must agree the resolved path is
+    still inside the storage root.
+    """
+    from fastapi.responses import FileResponse
+
+    if not key.startswith(_SERVABLE_ROOTS):
+        raise HTTPException(404, "not found")
+
+    suffix = Path(key).suffix.lower()
+    if suffix not in _SERVABLE:
+        raise HTTPException(404, "not found")
+
+    try:
+        path = await store.local_path(key)
+    except ValueError:  # escaped the storage root
+        raise HTTPException(404, "not found") from None
+
+    if not path.is_file():
+        raise HTTPException(404, "not found")
+
+    return FileResponse(
+        path,
+        media_type=_SERVABLE[suffix],
+        # Renders are large and the player needs to seek; without this the browser
+        # downloads the whole file before it can start.
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"},
+    )

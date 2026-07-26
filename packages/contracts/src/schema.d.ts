@@ -325,6 +325,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/files/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get File
+         * @description Serve a generated artifact.
+         *
+         *     `ObjectStore.url()` has always pointed here and this route did not exist, so
+         *     nothing could show a thumbnail or play a render — the Library and the variant
+         *     picker had URLs that 404'd.
+         *
+         *     Three separate checks, because this is the one endpoint that turns a string from
+         *     a client into a filesystem read: the prefix must be one we publish, the suffix
+         *     must be a media type we produce, and `store` must agree the resolved path is
+         *     still inside the storage root.
+         */
+        get: operations["get_file_v1_files__key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/insights": {
         parameters: {
             query?: never;
@@ -1445,6 +1474,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    get_file_v1_files__key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

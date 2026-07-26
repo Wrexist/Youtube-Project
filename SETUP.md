@@ -156,6 +156,32 @@ On Windows the interpreter is at `.venv/Scripts/python`.
 
 ---
 
+## Security — what is assumed
+
+This is built to run on your machine, for you. Two things follow from that, and
+both matter before you put it anywhere else.
+
+**Nothing published leaves the local machine.** Every port in `docker-compose.yml`
+is bound to `127.0.0.1`. They were bound to every interface, which put Postgres
+(credentials `studio/studio`), Redis (no password) and the engine on whatever
+network the laptop had joined — a café or hotel wifi is enough. **The engine has no
+authentication**: anything that can reach it can start renders, read every job and
+publish to a connected channel. Exposing it needs a reverse proxy that terminates
+TLS and authenticates. Do not just change the binding.
+
+**Back up `storage/.secret_key`.** It is generated on first use and it encrypts your
+YouTube refresh tokens. Lose it and every connected channel has to be reconnected —
+which is recoverable, and the app will tell you to. Leak it and someone with a copy
+of the database has your channel. It is `0600` and inside a gitignored directory, so
+it will not be committed by accident.
+
+> Earlier versions shipped `STUDIO_SECRET_KEY=change-me-32-bytes-minimum-for-token-encryption`
+> in `.env.example`, and `setup.sh` copies that file to `.env`. If your `.env` still
+> has that line uncommented, **comment it out** — that value is in this repository,
+> so anything encrypted under it is public. Reconnect any channel you had connected.
+
+---
+
 ## What is still unproven
 
 Honest about the edges, because you will hit them before I would:

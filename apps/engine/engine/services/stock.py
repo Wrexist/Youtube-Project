@@ -246,6 +246,36 @@ async def download_all(clips: list[dict], *, concurrency: int = 6) -> None:
         await asyncio.gather(*(bounded(c) for c in clips))
 
 
+#: A stock clip is seconds of footage. Anything past this is a misbehaving provider
+#: or a redirect somewhere unintended, and `resp.content` would have read all of it
+#: into memory — several of these download concurrently, so one bad URL could take
+#: the process out.
+MAX_CLIP_BYTES = 192 * 1024 * 1024
+
+
+async def _fetch_bounded(client: httpx.AsyncClient, url: str) -> bytes:
+    """Download a clip, refusing one that will not fit in memory.
+
+    Streamed rather than buffered so the limit is enforced as bytes arrive; checking
+    `content-length` alone trusts a header the sender controls.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async with client.stream("GET", url) as resp:
+        resp.raise_for_status()
+
+        declared = resp.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_CLIP_BYTES:
+            raise ValueError(f"clip is {int(declared) // 1_048_576}MB; refusing to download")
+
+        async for chunk in resp.aiter_bytes():
+            total += len(chunk)
+            if total > MAX_CLIP_BYTES:
+                raise ValueError(f"clip exceeded {MAX_CLIP_BYTES // 1_048_576}MB; aborted")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _download(client: httpx.AsyncClient, clip: dict) -> None:
     # A clip that already points at a readable file needs nothing — this is the
     # resume path, and re-fetching it would undo the point of resuming.
@@ -263,9 +293,7 @@ async def _download(client: httpx.AsyncClient, clip: dict) -> None:
         clip["path"] = str(await store.local_path(key))
         return
     try:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        clip["path"] = str(await store.put_bytes(resp.content, key))
+        clip["path"] = str(await store.put_bytes(await _fetch_bounded(client, url), key))
     except Exception as exc:  # noqa: BLE001 — compose skips clips with no path
         # Read `url` from the local, never re-index the dict: a KeyError raised
         # inside this handler escapes the gather and takes the render with it.

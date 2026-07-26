@@ -210,6 +210,44 @@ def check_keys() -> None:
             "See SETUP.md step 3. Needs a Google Cloud project; allow ~15 min.",
         )
 
+    _check_channel_key(s)
+
+
+def _check_channel_key(s) -> None:
+    """The key that encrypts refresh tokens.
+
+    Worth its own check because the failure is silent and total: `.env.example`
+    shipped a placeholder key and `setup.sh` copies that file, so an install could
+    look completely healthy while protecting channel credentials with a value that
+    is published in this repository.
+    """
+    from pathlib import Path
+
+    from engine.crypto import KEY_FILE
+    from engine.settings import DEV_SECRET_KEY, PLACEHOLDER_SECRETS
+
+    # DEV_SECRET_KEY is the field's own default, so seeing it means nobody set the
+    # variable at all — the normal, correct state. Any *other* placeholder can only
+    # have come from a .env, which is the case worth a warning.
+    if s.secret_key in PLACEHOLDER_SECRETS - {DEV_SECRET_KEY}:
+        warn(
+            "Channel encryption",
+            "STUDIO_SECRET_KEY in .env is a placeholder published in this repository",
+            f"Comment that line out. A random key is generated at storage/{KEY_FILE} "
+            "instead. If you connected a channel while it was set, reconnect it.",
+        )
+        return
+
+    if s.secret_key != DEV_SECRET_KEY:
+        ok("Channel encryption", "using STUDIO_SECRET_KEY")
+        return
+
+    path = Path(s.storage_root) / KEY_FILE
+    if path.is_file():
+        ok("Channel encryption", f"generated key at {path} — back this up")
+    else:
+        ok("Channel encryption", "a key is generated when you connect a channel")
+
 
 async def check_grounding() -> None:
     """The first stage of the only workflow. Blocked here means nothing runs."""

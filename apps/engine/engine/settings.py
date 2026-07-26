@@ -11,6 +11,25 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: The placeholder `secret_key` ships with.
+DEV_SECRET_KEY = "dev-only-do-not-use-in-production-000"
+
+#: Every value that looks like a key but is published in this repository. `crypto`
+#: treats all of them as "unset" and generates a real per-install key instead.
+#:
+#: The second one is the one that actually bit: `.env.example` set
+#: STUDIO_SECRET_KEY to it, and `scripts/setup.sh` copies that file to `.env`. So
+#: the default above was never even reached — every install ran with a 47-character
+#: key that is sitting in the repository, encrypting YouTube refresh tokens, which
+#: are permanent access to the channel. It is long enough to pass a length check,
+#: which is exactly why a length check was not enough.
+PLACEHOLDER_SECRETS = frozenset(
+    {
+        DEV_SECRET_KEY,
+        "change-me-32-bytes-minimum-for-token-encryption",
+    }
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -33,7 +52,10 @@ class Settings(BaseSettings):
     # plus an API will contend on.
     database_url: str = "sqlite+aiosqlite:///./storage/studio.db"
     redis_url: str = "redis://localhost:6379/0"
-    secret_key: str = "dev-only-do-not-use-in-production-000"
+    # Left as the shipped placeholder, `crypto` generates a real random key per
+    # install and keeps it in storage/.secret_key. It is not a usable key itself —
+    # it is in this repository, so anything encrypted under it is public.
+    secret_key: str = DEV_SECRET_KEY
 
     # Storage. `ObjectStore` is local-only today — there is no S3 implementation,
     # so "s3" is deliberately not accepted rather than silently writing to local

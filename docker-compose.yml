@@ -9,6 +9,14 @@
 #
 # Neither is required to try the app. With nothing running here the engine falls
 # back to SQLite and runs renders in-process. See SETUP.md.
+#
+# Every published port is bound to 127.0.0.1 on purpose. `"5432:5432"` binds all
+# interfaces, which put Postgres (credentials studio/studio), Redis (no password)
+# and an engine with no authentication on whatever network the machine was joined
+# to — a café or a hotel wifi is enough. The engine can start a render, read every
+# job and publish to a connected YouTube channel, so this was not a theoretical
+# exposure. Serving this to anything but the local machine needs a reverse proxy
+# that terminates TLS and authenticates; see SETUP.md.
 
 services:
   postgres:
@@ -17,7 +25,7 @@ services:
       POSTGRES_USER: studio
       POSTGRES_PASSWORD: studio
       POSTGRES_DB: studio
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:5432:5432"]
     volumes: [studio-pg:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U studio"]
@@ -26,7 +34,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports: ["127.0.0.1:6379:6379"]
     volumes: [studio-redis:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -36,7 +44,7 @@ services:
   engine:
     profiles: ["full"]
     build: ./apps/engine
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]
     env_file: [.env]
     environment:
       # Inside the compose network the services have names, not localhost. These
@@ -73,10 +81,16 @@ services:
   web:
     profiles: ["full"]
     build: ./apps/web
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     environment:
       # Resolved by the browser, not inside the network, so it is the host address.
       NEXT_PUBLIC_ENGINE_URL: http://localhost:8080
+      # Resolved *inside* the network, by Server Components and Server Actions.
+      # They had only the variable above, and localhost:8080 inside the web
+      # container is the web container — so every server-side read failed, fell
+      # back to demo data, and the app looked like it was working on live data
+      # when nothing had reached the engine.
+      ENGINE_URL: http://engine:8080
     depends_on:
       engine: {condition: service_started}
 

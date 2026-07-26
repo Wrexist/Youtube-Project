@@ -30,7 +30,26 @@ import type {
   WorkflowGraph,
 } from "@studio/contracts";
 
-const BASE = process.env.NEXT_PUBLIC_ENGINE_URL ?? "http://localhost:8080";
+/**
+ * Where the engine is, from wherever this code happens to be running.
+ *
+ * Two variables because there are two answers. `NEXT_PUBLIC_ENGINE_URL` is baked
+ * into the browser bundle and has to be an address the *browser* can reach — the
+ * published port on the host. Server Components and Server Actions run inside the
+ * web container, where that address is the web container itself.
+ *
+ * With only the public variable, every server-side read hit localhost:8080 inside
+ * the web container, found nothing, and fell back to demo data — so under
+ * `docker compose --profile full` the app looked like it was working while nothing
+ * had ever reached the engine. `ENGINE_URL` is the in-network address; it is only
+ * consulted on the server, so it never ends up in the bundle.
+ */
+const BASE =
+  typeof window === "undefined"
+    ? (process.env.ENGINE_URL ??
+      process.env.NEXT_PUBLIC_ENGINE_URL ??
+      "http://localhost:8080")
+    : (process.env.NEXT_PUBLIC_ENGINE_URL ?? "http://localhost:8080");
 
 /** How long a Server Component waits before falling back to demo data. */
 const TIMEOUT_MS = 2500;
