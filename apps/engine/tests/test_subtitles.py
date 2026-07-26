@@ -7,8 +7,6 @@ Without this the sentence-break check in _group_cues() never fires.
 
 from __future__ import annotations
 
-import pytest
-
 from engine.workflows.media import _group_cues, _restore_punctuation
 
 
@@ -75,7 +73,9 @@ class TestRestorePunctuation:
         original = "Hello world."
         cues = _cues(["Hello", "world"], start=1.0, dur=0.4)
         result = _restore_punctuation(cues, original)
-        for orig, restored in zip(cues, result):
+        # strict=True: _restore_punctuation must return one cue per input cue,
+        # so a length change is the bug this loop exists to catch.
+        for orig, restored in zip(cues, result, strict=True):
             assert restored["start"] == orig["start"]
             assert restored["end"] == orig["end"]
 
@@ -102,9 +102,7 @@ class TestGroupCuesWithRestoredPunctuation:
     def test_breaks_at_sentence_end(self):
         """After restoration the sentence-break check must fire."""
         original = "The bridge collapsed. It fell into the river."
-        raw_cues = _cues(
-            ["The", "bridge", "collapsed", "It", "fell", "into", "the", "river"]
-        )
+        raw_cues = _cues(["The", "bridge", "collapsed", "It", "fell", "into", "the", "river"])
         restored = _restore_punctuation(raw_cues, original)
         grouped = _group_cues(restored)
         texts = [g["text"] for g in grouped]

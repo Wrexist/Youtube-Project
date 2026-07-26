@@ -21,6 +21,19 @@ jobs:
       - run: ruff format --check engine tests
       - run: pytest -q
 
+  # vendor/moneyprinterturbo is a read-only reference snapshot. Nothing may import
+  # it — the house rules in CLAUDE.md apply only to code that has been ported out.
+  vendor-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No imports from vendor/
+        run: |
+          if grep -rnE '^\s*(from|import)\s+vendor|from vendor\.' apps/; then
+            echo "::error::apps/ imports from vendor/ — port the code into engine/services instead"
+            exit 1
+          fi
+
   web:
     runs-on: ubuntu-latest
     steps:
@@ -30,5 +43,6 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm run build

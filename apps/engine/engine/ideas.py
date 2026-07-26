@@ -162,7 +162,9 @@ def score_idea(
 
 def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity between two equal-length embedding vectors."""
-    dot = sum(x * y for x, y in zip(a, b))
+    # strict=True: a length mismatch means two different embedding models were
+    # mixed, and silently truncating would return a plausible-looking score.
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = sum(x * x for x in a) ** 0.5
     nb = sum(y * y for y in b) ** 0.5
     if na == 0 or nb == 0:

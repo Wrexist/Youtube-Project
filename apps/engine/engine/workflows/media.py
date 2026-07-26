@@ -64,7 +64,9 @@ class VoiceoverStage(Stage[Voiceover]):
         voice = ctx.inputs.get("voice") or settings.tts_voice
 
         await ctx.progress("synthesising speech")
-        audio_path, cues = await _synthesize(script.full_text, voice, original_text=script.full_text)
+        audio_path, cues = await _synthesize(
+            script.full_text, voice, original_text=script.full_text
+        )
 
         key = await store.put_file(audio_path, f"voiceover/{ctx.job_id}.mp3")
         duration = cues[-1]["end"] if cues else 0.0
@@ -342,7 +344,11 @@ def _restore_punctuation(word_cues: list[dict], original_text: str) -> list[dict
         for i in range(orig_idx, window):
             orig_word, orig_punct = orig_tokens[i]
             # Match: exact, or one is a prefix of the other (handles truncated cues).
-            if orig_word == cue_lower or orig_word.startswith(cue_lower) or cue_lower.startswith(orig_word):
+            if (
+                orig_word == cue_lower
+                or orig_word.startswith(cue_lower)
+                or cue_lower.startswith(orig_word)
+            ):
                 matched_punct = orig_punct
                 orig_idx = i + 1
                 break
