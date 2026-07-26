@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from engine.providers import youtube
-from engine.quota import DAILY_LIMIT, ledger, quota_day
+from engine.quota import ledger, quota_day
 from engine.scheduling import (
     AudienceProfile,
     Constraints,
@@ -105,7 +105,7 @@ async def list_channels() -> dict:
 async def quota() -> dict:
     return {
         "day": quota_day().isoformat(),
-        "limit": DAILY_LIMIT,
+        "limit": ledger.limit,
         "spent": ledger.spent(),
         "remaining": ledger.remaining(),
         "uploads_left": ledger.uploads_left(),

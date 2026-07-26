@@ -13,9 +13,11 @@ places we deliberately diverge from upstream:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 import httpx
@@ -162,6 +164,17 @@ class MaterialsStage(Stage[Materials]):
         )
 
 
+@lru_cache(maxsize=1)
+def _render_slots() -> asyncio.Semaphore:
+    """Cap concurrent renders at STUDIO_MAX_CONCURRENT_RENDERS.
+
+    The setting existed and was enforced by nothing, so N simultaneous jobs meant
+    N simultaneous MoviePy encodes — each one CPU-saturating — and the box simply
+    fell over. `CLAUDE.md` calls the guardrails load-bearing for exactly this.
+    """
+    return asyncio.Semaphore(get_settings().max_concurrent_renders)
+
+
 class RenderStage(Stage[str]):
     name = "render"
     title = "Render"
@@ -178,6 +191,15 @@ class RenderStage(Stage[str]):
         async def on_progress(fraction: float, message: str) -> None:
             await ctx.progress(message, fraction)
 
+        slots = _render_slots()
+        if slots.locked():
+            # Say so rather than showing a stage that sits at 0% for ten minutes.
+            await ctx.progress("waiting for a render slot")
+
+        async with slots:
+            return await self._render(ctx, materials, voiceover, cues, beats, on_progress)
+
+    async def _render(self, ctx, materials, voiceover, cues, beats, on_progress):
         output_path = await compose.compose_video(
             clips=materials.clips,
             beats=beats,

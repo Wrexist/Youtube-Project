@@ -79,11 +79,17 @@ JOBS: dict[str, dict[str, Any]] = {}
 
 @app.get("/health")
 async def health() -> dict:
-    s = get_settings()
+    # `llm_model` used to come from Settings, which nothing routed on — so this
+    # reported a model the engine would never call. Report what will actually run.
+    from engine.models import routing
+
     return {
         "ok": True,
-        "env": s.env,
-        "llm_model": s.llm_model,
+        "env": get_settings().env,
+        "models": {
+            "draft": routing.spec_for("draft").model,
+            "tags": routing.spec_for("tags").model,
+        },
         "workflows": sorted(video.WORKFLOWS),
     }
 

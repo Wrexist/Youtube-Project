@@ -19,6 +19,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta, timezone
 
+from engine.settings import get_settings
+
 # Documented unit costs. Anything not listed defaults to 1 (the read-op cost).
 COSTS: dict[str, int] = {
     "videos.insert": 1600,
@@ -34,6 +36,8 @@ COSTS: dict[str, int] = {
     "playlistItems.list": 1,
 }
 
+# Google's default grant. The effective ceiling is `ledger.limit`, which reads
+# STUDIO_YOUTUBE_DAILY_QUOTA — read that, not this, when comparing against spend.
 DAILY_LIMIT = 10_000
 PACIFIC = timezone(timedelta(hours=-8))  # PST; DST shifts this by an hour
 
@@ -68,7 +72,10 @@ class QuotaLedger:
     """In-memory ledger. Phase 1 moves this to a Postgres table; the interface is
     the same so the swap stays inside this module."""
 
-    limit: int = DAILY_LIMIT
+    # Reads STUDIO_YOUTUBE_DAILY_QUOTA. The setting existed and was read by
+    # nothing, so a granted quota extension (KNOWN-ISSUES §3.2) could not be
+    # configured — the 10,000 ceiling was hardcoded here.
+    limit: int = field(default_factory=lambda: get_settings().youtube_daily_quota)
     entries: list[Entry] = field(default_factory=list)
 
     def cost_of(self, operation: str) -> int:

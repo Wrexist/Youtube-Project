@@ -24,22 +24,25 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     secret_key: str = "dev-only-do-not-use-in-production-000"
 
-    # Storage
-    storage_backend: Literal["local", "s3"] = "local"
+    # Storage. `ObjectStore` is local-only today — there is no S3 implementation,
+    # so "s3" is deliberately not accepted rather than silently writing to local
+    # disk and losing everything when the container recycles. The interface in
+    # storage.py is the extension point; add the backend there and widen this.
+    storage_backend: Literal["local"] = "local"
     storage_root: str = "./storage"
-    s3_bucket: str = ""
-    s3_endpoint: str = ""
-    s3_access_key: str = ""
-    s3_secret_key: str = ""
 
-    # LLM
-    llm_provider: Literal["anthropic", "openai", "gemini"] = "anthropic"
-    llm_model: str = "claude-opus-4-8"
-    llm_fast_model: str = "claude-haiku-4-5-20251001"
-    llm_base_url: str = ""
+    # No LLM settings. Model selection, provider and base URL all come from the
+    # per-task routing table in engine/models.py — `ModelSpec.base_url` is what the
+    # client actually reads — surfaced on the Models screen and at /v1/models.
+    # `llm_provider`, `llm_model`, `llm_fast_model` and `llm_base_url` used to live
+    # here and were read by nothing; `llm_model` additionally made /health report a
+    # model the engine would never call.
 
-    # TTS
-    tts_provider: Literal["edge", "azure", "elevenlabs", "gemini"] = "edge"
+    # TTS. Only Edge is implemented — `_synthesize` in workflows/media.py calls it
+    # directly. This was a four-value Literal whose other three values produced
+    # Edge audio *and recorded the wrong provider in provenance*, which corrupts
+    # the Phase 8 attribution trail that non-negotiable #2 exists to protect.
+    tts_provider: Literal["edge"] = "edge"
     tts_voice: str = "en-US-AvaNeural"
 
     # Render. Ken Burns alternates by default — a whole video pushing the same
@@ -77,7 +80,6 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
     pexels_api_key: str = Field(default="", validation_alias="PEXELS_API_KEY")
     pixabay_api_key: str = Field(default="", validation_alias="PIXABAY_API_KEY")
-    elevenlabs_api_key: str = Field(default="", validation_alias="ELEVENLABS_API_KEY")
     google_client_id: str = Field(default="", validation_alias="GOOGLE_CLIENT_ID")
     google_client_secret: str = Field(default="", validation_alias="GOOGLE_CLIENT_SECRET")
 

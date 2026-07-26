@@ -231,9 +231,9 @@ def auto_schedule(
 
             # Quota exhausted for this day.
             if constraints.quota_used_by_day:
-                from engine.quota import DAILY_LIMIT  # noqa: PLC0415
+                from engine.quota import ledger  # noqa: PLC0415
 
-                if constraints.quota_used_by_day.get(day, 0) >= DAILY_LIMIT:
+                if constraints.quota_used_by_day.get(day, 0) >= ledger.limit:
                     continue
 
             # Weekly cadence.
@@ -304,10 +304,10 @@ def validate_move(
 
     # Hard block: quota already exhausted for that day.
     if quota_used_by_day:
-        from engine.quota import DAILY_LIMIT  # noqa: PLC0415
+        from engine.quota import ledger  # noqa: PLC0415
 
         day = at.date()
-        if quota_used_by_day.get(day, 0) >= DAILY_LIMIT:
+        if quota_used_by_day.get(day, 0) >= ledger.limit:
             return (
                 False,
                 f"The YouTube upload quota for {day} is exhausted; choose a different day.",
