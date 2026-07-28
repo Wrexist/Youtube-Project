@@ -1079,6 +1079,11 @@ export interface components {
         RoutingProblem: {
             /** Message */
             message: string;
+            /**
+             * Severity
+             * @default warn
+             */
+            severity: string;
             /** Task */
             task: string;
         };

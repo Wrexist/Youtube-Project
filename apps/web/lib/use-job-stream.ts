@@ -93,6 +93,19 @@ function reduce(state: JobStream, action: Action): JobStream {
       return { ...state, status: "completed", cost_usd: event.cost_usd ?? state.cost_usd, stages };
     case "workflow.failed":
       return { ...state, status: "failed", stages };
+    case "stream.closed":
+      // The terminal frame carries the job's final status, and it is the only
+      // event that does so for a job that ended any way other than completing or
+      // failing. A cancelled or interrupted job emits no `workflow.*` terminal
+      // event at all, so without this the pipeline sat at "running" — spinner and
+      // all — for a job that had already stopped.
+      //
+      // Guarded: a job that *did* complete or fail has already set its status from
+      // the richer event, which also carried the final cost. Don't overwrite it.
+      if (state.status === "running" || state.status === "connecting") {
+        return { ...state, status: event.status ?? state.status, stages };
+      }
+      break;
   }
 
   return { ...state, stages };

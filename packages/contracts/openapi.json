@@ -598,6 +598,11 @@
             "title": "Message",
             "type": "string"
           },
+          "severity": {
+            "default": "warn",
+            "title": "Severity",
+            "type": "string"
+          },
           "task": {
             "title": "Task",
             "type": "string"
@@ -1474,6 +1479,8 @@
             "required": false,
             "schema": {
               "default": 100,
+              "maximum": 500,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
