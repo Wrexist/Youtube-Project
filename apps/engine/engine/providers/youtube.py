@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -37,6 +38,50 @@ SCOPES = (
 )
 
 CHUNK = 8 * 1024 * 1024
+
+#: Consecutive transient failures on the same chunk before giving up. The loop was
+#: a bare `continue` with no cap and no delay, so a persistent 503 spun as fast as
+#: the network allowed, forever, against an API that was asking us to slow down.
+MAX_CHUNK_RETRIES = 6
+#: Doubling from 2s: 2, 4, 8, 16, 32, 60. Capped so a Retry-After of an hour does
+#: not park a render for an hour.
+BACKOFF_BASE_S = 2.0
+BACKOFF_MAX_S = 60.0
+
+
+def _backoff(attempt: int, retry_after: str | None) -> float:
+    """How long to wait before re-sending a chunk.
+
+    Honours `Retry-After` when the server sends one — on a 429 that header is the
+    server telling us the answer, and ignoring it earns a longer ban.
+    """
+    if retry_after:
+        try:
+            return min(max(float(retry_after), 0.0), BACKOFF_MAX_S)
+        except ValueError:
+            pass  # it may be an HTTP-date; fall through to the exponential
+    return min(BACKOFF_BASE_S * (2 ** (attempt - 1)), BACKOFF_MAX_S)
+
+
+def _resume_offset(header: str | None, offset: int, chunk_len: int) -> int:
+    """Where to resume from after a 308.
+
+    The server's `Range` is authoritative and may confirm less than we sent. A
+    malformed or absent header falls back to assuming the whole chunk landed, which
+    is what the previous `int(rng.split("-")[1]) + 1` did — except that also raised
+    ValueError/IndexError on anything unexpected, in the middle of an upload that
+    had already been paid for.
+    """
+    if header:
+        # Strictly `bytes=<first>-<last>`. Splitting on "-" and taking [1] happens to
+        # produce a *number* for plenty of malformed headers too ("0-1-2-3" yields
+        # 2), and a plausible-but-wrong offset silently corrupts the uploaded file —
+        # worse than not parsing it at all.
+        match = re.fullmatch(r"\s*bytes\s*=\s*(\d+)\s*-\s*(\d+)\s*", header)
+        if match:
+            return int(match.group(2)) + 1
+        logger.warning("unparseable Range header {!r}; assuming the chunk landed", header)
+    return offset + chunk_len
 
 
 class YouTubeError(Exception):
@@ -260,8 +305,20 @@ class YouTube:
 
         session_url = init.headers["Location"]
 
+        # Booked here, not on success. Google charges the 1,600 units when the
+        # session is created, whatever happens afterwards — so recording it only on
+        # 200/201 meant every failed upload spent real quota the ledger never saw.
+        # Enough of those and `check_fresh` waves through an upload there is no
+        # budget left for, which is the silent overrun this ledger exists to stop.
+        await ledger.record("videos.insert", channel_id=self.creds.channel_id, note=title[:60])
+
         # 2. Push chunks, resuming from the last byte the server confirmed.
         offset = 0
+        # Transient failures are retried, but not forever and not immediately. This
+        # was a bare `continue` in a `while True`: a persistent 503 spun as fast as
+        # the network allowed, indefinitely, hammering the API that was already
+        # asking us to back off.
+        attempts = 0
         async with httpx.AsyncClient(timeout=None) as client:
             with video_path.open("rb") as fh:
                 while offset < size:
@@ -280,22 +337,32 @@ class YouTube:
                     )
 
                     if resp.status_code in (200, 201):
-                        await ledger.record(
-                            "videos.insert", channel_id=self.creds.channel_id, note=title[:60]
-                        )
                         return resp.json()["id"]
 
                     if resp.status_code == 308:  # incomplete; continue
+                        attempts = 0  # progress was made
                         rng = resp.headers.get("Range")
-                        offset = int(rng.split("-")[1]) + 1 if rng else offset + len(chunk)
+                        offset = _resume_offset(rng, offset, len(chunk))
                         if on_progress:
                             await on_progress(offset / size, "uploading")
                         continue
 
                     if resp.status_code in (500, 502, 503, 504, 429):
+                        attempts += 1
+                        if attempts > MAX_CHUNK_RETRIES:
+                            raise YouTubeError(
+                                f"upload gave up after {MAX_CHUNK_RETRIES} consecutive "
+                                f"{resp.status_code}s at byte {offset} of {size}"
+                            )
+                        delay = _backoff(attempts, resp.headers.get("Retry-After"))
                         logger.warning(
-                            "transient {} during upload; retrying chunk", resp.status_code
+                            "transient {} during upload; retrying chunk in {:.1f}s (attempt {}/{})",
+                            resp.status_code,
+                            delay,
+                            attempts,
+                            MAX_CHUNK_RETRIES,
                         )
+                        await asyncio.sleep(delay)
                         continue
 
                     # 4xx is deterministic — retrying burns quota for nothing.

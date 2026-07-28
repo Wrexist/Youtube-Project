@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -41,7 +42,13 @@ COSTS: dict[str, int] = {
 # Google's default grant. The effective ceiling is `ledger.limit`, which reads
 # STUDIO_YOUTUBE_DAILY_QUOTA — read that, not this, when comparing against spend.
 DAILY_LIMIT = 10_000
-PACIFIC = timezone(timedelta(hours=-8))  # PST; DST shifts this by an hour
+#: Google resets quota at midnight Pacific, which is a *place*, not an offset. A
+#: fixed `timezone(timedelta(hours=-8))` is only correct for the four months of PST;
+#: through PDT it puts the boundary an hour early, so spend in the 07:00-08:00 UTC
+#: hour is booked to the previous day. That is precisely the "ledger disagrees with
+#: Google" failure this module's docstring warns about, and it is live for two
+#: thirds of the year.
+PACIFIC = ZoneInfo("America/Los_Angeles")
 
 
 class QuotaExceeded(Exception):

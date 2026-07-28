@@ -117,3 +117,40 @@ def test_nothing_constructs_or_reads_a_weekday_attribute():
         if re.search(r"AudienceProfile\([^)]*weekday=|profile\.weekday\b", line)
     ]
     assert not offenders, f"AudienceProfile has no `weekday` field: {offenders}"
+
+
+# ── the quota day boundary ──────────────────────────────────────────────────
+
+
+def test_the_quota_day_follows_pacific_daylight_time():
+    """Google resets at midnight Pacific, which is a place, not an offset.
+
+    `timezone(timedelta(hours=-8))` is only right for the four months of PST. Through
+    PDT it put the boundary an hour early, so spend in the 07:00-08:00 UTC hour was
+    booked to the previous day — the "ledger disagrees with Google" failure the
+    module docstring warns about, live for two thirds of the year.
+    """
+    from datetime import UTC, datetime
+
+    from engine.quota import quota_day
+
+    # 07:30 UTC is 00:30 PDT on the 15th — the same day.
+    assert quota_day(datetime(2026, 7, 15, 7, 30, tzinfo=UTC)).isoformat() == "2026-07-15"
+    # The same clock time in winter is 23:30 PST on the 14th — the day before.
+    assert quota_day(datetime(2026, 1, 15, 7, 30, tzinfo=UTC)).isoformat() == "2026-01-14"
+
+
+def test_the_quota_day_is_not_a_fixed_offset():
+    """The guard against someone reinstating the simpler-looking version."""
+    from engine.quota import PACIFIC
+
+    assert getattr(PACIFIC, "key", None) == "America/Los_Angeles"
+
+
+def test_a_naive_moment_is_treated_as_utc():
+    from datetime import UTC, datetime
+
+    from engine.quota import quota_day
+
+    naive = datetime(2026, 7, 15, 7, 30)
+    assert quota_day(naive) == quota_day(naive.replace(tzinfo=UTC))

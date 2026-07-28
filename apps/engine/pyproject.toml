@@ -17,6 +17,11 @@ dependencies = [
     "httpx>=0.28",
     "anthropic>=0.40",
     "cryptography>=44.0",
+    # ZoneInfo("America/Los_Angeles") — the quota day boundary. The stdlib reads the
+    # system tz database, which slim containers and Windows do not ship, so without
+    # this the ledger raises ZoneInfoNotFoundError at import on exactly the hosts
+    # most likely to run it.
+    "tzdata>=2024.2",
     "loguru>=0.7",
     "sse-starlette>=2.1",
     "pillow>=11.0",
