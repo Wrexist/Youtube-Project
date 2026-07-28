@@ -79,6 +79,58 @@ function checkPins() {
   return stale;
 }
 
+/**
+ * Is there a stale nested install shadowing the root one?
+ *
+ * A clean `npm install` in this repo hoists everything and leaves no
+ * `apps/web/node_modules` at all. One that exists is left over from an earlier
+ * layout, and it wins over the root copy for anything inside `apps/web` — which
+ * is how a machine ended up running Next 16 in the dev server while
+ * `apps/web/node_modules/next` was a Next 10-era tree, dragging in webpack,
+ * styled-jsx and autoprefixer 9. `npm audit` reported 107 findings including a
+ * critical, against 14 on a clean tree, and none of the extras were real.
+ *
+ * Deleting the root `node_modules` does not touch these. That is the trap.
+ */
+function checkNested() {
+  const rootVersion = (name) => versionOf(name);
+  const shadowed = [];
+
+  for (const workspace of ["apps/web", "packages/contracts"]) {
+    const nested = join(ROOT, workspace, "node_modules");
+    if (!existsSync(nested)) continue;
+
+    for (const name of ["next", "react", "react-dom", "tailwindcss", "typescript"]) {
+      const path = join(nested, name, "package.json");
+      if (!existsSync(path)) continue;
+      const nestedVersion = JSON.parse(readFileSync(path, "utf8")).version;
+      const root = rootVersion(name);
+      if (root && nestedVersion !== root) {
+        shadowed.push(`    ${workspace}/node_modules/${name} is ${nestedVersion}, root is ${root}`);
+      }
+    }
+  }
+  return shadowed;
+}
+
+const shadowed = checkNested();
+if (shadowed.length) {
+  console.error("\n  A stale nested node_modules is shadowing the root install:\n");
+  console.error(shadowed.join("\n"));
+  console.error("\n  A clean install in this repo hoists everything and creates none of");
+  console.error("  these. Deleting the root node_modules does not remove them — delete");
+  console.error("  all of them together:\n");
+  if (process.platform === "win32") {
+    console.error("    Remove-Item -Recurse -Force node_modules, apps\\web\\node_modules, `");
+    console.error("      packages\\contracts\\node_modules -ErrorAction SilentlyContinue");
+    console.error("    npm install\n");
+  } else {
+    console.error("    rm -rf node_modules apps/*/node_modules packages/*/node_modules");
+    console.error("    npm install\n");
+  }
+  process.exit(1);
+}
+
 const missing = checkLoads();
 if (missing) {
   console.error(`\n  The CSS toolchain cannot load on ${platform}.`);

@@ -81,12 +81,16 @@ npm install --silent
 # broken, and the symptom is a 500 on the first page load naming a .node file
 # nobody recognises. Catch it here, where it can be fixed silently.
 if ! node scripts/check-web-toolchain.mjs >/dev/null 2>&1; then
-  note "CSS toolchain incomplete for this platform — reinstalling node_modules"
-  rm -rf node_modules
+  note "web dependencies are wrong for this platform — reinstalling from scratch"
+  # Every one of them, not just the root. A clean install here hoists everything
+  # and leaves no workspace node_modules; one that survives shadows the root copy
+  # for anything inside that workspace, and deleting only the root leaves it in
+  # place. That is how a machine ran Next 16 with a Next 10-era tree underneath it.
+  rm -rf node_modules apps/*/node_modules packages/*/node_modules
   npm install --silent
-  node scripts/check-web-toolchain.mjs || die "the CSS toolchain still will not load"
+  node scripts/check-web-toolchain.mjs || die "web dependencies are still wrong"
 fi
-note "CSS toolchain OK"
+note "web dependencies OK"
 
 # ── config ──────────────────────────────────────────────────────────────────
 

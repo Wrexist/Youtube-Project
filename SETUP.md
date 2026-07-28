@@ -224,12 +224,23 @@ generated the lockfile, so a `node_modules` installed before that was pinned has
 Windows binary. Fixed by reinstalling:
 
 ```powershell
-Remove-Item -Recurse -Force node_modules
+Remove-Item -Recurse -Force node_modules, apps\web\node_modules, `
+    packages\contracts\node_modules -ErrorAction SilentlyContinue
 npm install
 ```
 
-`npm run check:toolchain` confirms it, and `setup.ps1` / `setup.sh` now repair it
-automatically.
+**Delete all three, not just the root one.** A clean install here hoists everything
+and leaves no workspace `node_modules`; one left over from an older layout shadows
+the root copy for anything inside that workspace, and deleting only the root leaves
+it exactly where it was.
+
+That is worth watching for on its own: it is how a machine ended up running Next 16
+in the dev server with a Next 10-era tree underneath it — webpack, styled-jsx,
+autoprefixer 9 — and `npm audit` reporting 107 findings including a critical, where
+a clean tree reports 14. None of the extras were real.
+
+`npm run check:toolchain` detects both problems, and `setup.ps1` / `setup.sh` repair
+them automatically.
 
 **`The module 'apps' could not be loaded`** — PowerShell will not run an executable
 given as a relative path. Prefix it with `.\`:

@@ -105,13 +105,19 @@ if ($LASTEXITCODE -ne 0) { Die "npm install failed" }
 # rather than letting the browser be the one to report it.
 node scripts\check-web-toolchain.mjs *> $null
 if ($LASTEXITCODE -ne 0) {
-    Note "CSS toolchain incomplete for this platform - reinstalling node_modules"
-    Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
+    Note "web dependencies are wrong for this platform - reinstalling from scratch"
+    # Every one of them, not just the root. A clean install here hoists everything
+    # and leaves no workspace node_modules; one that survives shadows the root copy
+    # for anything inside that workspace, and deleting only the root leaves it in
+    # place. That is how a machine ran Next 16 with a Next 10-era tree underneath,
+    # and npm audit reported 107 findings against 14 on a clean tree.
+    Remove-Item -Recurse -Force node_modules, apps\web\node_modules, `
+        packages\contracts\node_modules -ErrorAction SilentlyContinue
     npm install --silent
     node scripts\check-web-toolchain.mjs
-    if ($LASTEXITCODE -ne 0) { Die "the CSS toolchain still will not load" }
+    if ($LASTEXITCODE -ne 0) { Die "web dependencies are still wrong" }
 } else {
-    Note "CSS toolchain OK"
+    Note "web dependencies OK"
 }
 
 # ── config ──────────────────────────────────────────────────────────────────
