@@ -117,7 +117,23 @@ print('  ' + asyncio.run(db.ensure_schema()))
 # ── verify ──────────────────────────────────────────────────────────────────
 
 step "Running the test suite"
-(cd apps/engine && STUDIO_PERSIST=false "$ROOT/$VENV_BIN/python" -m pytest -q 2>&1 | tail -3)
+# Captured, not piped straight through. `... | tail -3` makes the pipeline's exit
+# status tail's, which is always 0 — so a failing suite scrolled three lines past
+# and setup went on to print "Setup complete", the one thing this step exists to
+# stop. (The same bug was in setup.ps1.)
+set +e
+TEST_OUTPUT=$(cd apps/engine && STUDIO_PERSIST=false "$ROOT/$VENV_BIN/python" -m pytest -q 2>&1)
+TESTS=$?
+set -e
+echo "$TEST_OUTPUT" | tail -3 | sed 's/^/  /'
+if [ $TESTS -ne 0 ]; then
+  echo
+  echo "${bold}The test suite failed.${reset} Full output:"
+  echo "$TEST_OUTPUT" | sed 's/^/  /'
+  echo
+  echo "The engine is not working on this machine — please open an issue with the above."
+  exit 1
+fi
 
 step "Checking what is still missing"
 set +e
@@ -129,7 +145,18 @@ echo
 if [ $DOCTOR -eq 0 ]; then
   echo "${green}${bold}Setup complete and nothing is missing.${reset}"
 else
-  echo "${bold}Setup complete.${reset} The items marked ✗ above need an API key —"
-  echo "see ${bold}SETUP.md${reset} for where to get each one. Nothing else needs doing."
+  echo "${bold}Setup complete.${reset} The items marked ✗ above need an API key."
+fi
+echo
+# Setup used to end here, having installed everything and never said how to start
+# it. The next command is the whole point of having run this one.
+echo "${bold}Next:${reset}"
+echo "  ${bold}npm start${reset}"
+echo
+if [ $DOCTOR -ne 0 ]; then
+  echo "  then open ${bold}http://localhost:3000/setup${reset} and paste your keys in."
+  echo "  The screen says what each one unlocks and links to where to get it."
+else
+  echo "  then open ${bold}http://localhost:3000${reset} and type a topic."
 fi
 echo

@@ -52,7 +52,18 @@ services:
       STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@postgres:5432/studio
       STUDIO_REDIS_URL: redis://redis:6379/0
       STUDIO_STORAGE_ROOT: /data
-    volumes: [studio-storage:/data]
+    volumes:
+      - studio-storage:/data
+      # The Setup screen writes credentials to `.env`, and the engine's WORKDIR is
+      # /app. Without this bind mount that write lands inside the container and is
+      # gone on the next `docker compose up` — a save that reports success and
+      # silently does not survive a restart. `env_file` above only *reads* the host
+      # file at start; it does not make it writable from inside.
+      #
+      # Run `scripts/setup.sh` before `--profile full`: it creates `.env`, and
+      # Docker bind-mounting a path that does not exist creates a *directory*
+      # there, at which point `env_file` fails and the file is awkward to undo.
+      - ./.env:/app/.env
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}

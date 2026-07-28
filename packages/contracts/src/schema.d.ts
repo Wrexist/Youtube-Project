@@ -758,6 +758,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Status
+         * @description Everything the setup screen needs, and no secret material.
+         */
+        get: operations["status_v1_setup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save Keys
+         * @description Write credentials to `.env` and make them live in this process.
+         *
+         *     Returns the new status rather than an acknowledgement, so the screen shows
+         *     what is actually in force instead of what it hoped it had set.
+         */
+        put: operations["save_keys_v1_setup_keys_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workflows/{name}": {
         parameters: {
             query?: never;
@@ -888,6 +931,32 @@ export interface components {
             /** Provider */
             provider: string;
         };
+        /**
+         * CredentialStatus
+         * @description One credential, as the setup screen sees it. Never carries the value.
+         */
+        CredentialStatus: {
+            /** Configured */
+            configured: boolean;
+            /** Effort */
+            effort: string;
+            /** Env */
+            env: string;
+            /** Group */
+            group: string;
+            /** Label */
+            label: string;
+            /** Required */
+            required: boolean;
+            /** Tail */
+            tail: string;
+            /** Unlocks */
+            unlocks: string;
+            /** Url */
+            url: string;
+            /** Without It */
+            without_it: string;
+        };
         /** EditRequest */
         EditRequest: {
             /** Stage */
@@ -960,6 +1029,20 @@ export interface components {
             updated_at?: string | null;
             /** Workflow */
             workflow: string;
+        };
+        /**
+         * KeyUpdate
+         * @description A save. Only the names present here are touched.
+         *
+         *     `dict[str, str]` rather than a field per credential so that adding one to
+         *     `CREDENTIALS` needs no change here — the allowlist is `CREDENTIALS` itself,
+         *     checked at write time, which keeps the two from drifting apart.
+         */
+        KeyUpdate: {
+            /** Values */
+            values?: {
+                [key: string]: string;
+            };
         };
         /** LaunchRequest */
         LaunchRequest: {
@@ -1103,6 +1186,25 @@ export interface components {
             at: string;
             /** Video Id */
             video_id: string;
+        };
+        /** SetupStatus */
+        SetupStatus: {
+            /** Can Connect */
+            can_connect: boolean;
+            /** Can Publish */
+            can_publish: boolean;
+            /** Can Render */
+            can_render: boolean;
+            /** Channels */
+            channels: string[];
+            /** Credentials */
+            credentials: components["schemas"]["CredentialStatus"][];
+            /** Env Path */
+            env_path: string;
+            /** Missing Required */
+            missing_required: string[];
+            /** Worker Running */
+            worker_running: boolean;
         };
         /** TaskRoute */
         TaskRoute: {
@@ -2261,6 +2363,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuotaResponse"];
+                };
+            };
+        };
+    };
+    status_v1_setup_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatus"];
+                };
+            };
+        };
+    };
+    save_keys_v1_setup_keys_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

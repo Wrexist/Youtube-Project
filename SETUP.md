@@ -5,6 +5,21 @@ which is **API keys and one Google form**. Nothing here is busywork — each ite
 exists because it needs an account only you can hold, or because Google provides
 no API for it.
 
+## The short version
+
+```bash
+./scripts/setup.sh      # or: powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+npm start
+```
+
+Then open **<http://localhost:3000/setup>** and paste your keys into the screen.
+It says what each one unlocks, links to where to get it, and turns green when
+you have enough to make a video. You do not need to edit a file, and you do not
+need to restart anything — a save takes effect immediately.
+
+The rest of this page is the same information at length, for when something goes
+wrong or you would rather edit `.env` by hand. **You can stop reading here.**
+
 ---
 
 ## First: one command
@@ -58,7 +73,14 @@ action. Exit code is non-zero only if something genuinely blocking is wrong.
 ## Then: two keys, five minutes
 
 These two are the only things standing between a fresh clone and a rendered
-video. Put both in `.env`.
+video.
+
+**The easy way:** `npm start`, then <http://localhost:3000/setup>. Paste them in
+and press Save. The screen writes `.env` for you, keeps your comments, and shows
+which keys are already set without ever displaying one back.
+
+**By hand:** put both in `.env` at the repository root. The names below are the
+ones the engine reads.
 
 ### 1. An LLM key — 2 minutes
 
@@ -156,8 +178,27 @@ and country. Name, handle, avatar and banner stay manual permanently.
 
 ## Running it
 
-Two processes, so **two terminals**, both from the repo root. Neither exits — that
-is correct; leave them running.
+```bash
+npm start
+```
+
+One command, both halves, on every platform. It prints where each one is
+listening, labels their output so you can tell an engine traceback from a Next
+one, and takes both down together on Ctrl-C — a web app talking to a dead engine
+quietly falls back to demo data and looks like it is working, which is worse than
+stopping.
+
+Then open **<http://localhost:3000>**.
+
+If the ports are busy it says so and suggests different ones rather than letting
+uvicorn print `[Errno 98] Address already in use`. The usual cause is that Studio
+is already running in another terminal.
+
+<details>
+<summary>Starting the two halves separately</summary>
+
+Useful when you want to restart one without the other, or attach a debugger.
+Two terminals, both from the repo root. Neither exits — that is correct.
 
 **macOS / Linux**
 
@@ -173,7 +214,7 @@ npm run dev
 .\apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080
 ```
 
-Then open **<http://localhost:3000>**.
+</details>
 
 > **The leading `.\` is required.** PowerShell will not run an executable given as a
 > relative path without it — it treats a bare `apps\...` as a command name to look

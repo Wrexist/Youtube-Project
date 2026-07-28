@@ -196,14 +196,74 @@ def test_settings_module_has_no_config_toml_lookup():
     assert "config.app.get(" not in source
 
 
+#: Writing to `os.environ` — assignment, `pop`, `setdefault`. Stripped before the
+#: read check below, because the rule is about where configuration is *read* from.
+_ENV_WRITE = re.compile(
+    r"os\.environ\[[^\]]+\]\s*=|os\.environ\.(pop|setdefault|update)\(",
+)
+
+#: The one module allowed to write. `api/setup.py` saves credentials to `.env`, and
+#: `os.environ` takes precedence over the dotenv in pydantic-settings — so without
+#: also updating the process environment, a variable that was already exported keeps
+#: its old value and Save reports success while changing nothing until a full
+#: restart. That is the opposite of drift: it is what makes Settings correct.
+_MAY_WRITE_ENV = {"api/setup.py"}
+
+
+def _code_only(source: str) -> str:
+    """The source with comments and string literals removed.
+
+    Without this the guard fires on the prose that documents it: the comment in
+    `api/setup.py` explaining *why* `os.environ` has to be written is itself a
+    match for `os.environ`. A rule that cannot be explained in a comment without
+    breaking is a rule people work around silently.
+    """
+    import io
+    import tokenize
+
+    kept = []
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type not in (tokenize.COMMENT, tokenize.STRING):
+                kept.append(token.string)
+    except (tokenize.TokenError, IndentationError):  # pragma: no cover
+        return source  # unparseable: fall back to checking everything
+    return " ".join(kept)
+
+
 def test_nothing_reads_os_environ_directly():
-    """Settings is the single source; a stray getenv is how drift starts."""
-    offenders = [
+    """Settings is the single source; a stray getenv is how drift starts.
+
+    Reads only. A module that *writes* the environment is not competing with
+    Settings for the answer, it is updating the thing Settings reads — which is
+    exactly what saving a credential has to do to take effect in this process.
+    """
+    offenders = []
+    for path in ENGINE.rglob("*.py"):
+        if path.name == "settings.py":
+            continue
+        source = _code_only(path.read_text())
+        rel = path.relative_to(ENGINE).as_posix()
+        if rel in _MAY_WRITE_ENV:
+            source = _ENV_WRITE.sub("", source)
+        if re.search(r"os\.environ|os\.getenv", source):
+            offenders.append(rel)
+    assert not offenders, f"reads the environment directly: {offenders}"
+
+
+def test_only_the_setup_endpoint_writes_the_environment():
+    """The exemption above must stay one module wide.
+
+    Anything else mutating `os.environ` is reconfiguring the process behind
+    Settings' back, which is the drift the rule exists to stop — and it would be
+    invisible, because the read check would keep passing.
+    """
+    writers = [
         p.relative_to(ENGINE).as_posix()
         for p in ENGINE.rglob("*.py")
-        if p.name != "settings.py" and re.search(r"os\.environ|os\.getenv", p.read_text())
+        if p.name != "settings.py" and _ENV_WRITE.search(_code_only(p.read_text()))
     ]
-    assert not offenders, f"reads the environment directly: {offenders}"
+    assert set(writers) <= _MAY_WRITE_ENV, f"unexpected environment writer: {writers}"
 
 
 def test_no_secret_is_logged():

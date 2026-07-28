@@ -17,9 +17,11 @@ import { revalidatePath } from "next/cache";
 
 import {
   EngineError,
+  beginYouTubeAuth,
   cancelJob,
   createJob,
   publishJob,
+  saveKeys,
   applySchedulePlan,
   editStage,
   rerunStage,
@@ -264,6 +266,65 @@ export async function applyPlanToCalendar(
         error instanceof EngineError
           ? error.message
           : "Could not reach the engine — the plan was not applied.",
+    };
+  }
+}
+
+// ── setup ───────────────────────────────────────────────────────────────────
+
+/**
+ * Write credentials to the engine's `.env`.
+ *
+ * A Server Action rather than a browser fetch specifically because of what it
+ * carries. The keys never leave the origin they were typed into: the browser
+ * posts them to Next, Next posts them to the engine over the internal network,
+ * and no API key is ever present in a URL, in client-side JavaScript, or in
+ * anything CORS would let another origin observe.
+ *
+ * Only the names present in `values` are touched — the form sends the fields
+ * someone typed into and nothing else, so saving a half-filled form cannot blank
+ * the keys it never displayed.
+ */
+export async function saveCredentials(
+  values: Record<string, string>,
+): Promise<ActionResult<{ saved: string[] }>> {
+  try {
+    await saveKeys(values);
+    revalidatePath("/setup");
+    // Everything downstream reads settings: whether Create can start a job,
+    // whether the Models screen can reach a provider, whether Publish is offered.
+    revalidatePath("/", "layout");
+    return { ok: true, data: { saved: Object.keys(values) } };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — nothing was saved.",
+    };
+  }
+}
+
+/**
+ * Ask the engine for Google's consent URL.
+ *
+ * Returned to the client to navigate to, rather than redirected to from here.
+ * A `redirect()` out of a Server Action is a server-side fetch of Google's
+ * consent page, which authorises nobody; the person has to make that request
+ * themselves, in their own browser, signed in as themselves.
+ */
+export async function connectYouTube(): Promise<ActionResult<{ url: string }>> {
+  try {
+    const data = await beginYouTubeAuth();
+    return { ok: true, data };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — YouTube was not connected.",
     };
   }
 }

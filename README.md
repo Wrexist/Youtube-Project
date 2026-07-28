@@ -14,18 +14,22 @@ Idea → researched script → narrated, subtitled, rendered video → grounded 
 ## Run it
 
 ```bash
-./scripts/setup.sh
+./scripts/setup.sh      # or on Windows: powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+npm start
 ```
 
-That is the whole setup: venv, both toolchains, `.env`, database schema, tests.
-**No Docker needed** — the engine defaults to SQLite and runs renders in-process.
-It finishes by listing anything still missing, which will be two API keys.
+Then open **<http://localhost:3000/setup>** and paste in your keys. The screen
+says what each one unlocks, links to where to get it, and turns green when you
+have enough to make a video — no file to edit and nothing to restart.
+
+`setup.sh` does the whole install: venv, both toolchains, `.env`, database schema,
+tests. **No Docker needed** — the engine defaults to SQLite and runs renders
+in-process. `npm start` runs both halves and takes them down together.
+
+Two keys is the whole list: one LLM provider, one stock-footage provider. Both are
+free to obtain and together take about five minutes. Publishing to YouTube needs a
+Google OAuth client on top of that; everything up to a finished MP4 does not.
 See [SETUP.md](SETUP.md).
-
-```bash
-npm run dev                                                              # :3000
-apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
-```
 
 Check what is configured at any time:
 

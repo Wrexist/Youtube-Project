@@ -144,7 +144,15 @@ async def finish_auth(code: str = Query(...), state: str = Query(...)):
 
     CHANNELS["default"] = creds
     await repository.save_channel("default", creds)
-    return RedirectResponse("http://localhost:3000/calendar?connected=1")
+    # Back to the screen that sent them, not to the calendar. Connecting a channel
+    # is the last step of setup, and landing on an unrelated screen left someone
+    # with no confirmation that the thing they just did had worked.
+    #
+    # The origin is configurable because the hardcoded localhost:3000 was wrong for
+    # every install that is not the developer's laptop: behind docker compose, on a
+    # LAN address, or on any port but 3000, Google returned the operator to a page
+    # that does not exist and the connection looked like it had failed.
+    return RedirectResponse(f"{get_settings().web_url.rstrip('/')}/setup?connected=1")
 
 
 @router.get("/channels")

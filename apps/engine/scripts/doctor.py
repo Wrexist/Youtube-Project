@@ -186,7 +186,8 @@ def check_keys() -> None:
         fail(
             "LLM key",
             "none set — the script and SEO stages cannot run",
-            "Put ANTHROPIC_API_KEY in .env  (console.anthropic.com — 2 min), "
+            "Easiest: `npm start`, then paste it at http://localhost:3000/setup. "
+            "Or put ANTHROPIC_API_KEY in .env (console.anthropic.com — 2 min), "
             "or route every task to Ollama on the Models screen.",
         )
 
@@ -197,8 +198,9 @@ def check_keys() -> None:
         fail(
             "Stock footage",
             "no key — MaterialsStage raises, so no video renders",
-            "PEXELS_API_KEY from pexels.com/api (free, instant). Add "
-            "PIXABAY_API_KEY too so one provider failing is not fatal.",
+            "PEXELS_API_KEY from pexels.com/api (free, instant) — paste it at "
+            "http://localhost:3000/setup. Add PIXABAY_API_KEY too so one "
+            "provider failing is not fatal.",
         )
 
     if s.google_client_id and s.google_client_secret:
@@ -207,7 +209,9 @@ def check_keys() -> None:
         warn(
             "Google OAuth",
             "not configured — everything works except publishing",
-            "See SETUP.md step 3. Needs a Google Cloud project; allow ~15 min.",
+            "See SETUP.md step 3, then paste the client ID and secret at "
+            "http://localhost:3000/setup and press Connect YouTube. Needs a "
+            "Google Cloud project; allow ~15 min.",
         )
 
     _check_channel_key(s)

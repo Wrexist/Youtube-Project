@@ -195,6 +195,65 @@
         "title": "CatalogueEntry",
         "type": "object"
       },
+      "CredentialStatus": {
+        "description": "One credential, as the setup screen sees it. Never carries the value.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "effort": {
+            "title": "Effort",
+            "type": "string"
+          },
+          "env": {
+            "title": "Env",
+            "type": "string"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "tail": {
+            "title": "Tail",
+            "type": "string"
+          },
+          "unlocks": {
+            "title": "Unlocks",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "without_it": {
+            "title": "Without It",
+            "type": "string"
+          }
+        },
+        "required": [
+          "env",
+          "label",
+          "unlocks",
+          "without_it",
+          "url",
+          "effort",
+          "group",
+          "required",
+          "configured",
+          "tail"
+        ],
+        "title": "CredentialStatus",
+        "type": "object"
+      },
       "EditRequest": {
         "properties": {
           "stage": {
@@ -385,6 +444,20 @@
           "stages_total"
         ],
         "title": "JobSummary",
+        "type": "object"
+      },
+      "KeyUpdate": {
+        "description": "A save. Only the names present here are touched.\n\n`dict[str, str]` rather than a field per credential so that adding one to\n`CREDENTIALS` needs no change here \u2014 the allowlist is `CREDENTIALS` itself,\nchecked at write time, which keeps the two from drifting apart.",
+        "properties": {
+          "values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "title": "KeyUpdate",
         "type": "object"
       },
       "LaunchRequest": {
@@ -650,6 +723,63 @@
           "at"
         ],
         "title": "ScheduledVideo",
+        "type": "object"
+      },
+      "SetupStatus": {
+        "properties": {
+          "can_connect": {
+            "title": "Can Connect",
+            "type": "boolean"
+          },
+          "can_publish": {
+            "title": "Can Publish",
+            "type": "boolean"
+          },
+          "can_render": {
+            "title": "Can Render",
+            "type": "boolean"
+          },
+          "channels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "credentials": {
+            "items": {
+              "$ref": "#/components/schemas/CredentialStatus"
+            },
+            "title": "Credentials",
+            "type": "array"
+          },
+          "env_path": {
+            "title": "Env Path",
+            "type": "string"
+          },
+          "missing_required": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Required",
+            "type": "array"
+          },
+          "worker_running": {
+            "title": "Worker Running",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "credentials",
+          "can_render",
+          "can_publish",
+          "can_connect",
+          "channels",
+          "missing_required",
+          "env_path",
+          "worker_running"
+        ],
+        "title": "SetupStatus",
         "type": "object"
       },
       "TaskRoute": {
@@ -2170,6 +2300,70 @@
         "summary": "Quota",
         "tags": [
           "publishing"
+        ]
+      }
+    },
+    "/v1/setup": {
+      "get": {
+        "description": "Everything the setup screen needs, and no secret material.",
+        "operationId": "status_v1_setup_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Status",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/v1/setup/keys": {
+      "put": {
+        "description": "Write credentials to `.env` and make them live in this process.\n\nReturns the new status rather than an acknowledgement, so the screen shows\nwhat is actually in force instead of what it hoped it had set.",
+        "operationId": "save_keys_v1_setup_keys_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Keys",
+        "tags": [
+          "setup"
         ]
       }
     },

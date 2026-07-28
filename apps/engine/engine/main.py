@@ -26,6 +26,7 @@ from engine.api.channels import router as channels_router
 from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
+from engine.api.setup import router as setup_router
 from engine.providers import youtube
 from engine.quota import ledger
 from engine.settings import get_settings
@@ -70,6 +71,7 @@ app.include_router(publishing_router)
 app.include_router(insights_router)
 app.include_router(channels_router)
 app.include_router(models_router)
+app.include_router(setup_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],

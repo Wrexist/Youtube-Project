@@ -50,6 +50,11 @@ export type JobSummary = components["schemas"]["JobSummary"];
 export type Jobs = Ok<paths["/v1/jobs"]["get"]>;
 export type ChannelLimits = Ok<paths["/v1/channels/limits"]["get"]>;
 
+/** What the Setup screen reads. Reports whether each credential is set, never
+ *  what it is — the engine has no endpoint that returns a key's value. */
+export type SetupStatus = Ok<paths["/v1/setup"]["get"]>;
+export type CredentialStatus = components["schemas"]["CredentialStatus"];
+
 // ── things FastAPI types as `object` ────────────────────────────────────────
 //
 // Every one of these endpoints is declared `-> dict` in the engine, so the schema

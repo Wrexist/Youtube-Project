@@ -174,11 +174,20 @@ if ($Doctor -eq 0) {
 }
 
 Write-Host ""
-Write-Host "To run it, in two terminals:"
-Write-Host "  npm run dev" -ForegroundColor Cyan
-# The leading .\ is required. PowerShell will not run an executable given as a
-# relative path without it — a bare `apps\...` is looked up as a command name and
-# fails with "The module 'apps' could not be loaded".
-Write-Host "  .\apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080" -ForegroundColor Cyan
-Write-Host "Then open http://localhost:3000"
+Write-Host "Next:"
+Write-Host "  npm start" -ForegroundColor Cyan
+Write-Host ""
+if ($Doctor -eq 0) {
+    Write-Host "  then open http://localhost:3000 and type a topic."
+} else {
+    Write-Host "  then open http://localhost:3000/setup and paste your keys in."
+    Write-Host "  The screen says what each one unlocks and links to where to get it."
+}
+Write-Host ""
+# `npm start` runs both halves. Kept here for when you want to restart one on its
+# own — and the leading .\ is required, because PowerShell looks a bare `apps\...`
+# up as a command name and fails with "The module 'apps' could not be loaded".
+Write-Host "To run the two halves separately instead:" -ForegroundColor DarkGray
+Write-Host "  npm run dev" -ForegroundColor DarkGray
+Write-Host "  .\apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080" -ForegroundColor DarkGray
 Write-Host ""

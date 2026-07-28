@@ -108,6 +108,12 @@ class Settings(BaseSettings):
         default="http://localhost:8080/v1/auth/google/callback",
         validation_alias="GOOGLE_REDIRECT_URI",
     )
+    # Where the web app lives, from the browser's point of view. Only used to send
+    # someone back to the Setup screen after Google's consent page. This was
+    # hardcoded to localhost:3000 in the OAuth callback, so on any install that is
+    # not the developer's laptop Google returned the operator to a dead URL and a
+    # channel that had in fact connected looked like it had failed.
+    web_url: str = "http://localhost:3000"
 
     # Guardrails. A runaway workflow is a billing incident.
     max_cost_per_video_usd: float = Field(default=8.0, gt=0)

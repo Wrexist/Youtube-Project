@@ -29,6 +29,7 @@ import type {
   Models,
   PublishRequest,
   Quota,
+  SetupStatus,
   WorkflowGraph,
 } from "@studio/contracts";
 
@@ -256,3 +257,30 @@ export const applySchedulePlan = (assignments: { video_id: string; at: string }[
 
 /** Where a browser subscribes for live progress. */
 export const eventsUrl = (id: string) => `${BASE}/v1/jobs/${id}/events`;
+
+// ── setup ───────────────────────────────────────────────────────────────────
+//
+// The screen that turns a fresh clone into a working install. Everything here is
+// deliberately value-free in one direction: `getSetup` never returns a key, and
+// `saveKeys` never receives one it did not just take from a form field.
+
+export const getSetup = () => get<SetupStatus>("/v1/setup");
+
+/** Save credentials. Only the names passed are touched; absent means unchanged. */
+export const saveKeys = (values: Record<string, string>) =>
+  put<SetupStatus>("/v1/setup/keys", { values });
+
+/**
+ * Begin the YouTube OAuth round trip.
+ *
+ * Returns Google's consent URL rather than redirecting, because the redirect has
+ * to happen in the browser: a Server Action following it would authorise the
+ * server, not the person sitting in front of it.
+ *
+ * Goes through `send` rather than `get`, even though it is a GET: `get` swallows
+ * every failure into `null` so a caller can fall back to demo data, and the whole
+ * value of this call when it fails is the 409's message, which names the missing
+ * variable. Falling back to nothing here would turn a fixable misconfiguration
+ * into a button that does not work.
+ */
+export const beginYouTubeAuth = () => send<{ url: string }>("GET", "/v1/auth/google");
