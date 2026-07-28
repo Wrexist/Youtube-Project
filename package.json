@@ -6,7 +6,9 @@
     "packages/*"
   ],
   "scripts": {
+    "predev": "node scripts/check-web-toolchain.mjs",
     "dev": "npm run dev --workspace=@studio/web",
+    "prebuild": "node scripts/check-web-toolchain.mjs",
     "build": "npm run build --workspace=@studio/web",
     "lint": "npm run lint --workspace=@studio/web",
     "typecheck": "npm run typecheck --workspace=@studio/web",
