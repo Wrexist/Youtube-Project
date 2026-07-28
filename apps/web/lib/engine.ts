@@ -191,5 +191,19 @@ export const setAllRoutes = (model: string) =>
 
 export const resetRoutes = () => post<unknown>("/v1/models/route/reset");
 
+/**
+ * Re-run one stage and everything below it.
+ *
+ * Distinct from an edit, which replaces a value and keeps the stage done. The
+ * Create screen's "Re-run from here" means this, and its caption already promised
+ * it — the button called `console.log`.
+ */
+export const rerunStage = (id: string, stage: string) =>
+  post<{ invalidated: string[]; status: string }>(`/v1/jobs/${id}/rerun`, { stage });
+
+/** Replace a stage's value, keeping it done and regenerating what depended on it. */
+export const editStage = (id: string, stage: string, value: unknown) =>
+  post<{ invalidated: string[]; status: string }>(`/v1/jobs/${id}/edit`, { stage, value });
+
 /** Where a browser subscribes for live progress. */
 export const eventsUrl = (id: string) => `${BASE}/v1/jobs/${id}/events`;

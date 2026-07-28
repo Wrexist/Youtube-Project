@@ -561,6 +561,19 @@
         "title": "QuotaResponse",
         "type": "object"
       },
+      "RerunRequest": {
+        "properties": {
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage"
+        ],
+        "title": "RerunRequest",
+        "type": "object"
+      },
       "RouteUpdate": {
         "properties": {
           "model": {
@@ -1766,6 +1779,58 @@
           }
         },
         "summary": "Publish Job"
+      }
+    },
+    "/v1/jobs/{job_id}/rerun": {
+      "post": {
+        "description": "Re-run one stage and everything downstream of it.\n\nDistinct from `/edit`, which *replaces* a stage's value and keeps it DONE. This\ndiscards the value and regenerates \u2014 which is what the Create screen's \"Re-run\nfrom here\" means, and what its own caption promises: \"Everything below this\nstage regenerates. Nothing above it is touched.\"\n\nThat control existed and called `console.log`. It could not call `/edit`,\nbecause doing so needs the stage's current value and the API never gives the\nclient one \u2014 `GET /v1/jobs/{id}` returns a `summary` string, not the object.",
+        "operationId": "rerun_stage_v1_jobs__job_id__rerun_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rerun Stage V1 Jobs  Job Id  Rerun Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rerun Stage"
       }
     },
     "/v1/models": {

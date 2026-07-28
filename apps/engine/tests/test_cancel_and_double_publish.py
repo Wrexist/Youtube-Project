@@ -207,3 +207,75 @@ def test_severity_survives_whatever_the_stage_holds(critique, expected):
     from engine.main import _severity_of
 
     assert _severity_of(critique) == expected
+
+
+# ── re-run from a stage ─────────────────────────────────────────────────────
+#
+# The Create screen's "Re-run from here" called `console.log`. It could not call
+# `/edit`: that replaces a stage's *value* and needs the current one, which the API
+# never hands the client — `GET /v1/jobs/{id}` returns a summary string, not the
+# object. So the control needed an endpoint of its own.
+
+
+def _client():
+    from fastapi.testclient import TestClient
+
+    from engine import main
+
+    return TestClient(main.app), main
+
+
+def _started(client, main):
+    main.JOBS.clear()
+    job_id = client.post("/v1/jobs", json={"topic": "a topic that is long enough"}).json()["job_id"]
+    return job_id, main.JOBS[job_id]
+
+
+def test_rerunning_a_live_job_is_refused():
+    """Two runs of the same job at once would interleave writes to one state map."""
+    client, main = _client()
+    job_id, job = _started(client, main)
+    job["status"] = "running"
+    response = client.post(f"/v1/jobs/{job_id}/rerun", json={"stage": "grounding"})
+    assert response.status_code == 409
+
+
+def test_rerunning_an_unknown_stage_is_a_404_not_a_500():
+    client, main = _client()
+    job_id, job = _started(client, main)
+    job["status"] = "failed"
+    assert client.post(f"/v1/jobs/{job_id}/rerun", json={"stage": "nope"}).status_code == 404
+
+
+def test_rerunning_a_stage_that_never_ran_is_refused():
+    """Nothing to re-run, and starting mid-graph would skip its dependencies."""
+    client, main = _client()
+    job_id, job = _started(client, main)
+    job["status"] = "failed"
+    response = client.post(f"/v1/jobs/{job_id}/rerun", json={"stage": "render"})
+    assert response.status_code == 409
+
+
+def test_a_rerun_invalidates_the_stage_and_everything_below_it():
+    """The control's own caption: everything below regenerates, nothing above is
+    touched. The stage itself is included — that is what "re-run" means, and it is
+    what distinguishes this from /edit."""
+    from engine.workflows.base import Provenance, StageOutput, StageStatus
+
+    client, main = _client()
+    job_id, job = _started(client, main)
+    job["status"] = "failed"
+
+    for name in ("grounding", "research", "angle"):
+        state = job["states"][name]
+        state.status = StageStatus.DONE
+        state.output = StageOutput(value="x", provenance=Provenance(model="m"))
+
+    response = client.post(f"/v1/jobs/{job_id}/rerun", json={"stage": "research"})
+    assert response.status_code == 200
+
+    invalidated = response.json()["invalidated"]
+    assert "research" in invalidated, "the stage itself must re-run"
+    assert "angle" in invalidated, "downstream must re-run"
+    assert "grounding" not in invalidated, "upstream must be left alone"
+    assert job["states"]["grounding"].status is StageStatus.DONE

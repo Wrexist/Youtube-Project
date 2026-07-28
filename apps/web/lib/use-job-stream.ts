@@ -98,7 +98,20 @@ function reduce(state: JobStream, action: Action): JobStream {
   return { ...state, stages };
 }
 
-export function useJobStream(jobId: string | null, initial: Stage[] = []): JobStream {
+/**
+ * `attempt` exists so a dead stream can be reopened.
+ *
+ * The effect below depends on `[jobId]` alone, so once EventSource gave up there
+ * was no way back short of a full reload — the pipeline froze on its skeleton with
+ * Publish permanently disabled. Bumping this re-runs the effect and rebuilds the
+ * connection; the engine replays the whole event log on connect, so nothing is
+ * lost by doing so.
+ */
+export function useJobStream(
+  jobId: string | null,
+  initial: Stage[] = [],
+  attempt = 0,
+): JobStream {
   const [state, dispatch] = useReducer(reduce, {
     stages: initial,
     status: "connecting",
@@ -168,7 +181,7 @@ export function useJobStream(jobId: string | null, initial: Stage[] = []): JobSt
       cancelled = true;
       source?.close();
     };
-  }, [jobId]);
+  }, [jobId, attempt]);
 
   return state;
 }

@@ -552,6 +552,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rerun Stage
+         * @description Re-run one stage and everything downstream of it.
+         *
+         *     Distinct from `/edit`, which *replaces* a stage's value and keeps it DONE. This
+         *     discards the value and regenerates — which is what the Create screen's "Re-run
+         *     from here" means, and what its own caption promises: "Everything below this
+         *     stage regenerates. Nothing above it is touched."
+         *
+         *     That control existed and called `console.log`. It could not call `/edit`,
+         *     because doing so needs the stage's current value and the API never gives the
+         *     client one — `GET /v1/jobs/{id}` returns a `summary` string, not the object.
+         */
+        post: operations["rerun_stage_v1_jobs__job_id__rerun_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/models": {
         parameters: {
             query?: never;
@@ -1033,6 +1062,11 @@ export interface components {
             spent: number;
             /** Uploads Left */
             uploads_left: number;
+        };
+        /** RerunRequest */
+        RerunRequest: {
+            /** Stage */
+            stage: string;
         };
         /** RouteUpdate */
         RouteUpdate: {
@@ -1901,6 +1935,43 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rerun_stage_v1_jobs__job_id__rerun_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RerunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

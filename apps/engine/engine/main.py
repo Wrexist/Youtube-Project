@@ -647,6 +647,46 @@ async def edit_stage(job_id: str, body: EditRequest) -> dict:
     return {"invalidated": invalidated, "status": "running"}
 
 
+class RerunRequest(BaseModel):
+    stage: str
+
+
+@app.post("/v1/jobs/{job_id}/rerun")
+async def rerun_stage(job_id: str, body: RerunRequest) -> dict:
+    """Re-run one stage and everything downstream of it.
+
+    Distinct from `/edit`, which *replaces* a stage's value and keeps it DONE. This
+    discards the value and regenerates — which is what the Create screen's "Re-run
+    from here" means, and what its own caption promises: "Everything below this
+    stage regenerates. Nothing above it is touched."
+
+    That control existed and called `console.log`. It could not call `/edit`,
+    because doing so needs the stage's current value and the API never gives the
+    client one — `GET /v1/jobs/{id}` returns a `summary` string, not the object.
+    """
+    job = _require(job_id)
+    if job["status"] == "running":
+        raise HTTPException(409, "job is still running; wait or cancel first")
+
+    states = job["states"]
+    if body.stage not in states:
+        raise HTTPException(404, f"unknown stage '{body.stage}'")
+    if states[body.stage].status is StageStatus.PENDING:
+        raise HTTPException(409, f"stage '{body.stage}' has not run yet")
+
+    invalidated = [body.stage, *job["workflow"].dependents_of(body.stage)]
+    for name in invalidated:
+        states[name].status = StageStatus.STALE
+        states[name].output = None
+        states[name].error = None
+
+    job["status"] = "running"
+    job["error"] = None
+    await _persist(job)
+    await _dispatch(job_id, start_from=body.stage)
+    return {"invalidated": invalidated, "status": "running"}
+
+
 @app.post("/v1/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str) -> dict:
     """Stop a job and tell everyone watching.

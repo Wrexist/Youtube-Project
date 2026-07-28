@@ -20,6 +20,8 @@ import {
   cancelJob,
   createJob,
   publishJob,
+  editStage,
+  rerunStage,
   resetRoutes,
   setAllRoutes,
   setRoute,
@@ -152,6 +154,52 @@ export async function restoreDefaultRoutes(): Promise<ActionResult> {
         error instanceof EngineError
           ? error.message
           : "Could not reach the engine — nothing was changed.",
+    };
+  }
+}
+
+
+// ── stage re-runs ───────────────────────────────────────────────────────────
+
+/**
+ * Re-run a stage and everything downstream. The Create screen's "Re-run from
+ * here", which until now was a `console.log`.
+ *
+ * The engine 409s while a job is running, so the caller gates the control on a
+ * terminal status — but the check is also made there, because a UI gate is a
+ * courtesy and not a guarantee.
+ */
+export async function rerunFrom(jobId: string, stage: string): Promise<ActionResult> {
+  try {
+    await rerunStage(jobId, stage);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — nothing was re-run.",
+    };
+  }
+}
+
+/** Replace a stage's value and regenerate what depended on it. */
+export async function editStageValue(
+  jobId: string,
+  stage: string,
+  value: unknown,
+): Promise<ActionResult> {
+  try {
+    await editStage(jobId, stage, value);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — the edit was not applied.",
     };
   }
 }

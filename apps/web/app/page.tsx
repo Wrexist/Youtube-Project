@@ -6,7 +6,7 @@ import { Pipeline } from "@/components/pipeline";
 import { useJobStream } from "@/lib/use-job-stream";
 import { DEMO_JOB } from "@/lib/demo";
 import type { Stage } from "@/lib/types";
-import { publish, startJob } from "./actions";
+import { publish, rerunFrom, startJob } from "./actions";
 
 /** Create — the screen that matters.
  *
@@ -29,8 +29,12 @@ export default function CreatePage() {
   const [blockers, setBlockers] = useState<{ code: string; message: string }[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  /** Bumped by Reconnect; rebuilding a dead EventSource needs a dependency change. */
+  const [attempt, setAttempt] = useState(0);
+  /** Which variant is picked per stage, so the choice reaches the publish call. */
+  const [chosen, setChosen] = useState<Record<string, number>>({});
 
-  const stream = useJobStream(jobId, emptyStages());
+  const stream = useJobStream(jobId, emptyStages(), attempt);
   const stages: Stage[] = demo ? DEMO_JOB.stages : stream.stages;
   const cost = demo ? DEMO_JOB.cost_usd : stream.cost_usd;
 
@@ -55,7 +59,13 @@ export default function CreatePage() {
     setBlockers([]);
     setNotice(null);
     startTransition(async () => {
-      const result = await publish(jobId);
+      const result = await publish(jobId, {
+        // The variant picker used to keep its selection in its own useState and
+        // hand it to nobody, so choosing a different title changed the highlight
+        // and published the first one anyway.
+        chosen_title_index: chosen.titles ?? 0,
+        chosen_thumbnail_index: chosen.thumbnail ?? 0,
+      });
       if (result.ok) {
         setNotice("Publishing — the upload has started.");
       } else {
@@ -101,7 +111,35 @@ export default function CreatePage() {
           }
         />
         <Page>
-          <Pipeline stages={stages} onRerun={(name) => console.log("re-run from", name)} />
+          <Pipeline
+            stages={stages}
+            chosen={chosen}
+            canRerun={!demo && stream.status !== "running" && stream.status !== "connecting"}
+            onChoose={(stage, index) => setChosen({ ...chosen, [stage]: index })}
+            onRerun={(name) => {
+              if (!jobId) return;
+              setError(null);
+              startTransition(async () => {
+                const result = await rerunFrom(jobId, name);
+                if (!result.ok) setError(result.error ?? "could not re-run that stage");
+              });
+            }}
+          />
+
+          {/* `stream.error` was produced and read by nobody: a dead stream froze
+              the pipeline on its skeleton with Publish disabled forever, and the
+              only way back was a full reload. */}
+          {stream.error && (
+            <div
+              role="alert"
+              className="mt-4 flex items-center gap-3 rounded-lg border border-[var(--color-warn)]/40 p-4"
+            >
+              <p className="flex-1 text-[13px] text-[var(--color-warn)]">{stream.error}</p>
+              <Button variant="ghost" onClick={() => setAttempt(attempt + 1)}>
+                Reconnect
+              </Button>
+            </div>
+          )}
 
           {notice && (
             <p className="mt-4 text-[13px] text-[var(--color-muted)]">{notice}</p>
