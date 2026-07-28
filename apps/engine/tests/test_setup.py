@@ -283,6 +283,24 @@ def test_readiness_needs_an_llm_and_footage_not_a_named_key(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_the_worker_probe_does_not_block_the_event_loop():
+    """It uses a *synchronous* Redis client, and nothing answering is the norm.
+
+    Most installs run no worker at all, so the probe times out on every load of
+    the Setup screen. Called inline from the async handler, that stalls this
+    process for the whole timeout — including the SSE streams carrying render
+    progress to anyone watching a job.
+    """
+    import inspect
+
+    assert inspect.iscoroutinefunction(setup_api._worker_running)
+    assert "to_thread" in inspect.getsource(setup_api._worker_running)
+    # And the handler must await the async one, not call the sync one directly.
+    handler = inspect.getsource(setup_api.status)
+    assert "await _worker_running()" in handler
+    assert "_worker_running_sync(" not in handler
+
+
 def test_not_ready_when_there_is_no_footage_source(monkeypatch):
     from engine.settings import get_settings
 

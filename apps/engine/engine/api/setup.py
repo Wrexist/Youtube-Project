@@ -235,11 +235,14 @@ def _tail(value: str) -> str:
     return value[-4:] if len(value) >= 8 else ""
 
 
-def _worker_running() -> bool:
+def _worker_running_sync() -> bool:
     """Whether a separate worker process would need restarting to see new keys.
 
     Best effort and deliberately cheap — this runs inside a page load. A false
     negative just means the screen omits a caveat that did not apply.
+
+    Synchronous, and therefore never called directly from the endpoint: see
+    `_worker_running` below.
     """
     try:
         from redis import Redis
@@ -257,6 +260,20 @@ def _worker_running() -> bool:
             client.close()
     except Exception:  # noqa: BLE001 — no Redis is the common case, not an error
         return False
+
+
+async def _worker_running() -> bool:
+    """`_worker_running_sync` off the event loop.
+
+    The sync Redis client blocks for up to `socket_timeout` when nothing answers,
+    which is the *normal* case — most installs run no worker at all. Called
+    directly from the handler that would have stalled every other request on this
+    process for 0.4s on each load of the Setup screen, including the SSE streams
+    carrying render progress.
+    """
+    import asyncio
+
+    return await asyncio.to_thread(_worker_running_sync)
 
 
 @router.get("")
@@ -300,7 +317,7 @@ async def status() -> SetupStatus:
         channels=channels,
         missing_required=missing,
         env_path=str(env_path()),
-        worker_running=_worker_running(),
+        worker_running=await _worker_running(),
     )
 
 
