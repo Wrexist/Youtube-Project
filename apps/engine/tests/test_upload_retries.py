@@ -57,18 +57,35 @@ def test_the_cap_is_low_enough_to_notice_but_high_enough_to_survive_a_blip():
 
 def test_the_servers_range_is_authoritative():
     """It can confirm less than we sent; believing ourselves would corrupt the file."""
-    assert youtube._resume_offset("bytes=0-999", offset=0, chunk_len=8192) == 1000
+    assert youtube._resume_offset("bytes=0-999", offset=0) == 1000
 
 
-def test_a_missing_range_assumes_the_chunk_landed():
-    assert youtube._resume_offset(None, offset=4096, chunk_len=4096) == 8192
+def test_a_missing_range_re_sends_rather_than_skipping():
+    """Google's protocol: a 308 with no `Range` means nothing was persisted.
+
+    The old fallback assumed the chunk landed and advanced past it, which leaves a
+    hole in the middle of the uploaded file that nothing downstream detects.
+    """
+    assert youtube._resume_offset(None, offset=4096) == 4096
 
 
 @pytest.mark.parametrize("header", ["nonsense", "bytes=", "bytes=abc-def", "0-1-2-3"])
 def test_a_malformed_range_does_not_raise_mid_upload(header):
     """`int(rng.split("-")[1]) + 1` raised on anything unexpected — in the middle of
     an upload whose quota had already been spent."""
-    assert youtube._resume_offset(header, offset=100, chunk_len=50) == 150
+    assert youtube._resume_offset(header, offset=100) == 100
+
+
+def test_a_308_that_never_advances_gives_up_instead_of_spinning():
+    """Re-sending is right; re-sending forever is not."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "engine/providers/youtube.py").read_text()
+    block = source[source.index("if resp.status_code == 308") :]
+    block = block[: block.index("if resp.status_code in (500")]
+    assert "attempts += 1" in block
+    assert re.search(r"attempts > MAX_CHUNK_RETRIES", block)
 
 
 # ── quota is booked when the session opens ──────────────────────────────────

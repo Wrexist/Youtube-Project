@@ -112,8 +112,29 @@ def _render_sync(
 
         if not built:
             # A beat with no usable footage used to be `continue`d, which silently
-            # shortened the timeline and dragged every later beat earlier.
-            logger.warning("beat {} has no usable footage; holding the previous shot", index + 1)
+            # shortened the timeline and dragged every later beat earlier. Beats are
+            # positioned absolutely now, so a `continue` no longer shifts anything —
+            # but it leaves the black base clip showing through for the whole span,
+            # which is what the log line here used to claim it was avoiding.
+            #
+            # So actually hold the previous shot: stretch the last group to run
+            # through this beat's end. `_cover_span` loops, so it reads as b-roll
+            # rather than as a freeze.
+            if groups:
+                prev_start, prev_group = groups[-1]
+                groups[-1] = (prev_start, _cover_span(prev_group, end - prev_start))
+                logger.warning(
+                    "beat {} has no usable footage; holding beat {}'s shot across it",
+                    index + 1,
+                    index,
+                )
+            else:
+                # Nothing to hold — this is the first beat. Black is the only honest
+                # option, and saying so beats claiming a shot that does not exist.
+                logger.warning(
+                    "beat {} has no usable footage and nothing precedes it; it will render black",
+                    index + 1,
+                )
             continue
 
         segments.extend(built)
@@ -294,7 +315,11 @@ async def make_thumbnail(concept: dict, *, job_id: str, index: int) -> Thumbnail
     a correctly composed thumbnail.
     """
     template = templates.get(concept.get("template"))
-    prompt = f"{concept['image_prompt'].strip()} {template.image_direction}".strip()
+    # `.get`, not `[...]`. `concept` is parsed LLM output, and a model that omits a
+    # key — or returns null for it — would otherwise raise KeyError/AttributeError
+    # and fail the whole thumbnail stage. The template's own direction is enough to
+    # generate against on its own.
+    prompt = f"{str(concept.get('image_prompt') or '').strip()} {template.image_direction}".strip()
 
     background = await images.generate(prompt)
     data = await asyncio.to_thread(
@@ -318,7 +343,7 @@ def _compose_thumbnail(concept: dict, background: bytes | None, template) -> byt
     """Background, then the template's own layout. Pillow work belongs in a thread."""
     canvas = _background_layer(background)
     accent = templates.accent_rgb(concept.get("accent") or template.accent)
-    words = concept["overlay_text"].upper().split()[: template.max_words]
+    words = str(concept.get("overlay_text") or "").upper().split()[: template.max_words]
 
     layouts = {
         "left_column": _layout_left_column,

@@ -170,20 +170,22 @@ async def _openai(spec: ImageSpec, prompt: str) -> bytes:
 
 async def _gemini(spec: ImageSpec, prompt: str) -> bytes:
     settings = get_settings()
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{spec.model}:predict"
-        f"?key={settings.gemini_api_key}"
-    )
+    # The key goes in a header, not `?key=`. Query strings are the one part of an
+    # HTTPS request that leaks by default — httpx's own logging, any proxy access
+    # log, an exception whose `request.url` gets formatted. CLAUDE.md's rule is that
+    # secrets are never logged, and a URL-embedded key makes that a property of
+    # every caller instead of a property of this function.
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{spec.model}:predict"
     async with httpx.AsyncClient(timeout=180.0) as client:
         resp = await client.post(
             url,
+            headers={"x-goog-api-key": settings.gemini_api_key or ""},
             json={
                 "instances": [{"prompt": prompt}],
                 "parameters": {"sampleCount": 1, "aspectRatio": spec.request_size},
             },
         )
     if resp.status_code >= 400:
-        # The key is in the query string, so the URL must never reach a log line.
         raise ImageUnavailable(f"Imagen returned {resp.status_code}: {resp.text[:200]}")
 
     payload = resp.json()

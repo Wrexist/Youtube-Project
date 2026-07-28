@@ -144,9 +144,22 @@ Pop-Location
 Step "Running the test suite"
 Push-Location apps\engine
 $env:STUDIO_PERSIST = "false"
-& $VenvPython -m pytest -q 2>&1 | Select-Object -Last 3
+# Captured, not piped straight to the host. `... | Select-Object -Last 3` leaves
+# `$LASTEXITCODE` describing Select-Object rather than pytest, so a failing suite
+# scrolled three lines past and setup went on to print "Setup complete" — the one
+# thing this step exists to stop.
+$TestOutput = & $VenvPython -m pytest -q 2>&1
+$Tests = $LASTEXITCODE
 Pop-Location
 Remove-Item Env:\STUDIO_PERSIST -ErrorAction SilentlyContinue
+
+$TestOutput | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
+if ($Tests -ne 0) {
+    Write-Host ""
+    Write-Host "The test suite failed. Full output:" -ForegroundColor Yellow
+    $TestOutput | ForEach-Object { Write-Host "  $_" }
+    Die "the engine is not working on this machine - please open an issue with the output above"
+}
 
 Step "Checking what is still missing"
 & $VenvPython (Join-Path $Root "apps\engine\scripts\doctor.py")

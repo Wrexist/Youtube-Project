@@ -300,7 +300,10 @@ Honest about the edges, because you will hit them before I would:
 - **The pipeline has not been run end to end with real footage and real TTS.**
   The render core is verified by measurement (see `KNOWN-ISSUES.md` §2) but with
   synthetic clips and tones.
-- **Ollama is implemented and unit-tested but no real daemon has been called.**
+- **Ollama is implemented and has no test coverage at all.** Not just "no real
+  daemon" — `tests/conftest.py` stubs out `engine.providers.llm` entirely, so no
+  test in this repository ever exercises the transport. The routing table and cost
+  model around it are covered; the code that talks to a daemon is not.
 - **No image API has been called for real.** The two transports are written against
   OpenAI's `images/generations` and Imagen's `:predict`, and both are covered by
   tests against recorded response shapes — but like the Google clients, they are

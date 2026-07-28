@@ -239,6 +239,17 @@ def _check_channel_key(s) -> None:
         return
 
     if s.secret_key != DEV_SECRET_KEY:
+        # The same 32-character floor `crypto._resolve_secret` enforces. Without
+        # this the doctor printed a green tick for a key that makes every channel
+        # operation raise RuntimeError — which is the exact opposite of its job.
+        if len(s.secret_key or "") < 32:
+            fail(
+                "Channel encryption",
+                f"STUDIO_SECRET_KEY is {len(s.secret_key or '')} characters; 32 are required",
+                "Lengthen it, or comment the line out and let a random key be "
+                f"generated at storage/{KEY_FILE}.",
+            )
+            return
         ok("Channel encryption", "using STUDIO_SECRET_KEY")
         return
 

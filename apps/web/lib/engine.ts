@@ -56,6 +56,18 @@ const BASE =
 /** How long a Server Component waits before falling back to demo data. */
 const TIMEOUT_MS = 2500;
 
+/**
+ * How long a mutation waits before giving up.
+ *
+ * Much longer than a read, because a read has somewhere to fall back to and a
+ * write does not — and because these endpoints do real work before answering
+ * (opening a YouTube upload session, seeding a publish job). But not unbounded:
+ * with no timeout at all, an engine that accepted the connection and then stalled
+ * left the Server Action pending forever, and the button that triggered it spinning
+ * forever with it. Every mutation on every screen shared that failure mode.
+ */
+const MUTATION_TIMEOUT_MS = 30_000;
+
 export class EngineError extends Error {
   constructor(
     message: string,
@@ -95,12 +107,28 @@ export async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, {
-    method,
-    cache: "no-store",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}${path}`, {
+      method,
+      cache: "no-store",
+      signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (cause) {
+    // A timeout or a refused connection is not a status code, so it would
+    // otherwise escape as a raw TypeError/DOMException and reach the UI as
+    // "fetch failed" — which tells someone nothing about what to do next.
+    const timedOut = cause instanceof Error && cause.name === "TimeoutError";
+    throw new EngineError(
+      timedOut
+        ? `${path} timed out after ${MUTATION_TIMEOUT_MS / 1000}s. The engine accepted the request but never answered.`
+        : `Could not reach the engine at ${BASE}. Is it running?`,
+      0,
+      cause,
+    );
+  }
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {

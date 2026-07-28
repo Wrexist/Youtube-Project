@@ -62,6 +62,10 @@ class CatalogueEntry(BaseModel):
 
 class RoutingProblem(BaseModel):
     task: str
+    #: `Routing.problems()` has always set this. The field was missing here, so
+    #: Pydantic dropped it on the way out and the web app could not tell a warning
+    #: from anything more serious — every problem rendered identically.
+    severity: str = "warn"
     message: str
 
 

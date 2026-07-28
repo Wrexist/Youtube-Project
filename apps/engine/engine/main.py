@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -343,7 +343,13 @@ class JobSummary(BaseModel):
 
 
 @app.get("/v1/jobs")
-async def list_jobs(status: str | None = None, limit: int = 100) -> list[JobSummary]:
+async def list_jobs(
+    status: str | None = None,
+    # Declared, not just clamped. The clamp below still guards the slice, but a
+    # bound that only exists in the body is invisible to the OpenAPI document —
+    # so `?limit=-1` was a 200 returning one row rather than a 422 saying why.
+    limit: int = Query(100, ge=1, le=500),
+) -> list[JobSummary]:
     """Every job, newest first.
 
     This did not exist, so the Queue and Library had nothing to read and rendered
@@ -544,6 +550,10 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
         "wake": wake,
         "events": [],
         "status": "running",
+        # Same reason as `create_job`: `GET /v1/jobs` sorts on this. Without it a
+        # publish job sorted to the very bottom of the Queue — the one job someone
+        # is actively watching, filed underneath everything they finished last week.
+        "created_at": datetime.now(UTC),
     }
     JOBS[publish_id]["task"] = asyncio.create_task(_run_job(publish_id))
 

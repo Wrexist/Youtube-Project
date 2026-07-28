@@ -65,7 +65,10 @@ def probe_redis_settings() -> RedisSettings:
     does not change the answer, and the caller has a working fallback either way.
     """
     settings = RedisSettings.from_dsn(get_settings().redis_url)
-    settings.conn_retries = 1
+    # Zero, not one. arq counts *retries*, not attempts — `if retry < conn_retries`
+    # with retry starting at 0 — so `1` here was two connections and two seconds,
+    # twice what the paragraph above says this function does.
+    settings.conn_retries = 0
     settings.conn_retry_delay = 0
     settings.conn_timeout = 1
     return settings

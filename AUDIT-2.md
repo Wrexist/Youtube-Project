@@ -29,7 +29,7 @@ from earlier the same day. Each was reproduced before being believed:
 
 ---
 
-# Phase 1 — Make a live run produce a correct video and a UI that reflects it
+## Phase 1 — Make a live run produce a correct video and a UI that reflects it
 
 **Goal:** someone who clones the repo, starts the stack, and runs one job gets a correct MP4, a truthful screen, and an API that survives a restart.
 
@@ -123,7 +123,7 @@ The pre-flight budget check raises `BudgetExceeded` regardless of `stage.optiona
 
 ---
 
-# Phase 2 — Stop money, quota, and job state going wrong
+## Phase 2 — Stop money, quota, and job state going wrong
 
 **Goal:** spend is counted, quota is booked, a publish can't run twice, and nothing accumulates unboundedly.
 
@@ -211,7 +211,7 @@ Nothing checks for an existing publish job for the same source; the source job s
 
 ---
 
-# Phase 3 — Wire the dead UI
+## Phase 3 — Wire the dead UI
 
 **Goal:** no button on screen lies, and no fabricated number ships unlabelled.
 
@@ -268,7 +268,7 @@ Every button — "Approve N clear", "Open"/"Fix", "Approve", "Retry from here" �
 
 ---
 
-# Phase 4 — Input validation and error surfaces
+## Phase 4 — Input validation and error surfaces
 
 **Goal:** malformed input gets a 422 naming the field, and expected failures get the right status code instead of a 500.
 
@@ -325,7 +325,7 @@ Much of this is subsumed by 4.3's handlers once `_query` raises a typed error in
 
 ---
 
-# Phase 5 — Tests and documentation that currently overstate the truth
+## Phase 5 — Tests and documentation that currently overstate the truth
 
 **Goal:** the suite tests what the docs claim it tests, and the docs describe the app that exists.
 
@@ -379,7 +379,7 @@ Do this **after** Phase 3, so you are describing the finished state rather than 
 
 ---
 
-# Not worth fixing
+## Not worth fixing
 
 **Chapters (seo.py) — delete the stage, don't plumb it.** The output is generated, billed, and read by nothing; YouTube only renders chapters from description timestamps. Plumbing it properly means either appending the block to the description in `UploadStage` (with 5000-char guarding) or reordering the graph into `titles → chapters → description`, which drags `subtitles` into the SEO chain. That is real design work for a feature nobody has asked for, on a stage that costs ~$0.01 per run. Delete `ChaptersStage` and `SeoPackage.chapters` (which is never constructed anywhere) and reopen it as a feature request. If you do keep it, add `'subtitles'` to its `depends_on` — it currently reads `ctx.get('subtitles')` while declaring `('titles',)`.
 

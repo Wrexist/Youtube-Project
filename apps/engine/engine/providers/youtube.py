@@ -63,14 +63,18 @@ def _backoff(attempt: int, retry_after: str | None) -> float:
     return min(BACKOFF_BASE_S * (2 ** (attempt - 1)), BACKOFF_MAX_S)
 
 
-def _resume_offset(header: str | None, offset: int, chunk_len: int) -> int:
+def _resume_offset(header: str | None, offset: int) -> int:
     """Where to resume from after a 308.
 
-    The server's `Range` is authoritative and may confirm less than we sent. A
-    malformed or absent header falls back to assuming the whole chunk landed, which
-    is what the previous `int(rng.split("-")[1]) + 1` did — except that also raised
-    ValueError/IndexError on anything unexpected, in the middle of an upload that
-    had already been paid for.
+    The server's `Range` is authoritative and may confirm less than we sent, so it
+    is the only thing worth believing. Everything else resumes from where we were.
+
+    That fallback used to be `offset + chunk_len` — assume the whole chunk landed.
+    It is wrong in exactly the case it fires: Google's resumable-upload protocol
+    says a 308 with *no* `Range` means zero bytes have been persisted, so assuming
+    the chunk landed skips it, and the finished video is missing a hole in the
+    middle. Re-sending a range the server already has is free — the protocol is
+    idempotent per byte range — while skipping one is unrecoverable.
     """
     if header:
         # Strictly `bytes=<first>-<last>`. Splitting on "-" and taking [1] happens to
@@ -80,8 +84,8 @@ def _resume_offset(header: str | None, offset: int, chunk_len: int) -> int:
         match = re.fullmatch(r"\s*bytes\s*=\s*(\d+)\s*-\s*(\d+)\s*", header)
         if match:
             return int(match.group(2)) + 1
-        logger.warning("unparseable Range header {!r}; assuming the chunk landed", header)
-    return offset + chunk_len
+        logger.warning("unparseable Range header {!r}; re-sending from byte {}", header, offset)
+    return offset
 
 
 class YouTubeError(Exception):
@@ -340,11 +344,25 @@ class YouTube:
                         return resp.json()["id"]
 
                     if resp.status_code == 308:  # incomplete; continue
-                        attempts = 0  # progress was made
-                        rng = resp.headers.get("Range")
-                        offset = _resume_offset(rng, offset, len(chunk))
-                        if on_progress:
-                            await on_progress(offset / size, "uploading")
+                        moved = _resume_offset(resp.headers.get("Range"), offset)
+                        if moved > offset:
+                            offset = moved
+                            attempts = 0  # progress was made
+                            if on_progress:
+                                await on_progress(offset / size, "uploading")
+                            continue
+
+                        # A 308 that confirmed nothing. Re-sending is correct, but
+                        # a server that keeps confirming nothing has to hit the same
+                        # ceiling as a 503 — otherwise the loop spins on one chunk
+                        # for as long as the API keeps answering.
+                        attempts += 1
+                        if attempts > MAX_CHUNK_RETRIES:
+                            raise YouTubeError(
+                                f"upload stalled at byte {offset} of {size}: "
+                                f"{MAX_CHUNK_RETRIES} consecutive 308s confirmed no bytes"
+                            )
+                        await asyncio.sleep(_backoff(attempts, resp.headers.get("Retry-After")))
                         continue
 
                     if resp.status_code in (500, 502, 503, 504, 429):

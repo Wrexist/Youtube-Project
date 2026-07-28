@@ -25,7 +25,11 @@ dependencies = [
     "loguru>=0.7",
     "sse-starlette>=2.1",
     "pillow>=11.0",
-    "moviepy>=1.0.3",
+    # 2.x, not 1.x. compose.py is written against the 2.0 API — `with_start`,
+    # `with_duration`, `with_effects`, `moviepy.video.fx.Loop` — none of which
+    # exist in 1.0.3. The old `>=1.0.3` floor let a resolver pick 1.x and the
+    # render then died on an AttributeError at composition time.
+    "moviepy>=2.0,<3",
     "edge-tts>=6.1",
     "faster-whisper>=1.1",
     # Phase 8's statistical gate. Not optional: the pure-Python fallback in

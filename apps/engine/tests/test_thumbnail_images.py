@@ -17,7 +17,7 @@ import pytest
 from PIL import Image
 
 from engine.providers import images
-from engine.render import compose
+from engine.render import compose, templates
 from engine.settings import get_settings
 
 CONCEPT = {
@@ -269,18 +269,33 @@ async def test_the_type_stays_out_of_the_focal_column(monkeypatch, tmp_path):
 
 
 async def test_more_words_are_set_smaller(monkeypatch, tmp_path):
-    """Fitting means shrinking, not clipping."""
+    """Fitting means shrinking, not clipping.
+
+    Both overlays are within the fallback template's three-word cap, deliberately.
+    Comparing a two-word render against a five-word one divided the long bbox by
+    five when only three words had been drawn — the cap silently removed the other
+    two, so the arithmetic described a render that never existed.
+    """
+    assert templates.get(None).max_words == 3, "this test's word counts assume the cap"
     short = await _type_bbox(monkeypatch, tmp_path, "Two Words")
-    long_ = await _type_bbox(monkeypatch, tmp_path, "This Changes Absolutely Everything Now")
-    short_line = (short[3] - short[1]) / 2
-    long_line = (long_[3] - long_[1]) / 5
-    assert long_line < short_line
+    long_ = await _type_bbox(monkeypatch, tmp_path, "It Gets Worse")
+    assert (long_[3] - long_[1]) / 3 < (short[3] - short[1]) / 2
 
 
-async def test_a_sixth_word_is_dropped_rather_than_shrunk_into_illegibility(monkeypatch, tmp_path):
-    """168px wide on a phone is the real test; six words cannot survive it."""
-    bbox = await _type_bbox(monkeypatch, tmp_path, "One Two Three Four Five Six Seven")
-    assert bbox is not None and bbox[3] <= compose.THUMB_H
+async def test_words_past_the_cap_are_dropped_rather_than_shrunk_into_illegibility(
+    monkeypatch, tmp_path
+):
+    """168px wide on a phone is the real test; six words cannot survive it.
+
+    Asserting the type stayed on the canvas proved nothing — a seven-word overlay
+    only ever reaches the layout as its first three words, so the assertion held
+    whatever the fitting code did. The claim worth testing is that the cap *drops*
+    the surplus: three words and seven words must produce the identical render.
+    """
+    three = await _type_bbox(monkeypatch, tmp_path, "One Two Three")
+    seven = await _type_bbox(monkeypatch, tmp_path, "One Two Three Four Five Six Seven")
+    assert three == seven, "words past the cap changed the render instead of being dropped"
+    assert seven is not None and seven[3] <= compose.THUMB_H
 
 
 # ── budget ──────────────────────────────────────────────────────────────────

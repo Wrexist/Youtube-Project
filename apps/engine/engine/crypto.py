@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import secrets
 import stat
 from functools import lru_cache
@@ -59,14 +60,37 @@ def _resolve_secret() -> str:
         if len(existing) >= 32:
             return existing
         logger.warning("{} is too short to be a key; regenerating", path)
+        # Removed rather than overwritten, so the O_EXCL create below still gets to
+        # be the thing that decides who wins.
+        path.unlink(missing_ok=True)
 
     generated = secrets.token_urlsafe(48)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Written before the chmod, so create it empty and narrow it first — otherwise
-    # the key exists world-readable for the width of one syscall.
-    path.touch(mode=0o600, exist_ok=True)
+
+    # O_CREAT|O_EXCL, so exactly one process can win.
+    #
+    # The API and the worker are separate processes started together by
+    # `docker compose up`, and both call this on their first channel operation. With
+    # a plain write, both generated a key and the second overwrote the first —
+    # after which every refresh token the first process had already encrypted was
+    # permanently undecryptable, and the only symptom is a channel that says it is
+    # connected and fails every publish. The loser of the race reads the winner's
+    # key instead of writing its own.
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        # Someone got there between the `is_file()` check above and here.
+        existing = path.read_text(encoding="utf-8").strip()
+        if len(existing) >= 32:
+            return existing
+        raise RuntimeError(f"{path} exists but is not a usable key; delete it and retry") from None
+
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(generated)
+    # Belt and braces: O_CREAT honours the umask, so 0o600 can still come out
+    # narrower than asked but never wider than the umask allows. Setting it
+    # explicitly afterwards is the only way to be certain of the mode.
     path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    path.write_text(generated, encoding="utf-8")
     logger.info(
         "generated a channel-encryption key at {} — back it up: without it, "
         "connected channels have to be re-authorised",

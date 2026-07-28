@@ -66,6 +66,11 @@ class Entry:
     at: datetime
     channel_id: str = ""
     note: str = ""
+    #: False when the database write failed. `record()` keeps such an entry in
+    #: memory on purpose — the units were spent at Google whether or not we managed
+    #: to write the row — and `load()` has to carry it across, or re-reading the
+    #: ledger silently hands that budget back.
+    persisted: bool = True
 
 
 def quota_day(moment: datetime | None = None) -> date:
@@ -160,6 +165,7 @@ class QuotaLedger:
                 # The spend already happened at Google. Dropping the in-memory
                 # entry too would double-count the remaining budget, so keep it
                 # and make the persistence failure loud instead.
+                entry.persisted = False
                 logger.exception("failed to persist quota entry for {}", operation)
 
         return entry
@@ -197,6 +203,13 @@ class QuotaLedger:
         from engine.db import session
         from engine.tables import QuotaEntry
 
+        # Carried across the reload. These are units already spent at Google whose
+        # row never made it to the database, so the query below cannot see them —
+        # and `check_fresh` calls `load()` immediately before an upload decides
+        # whether there is budget. Dropping them here would hand that budget back
+        # and wave through exactly the overrun this ledger exists to prevent.
+        unpersisted = [e for e in self.entries if not e.persisted]
+
         since = datetime.now(UTC) - timedelta(days=days)
         async with session() as s:
             rows = (await s.execute(select(QuotaEntry).where(QuotaEntry.at >= since))).scalars()
@@ -210,6 +223,14 @@ class QuotaLedger:
                 )
                 for r in rows
             ]
+        self.entries.extend(unpersisted)
+
+        if unpersisted:
+            logger.warning(
+                "{} quota entr{} never reached the database and are being counted from memory only",
+                len(unpersisted),
+                "y is" if len(unpersisted) == 1 else "ies are",
+            )
 
         logger.info(
             "quota ledger restored: {} entries, {} units spent today",
