@@ -16,7 +16,6 @@ from __future__ import annotations
 from engine.workflows import media, publish, script, seo
 from engine.workflows.base import Workflow
 
-
 # The SEO stages read the script, but they cannot say so in `seo.py`: the standalone
 # `Workflow("seo", SEO_STAGES)` has no script stages, and `Workflow._validate`
 # rejects a dependency that is not defined earlier in the *same* workflow — adding
