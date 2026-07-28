@@ -122,3 +122,88 @@ def test_force_is_an_explicit_parameter_not_a_default():
 
     signature = inspect.signature(main_mod.publish_job)
     assert signature.parameters["force"].default is False
+
+
+# ── the weak-script blocker ─────────────────────────────────────────────────
+
+
+def test_the_critique_severity_is_read_off_a_dict():
+    """`getattr(critique, "severity", 0)` on a dict always returns the default.
+
+    CritiqueStage returns the parsed JSON verbatim and `decode_value` hands back a
+    plain dict, so this read 0 every time — the weak_script blocker could never fire
+    once in the entire history of the code. Invisible to the tests that covered it,
+    because they construct VideoState directly and skip this conversion.
+    """
+    assert getattr({"severity": 5}, "severity", 0) == 0, "the bug, pinned"
+    assert int(({"severity": 5} or {}).get("severity", 0) or 0) == 5
+
+
+def test_the_threshold_is_on_the_scale_the_prompt_asks_for():
+    """The prompt asks for 1-5; the threshold was 5 and the message said /10."""
+    from engine import automation
+
+    assert 1 <= automation._WEAK_SCRIPT_THRESHOLD <= 5
+    assert automation._WEAK_SCRIPT_THRESHOLD < 5, "5 fires only at the maximum"
+
+
+def _series():
+    from engine.automation import Series
+
+    return Series(id="s", name="S", niche="n", monthly_budget_usd=100.0)
+
+
+def _ready(**overrides):
+    """A video that clears every other blocker, so only the one under test fires."""
+    from engine.automation import VideoState
+
+    return VideoState(
+        id="v",
+        series_id="s",
+        title="A perfectly reasonable title",
+        has_sources=True,
+        source_count=3,
+        has_thumbnail=True,
+        has_seo=True,
+        keyword_grounded=True,
+        render_ok=True,
+        **overrides,
+    )
+
+
+def test_a_weak_script_actually_blocks_now():
+    from engine.automation import publish_blockers
+
+    weak = _ready(critique_severity=4)
+    assert any("severity" in str(b).lower() for b in publish_blockers(weak, _series()))
+
+
+def test_the_blocker_message_states_the_right_scale():
+    from engine.automation import publish_blockers
+
+    weak = _ready(critique_severity=5)
+    message = next(
+        str(b) for b in publish_blockers(weak, _series()) if "severity" in str(b).lower()
+    )
+    assert "/5" in message and "/10" not in message
+
+
+@pytest.mark.parametrize(
+    ("critique", "expected"),
+    [
+        ({"severity": 4}, 4),
+        ({"severity": "3"}, 3),
+        ({}, 0),
+        (None, 0),
+        ("a stage output edited into a string", 0),
+        ({"severity": None}, 0),
+        ({"severity": "not a number"}, 0),
+        ([1, 2, 3], 0),
+    ],
+)
+def test_severity_survives_whatever_the_stage_holds(critique, expected):
+    """A stage output can be edited through POST /v1/jobs/{id}/edit into any JSON
+    value, so a blocker that raises AttributeError is worse than one reading zero."""
+    from engine.main import _severity_of
+
+    assert _severity_of(critique) == expected

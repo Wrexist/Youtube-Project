@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -550,6 +551,30 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
     return {"job_id": publish_id, "status": "running", "source_job_id": job_id}
 
 
+def _severity_of(critique: Any) -> int:
+    """The critique's severity, however the stage happened to store it.
+
+    This was `getattr(critique, "severity", 0)`. CritiqueStage returns the parsed
+    JSON verbatim and `decode_value` hands back a plain dict, and `getattr` on a
+    dict always returns the default — so it read 0 every time and the weak-script
+    blocker could not fire once in the whole history of the code. The tests that
+    covered that blocker construct `VideoState` directly, which is why they never
+    saw it.
+
+    Written for a dict but not assuming one: a stage output that has been edited
+    through `POST /v1/jobs/{id}/edit` can be any JSON value, and a blocker that
+    raises AttributeError is worse than one that reads zero.
+    """
+    if isinstance(critique, Mapping):
+        raw = critique.get("severity", 0)
+    else:
+        raw = getattr(critique, "severity", 0)
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _existing_publish(source_job_id: str) -> tuple[str, str] | None:
     """A publish job for this source that is running or has succeeded.
 
@@ -589,7 +614,7 @@ def _video_state(job_id: str, job: dict) -> automation.VideoState:
         keyword_grounded=bool(grounding and getattr(grounding, "is_grounded", False)),
         render_ok=bool(value("render")),
         title=titles[0].text if titles else "",
-        critique_severity=getattr(critique, "severity", 0) or 0,
+        critique_severity=_severity_of(critique),
     )
 
 
