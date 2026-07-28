@@ -220,3 +220,110 @@ def test_privacy_is_validated(client):
     _connect_channel()
     resp = client.post("/v1/jobs/src/publish", json={"privacy": "secret"})
     assert resp.status_code == 422
+
+
+# ── the job list ────────────────────────────────────────────────────────────
+#
+# `GET /v1/jobs` did not exist, so the Queue and Library screens had nothing to
+# read and rendered demo data permanently: generate a video and neither screen
+# would ever change. They are the two screens someone looks at immediately after
+# pressing Generate.
+
+
+def _client():
+    from fastapi.testclient import TestClient
+
+    from engine import main
+
+    return TestClient(main.app), main
+
+
+def test_the_job_list_is_empty_rather_than_missing():
+    client, main = _client()
+    main.JOBS.clear()
+    response = client.get("/v1/jobs")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_a_created_job_appears_in_the_list():
+    client, main = _client()
+    main.JOBS.clear()
+    created = client.post("/v1/jobs", json={"topic": "why bridges collapse"})
+    assert created.status_code == 202
+    job_id = created.json()["job_id"]
+
+    rows = client.get("/v1/jobs").json()
+    assert [r["id"] for r in rows] == [job_id]
+    row = rows[0]
+    assert row["topic"] == "why bridges collapse"
+    assert row["workflow"] == "video"
+    assert row["stages_total"] > 0
+    assert row["stages_done"] <= row["stages_total"]
+
+
+def test_the_list_can_be_filtered_by_status():
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "a topic that is long enough"})
+    for job in main.JOBS.values():
+        job["status"] = "completed"
+
+    assert len(client.get("/v1/jobs?status=completed").json()) == 1
+    assert client.get("/v1/jobs?status=failed").json() == []
+
+
+def test_newest_first():
+    """The Queue reads top-down; oldest-first would bury the job just started."""
+    from datetime import UTC, datetime, timedelta
+
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "the older one"})
+    client.post("/v1/jobs", json={"topic": "the newer one"})
+
+    for job in main.JOBS.values():
+        if job["inputs"]["topic"] == "the older one":
+            job["created_at"] = datetime.now(UTC) - timedelta(hours=1)
+
+    topics = [r["topic"] for r in client.get("/v1/jobs").json()]
+    assert topics[0] == "the newer one"
+
+
+def test_a_job_restored_without_a_timestamp_does_not_break_the_sort():
+    """Rows written before created_at was mirrored come back with None."""
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "a topic that is long enough"})
+    for job in main.JOBS.values():
+        job.pop("created_at", None)
+
+    assert client.get("/v1/jobs").status_code == 200
+
+
+def test_artifacts_are_exposed_so_the_library_can_show_them():
+    from engine.workflows.base import Provenance, StageOutput, StageStatus
+
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "a topic that is long enough"})
+    job = next(iter(main.JOBS.values()))
+
+    state = job["states"]["render"]
+    state.status = StageStatus.DONE
+    state.output = StageOutput(
+        value="renders/x.mp4",
+        provenance=Provenance(model="m"),
+        artifacts={"render": "renders/x.mp4"},
+    )
+    thumb = job["states"]["thumbnail"]
+    thumb.status = StageStatus.DONE
+    thumb.output = StageOutput(
+        value=[],
+        provenance=Provenance(model="m"),
+        artifacts={"thumbnail_0": "thumbnails/x-0.jpg", "thumbnail_1": "thumbnails/x-1.jpg"},
+    )
+
+    row = client.get("/v1/jobs").json()[0]
+    assert row["render_key"] == "renders/x.mp4"
+    assert row["thumbnail_keys"] == ["thumbnails/x-0.jpg", "thumbnails/x-1.jpg"]

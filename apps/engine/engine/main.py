@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -168,6 +168,10 @@ async def create_job(body: JobRequest) -> dict:
         "wake": wake,
         "events": [],
         "status": "running",
+        # Carried on the mirror as well as the row: `GET /v1/jobs` sorts on it, and
+        # reading it back from the database on every list would make a screen that
+        # polls hit Postgres for something the process already knows.
+        "created_at": datetime.now(UTC),
     }
 
     await _persist(JOBS[job_id])
@@ -298,6 +302,85 @@ async def _persist(job: dict) -> None:
         await repository.save_job(job)
     except Exception:  # noqa: BLE001
         logger.exception("failed to persist job {}", job["id"])
+
+
+class JobSummary(BaseModel):
+    """One job, as the Queue and Library list them.
+
+    A response model rather than a bare dict because both screens do arithmetic and
+    filtering on these fields; without it the generated TypeScript types every one
+    as `unknown` and the UI has to cast, which is what `packages/contracts` exists
+    to prevent.
+    """
+
+    id: str
+    status: str
+    topic: str
+    workflow: str
+    cost_usd: float
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    #: Where the pipeline actually is — "4/17 · Voiceover" is the useful summary,
+    #: and computing it here keeps both screens from re-deriving it differently.
+    stages_done: int
+    stages_total: int
+    current_stage: str | None = None
+    error: str | None = None
+    #: Storage keys, so the Library can show a thumbnail and play the render.
+    render_key: str | None = None
+    thumbnail_keys: list[str] = Field(default_factory=list)
+
+
+@app.get("/v1/jobs")
+async def list_jobs(status: str | None = None, limit: int = 100) -> list[JobSummary]:
+    """Every job, newest first.
+
+    This did not exist, so the Queue and Library had nothing to read and rendered
+    demo data permanently — generate a video and neither screen would ever change.
+    They are the two screens someone looks at immediately after pressing Generate.
+
+    `status` filters to one state; the Library asks for `completed` and the Queue
+    takes everything.
+    """
+    out: list[JobSummary] = []
+    for job_id, job in JOBS.items():
+        if status and job.get("status") != status:
+            continue
+
+        states = job.get("states", {})
+        done = sum(1 for s in states.values() if s.status is StageStatus.DONE)
+        running = next(
+            (name for name, s in states.items() if s.status is StageStatus.RUNNING), None
+        )
+        artifacts = {}
+        for state in states.values():
+            if state.output:
+                artifacts.update(state.output.artifacts or {})
+
+        out.append(
+            JobSummary(
+                id=job_id,
+                status=job.get("status", "unknown"),
+                topic=str(job.get("inputs", {}).get("topic", "")),
+                workflow=job["workflow"].name,
+                cost_usd=round(sum(s.output.cost_usd for s in states.values() if s.output), 4),
+                created_at=job.get("created_at"),
+                updated_at=job.get("updated_at"),
+                stages_done=done,
+                stages_total=len(states),
+                current_stage=running,
+                error=job.get("error") or None,
+                render_key=artifacts.get("render"),
+                thumbnail_keys=[
+                    v for k, v in sorted(artifacts.items()) if k.startswith("thumbnail")
+                ],
+            )
+        )
+
+    # Newest first. Jobs with no timestamp (created before the column existed) sort
+    # last rather than crashing the comparison against a datetime.
+    out.sort(key=lambda j: (j.created_at is not None, j.created_at), reverse=True)
+    return out[: max(1, min(limit, 500))]
 
 
 @app.get("/v1/jobs/{job_id}")

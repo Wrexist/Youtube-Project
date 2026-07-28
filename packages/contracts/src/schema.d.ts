@@ -404,7 +404,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Jobs
+         * @description Every job, newest first.
+         *
+         *     This did not exist, so the Queue and Library had nothing to read and rendered
+         *     demo data permanently — generate a video and neither screen would ever change.
+         *     They are the two screens someone looks at immediately after pressing Generate.
+         *
+         *     `status` filters to one state; the Library asks for `completed` and the Queue
+         *     takes everything.
+         */
+        get: operations["list_jobs_v1_jobs_get"];
         put?: never;
         /** Create Job */
         post: operations["create_job_v1_jobs_post"];
@@ -849,6 +860,43 @@ export interface components {
              * Workflow
              * @default video
              */
+            workflow: string;
+        };
+        /**
+         * JobSummary
+         * @description One job, as the Queue and Library list them.
+         *
+         *     A response model rather than a bare dict because both screens do arithmetic and
+         *     filtering on these fields; without it the generated TypeScript types every one
+         *     as `unknown` and the UI has to cast, which is what `packages/contracts` exists
+         *     to prevent.
+         */
+        JobSummary: {
+            /** Cost Usd */
+            cost_usd: number;
+            /** Created At */
+            created_at?: string | null;
+            /** Current Stage */
+            current_stage?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            /** Render Key */
+            render_key?: string | null;
+            /** Stages Done */
+            stages_done: number;
+            /** Stages Total */
+            stages_total: number;
+            /** Status */
+            status: string;
+            /** Thumbnail Keys */
+            thumbnail_keys?: string[];
+            /** Topic */
+            topic: string;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Workflow */
             workflow: string;
         };
         /** LaunchRequest */
@@ -1549,6 +1597,38 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    list_jobs_v1_jobs_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

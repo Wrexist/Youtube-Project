@@ -288,3 +288,37 @@ def test_the_health_check_interval_makes_the_key_a_liveness_signal():
 
 async def _resolve(value):
     return value
+
+
+def test_the_enqueue_probe_does_not_retry_five_times():
+    """`enqueue` runs inside POST /v1/jobs, so its Redis timeout is user-facing.
+
+    With no Redis — the documented zero-config setup, where renders run in-process
+    anyway — arq's defaults of five retries at one second each meant every Generate
+    sat for five seconds before falling back to the path it was always going to
+    take. Measured at 5.02s before this, 0.01s after.
+    """
+    from engine.worker import build_redis_settings, probe_redis_settings
+
+    probe = probe_redis_settings()
+    assert probe.conn_retries <= 1
+    assert probe.conn_retry_delay == 0
+    assert probe.conn_timeout <= 2
+
+    # The worker keeps the generous defaults: it is long-running and should ride
+    # out a Redis restart rather than dying on one refused connection.
+    assert build_redis_settings().conn_retries > probe.conn_retries
+
+
+async def test_the_fallback_is_fast_when_redis_is_absent(monkeypatch):
+    import time
+
+    from engine import worker
+
+    async def refuse(*_a, **_kw):
+        raise ConnectionError("no redis")
+
+    monkeypatch.setattr(worker, "create_pool", refuse)
+    started = time.monotonic()
+    assert await worker.enqueue("job-1") is False
+    assert time.monotonic() - started < 1.0

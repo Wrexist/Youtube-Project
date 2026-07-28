@@ -349,6 +349,8 @@ async def load_jobs(get_workflow) -> dict[str, dict]:
             "wake": asyncio.Event(),
             "status": status,
             "error": row.error,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
         }
 
     if interrupted:

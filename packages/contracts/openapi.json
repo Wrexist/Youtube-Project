@@ -221,6 +221,114 @@
         "title": "JobRequest",
         "type": "object"
       },
+      "JobSummary": {
+        "description": "One job, as the Queue and Library list them.\n\nA response model rather than a bare dict because both screens do arithmetic and\nfiltering on these fields; without it the generated TypeScript types every one\nas `unknown` and the UI has to cast, which is what `packages/contracts` exists\nto prevent.",
+        "properties": {
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "current_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Stage"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "render_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Render Key"
+          },
+          "stages_done": {
+            "title": "Stages Done",
+            "type": "integer"
+          },
+          "stages_total": {
+            "title": "Stages Total",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "thumbnail_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Thumbnail Keys",
+            "type": "array"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "workflow": {
+            "title": "Workflow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "topic",
+          "workflow",
+          "cost_usd",
+          "stages_done",
+          "stages_total"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
       "LaunchRequest": {
         "properties": {
           "country": {
@@ -1167,6 +1275,65 @@
       }
     },
     "/v1/jobs": {
+      "get": {
+        "description": "Every job, newest first.\n\nThis did not exist, so the Queue and Library had nothing to read and rendered\ndemo data permanently \u2014 generate a video and neither screen would ever change.\nThey are the two screens someone looks at immediately after pressing Generate.\n\n`status` filters to one state; the Library asks for `completed` and the Queue\ntakes everything.",
+        "operationId": "list_jobs_v1_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobSummary"
+                  },
+                  "title": "Response List Jobs V1 Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Jobs"
+      },
       "post": {
         "operationId": "create_job_v1_jobs_post",
         "requestBody": {

@@ -44,7 +44,31 @@ HEALTH_KEY = default_queue_name + health_check_key_suffix
 
 
 def build_redis_settings() -> RedisSettings:
+    """Connection details for the worker process.
+
+    Keeps arq's generous retry defaults on purpose: the worker is long-running and
+    should ride out a Redis restart rather than dying on one refused connection.
+    """
     return RedisSettings.from_dsn(get_settings().redis_url)
+
+
+def probe_redis_settings() -> RedisSettings:
+    """Connection details for the API's "is there a worker?" question.
+
+    The same defaults that are right for the worker are wrong here. `enqueue` runs
+    inside `POST /v1/jobs`, and with no Redis — the documented zero-config setup,
+    where renders run in-process — arq's five retries at one second each meant every
+    Generate sat for **five seconds** before falling back to the path it was always
+    going to take. Measured, not guessed.
+
+    One attempt, one second. Redis is either there or it is not; asking six times
+    does not change the answer, and the caller has a working fallback either way.
+    """
+    settings = RedisSettings.from_dsn(get_settings().redis_url)
+    settings.conn_retries = 1
+    settings.conn_retry_delay = 0
+    settings.conn_timeout = 1
+    return settings
 
 
 # Kept as an alias because `main._relay` and `enqueue` both want the connection
@@ -135,7 +159,8 @@ async def enqueue(job_id: str, start_from: str | None = None) -> bool:
     """
     pool = None
     try:
-        pool = await create_pool(redis_settings())
+        # The probe settings, not the worker's: this call is on the request path.
+        pool = await create_pool(probe_redis_settings())
         if not await worker_is_alive(pool):
             logger.info(
                 "redis is up but no arq worker is consuming {}; running {} in-process. "
