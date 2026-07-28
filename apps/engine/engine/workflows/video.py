@@ -71,6 +71,15 @@ WORKFLOWS = {
 }
 
 
+#: Workflows `POST /v1/jobs` will start. "publish" is deliberately absent: it is
+#: reachable only through `POST /v1/jobs/{id}/publish`, which seeds it with a
+#: finished job's states and a live YouTube client. Started directly it returned
+#: 202, ran the entire paid render, and then died on a bare
+#: `KeyError: 'youtube_client'` in UploadStage — which has max_attempts = 1, so
+#: there was not even a retry to make the cause visible.
+STARTABLE = frozenset({"video", "script", "seo"})
+
+
 def get(name: str) -> Workflow:
     if name not in WORKFLOWS:
         raise KeyError(f"unknown workflow {name!r}; have {sorted(WORKFLOWS)}")

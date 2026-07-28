@@ -178,6 +178,6 @@ class Analytics:
 
         # The hourly shape still comes from the heuristic — the API gives no hourly
         # dimension. Saying so is better than implying we measured it.
-        profile = AudienceProfile(weekday=weekday)
+        profile = AudienceProfile(daily=weekday)
         profile.source = "measured_weekday_only"
         return profile

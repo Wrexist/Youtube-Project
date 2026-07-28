@@ -77,7 +77,11 @@ export type JobEventType =
   | "stage.failed"
   | "stage.retrying"
   | "stage.skipped"
-  | "stage.replayed";
+  | "stage.replayed"
+  // Terminal. The engine sends this immediately before closing the stream, because
+  // a stream that just ends is a *reconnect* signal to EventSource — a finished job
+  // replayed its whole log every few seconds without it.
+  | "stream.closed";
 
 export interface JobEvent {
   type: JobEventType;
@@ -89,4 +93,6 @@ export interface JobEvent {
   error?: string;
   attempt?: number;
   cost_usd?: number;
+  /** Only on `stream.closed`: the job's final status. */
+  status?: JobStatus;
 }

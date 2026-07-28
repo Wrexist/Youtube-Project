@@ -147,6 +147,15 @@ export function useJobStream(jobId: string | null, initial: Stage[] = []): JobSt
       ];
       for (const type of types) source.addEventListener(type, handle);
 
+      // The engine's terminal frame. Without closing here, EventSource treats the
+      // server ending the stream as a dropped connection, reconnects a few seconds
+      // later, and replays the entire log — re-dispatching workflow.started and
+      // flipping the Publish button's state on a loop that never stops.
+      source.addEventListener("stream.closed", (e: MessageEvent) => {
+        handle(e);
+        source?.close();
+      });
+
       source.onerror = () => {
         // EventSource reconnects on its own; only say something if it gave up.
         if (source?.readyState === EventSource.CLOSED) {

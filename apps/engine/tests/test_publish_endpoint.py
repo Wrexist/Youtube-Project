@@ -351,3 +351,76 @@ def test_artifacts_are_exposed_so_the_library_can_show_them():
     row = client.get("/v1/jobs").json()[0]
     assert row["render_key"] == "renders/x.mp4"
     assert row["thumbnail_keys"] == ["thumbnails/x-0.jpg", "thumbnails/x-1.jpg"]
+
+
+# ── the publish job's live client ───────────────────────────────────────────
+
+
+def test_the_youtube_client_never_reaches_a_response():
+    """`get_job` returned job["inputs"] verbatim, and a publish job's inputs hold a
+    live YouTube client carrying an access token — so the endpoint 500'd on
+    serialisation, and was one annotation change away from returning the token."""
+    from engine import repository
+
+    served = repository.jsonable(
+        {
+            "topic": "x",
+            "youtube_client": object(),
+            "access_token": "ya29.SECRET",
+            "nested": {"ok": 1},
+        }
+    )
+    assert "youtube_client" not in served
+    assert served["topic"] == "x"
+    assert served["nested"] == {"ok": 1}
+
+
+def test_a_scheduled_publish_keeps_its_time_across_a_restart():
+    """`publish_at` is a datetime, which the json filter dropped outright.
+
+    A scheduled publish that survived a restart therefore came back with no
+    publish_at at all — and UploadStage reads that as "publish now, publicly"
+    rather than "private until the scheduled time".
+    """
+    from datetime import UTC, datetime
+
+    from engine.repository import _restore_inputs, jsonable
+
+    when = datetime(2026, 9, 1, 14, 30, tzinfo=UTC)
+    restored = _restore_inputs(jsonable({"publish_at": when, "privacy": "private"}))
+    assert restored["publish_at"] == when
+    assert restored["privacy"] == "private"
+
+
+def test_a_corrupt_stored_timestamp_does_not_crash_the_restore():
+    from engine.repository import _restore_inputs
+
+    assert "publish_at" not in _restore_inputs({"publish_at": "not-a-date"})
+
+
+# ── the publish workflow is not directly startable ──────────────────────────
+
+
+def test_starting_the_publish_workflow_directly_is_refused():
+    """It used to return 202, run the entire paid render, then die on a bare
+    KeyError: 'youtube_client' in a stage with max_attempts = 1."""
+    client, main = _client()
+    main.JOBS.clear()
+    response = client.post("/v1/jobs", json={"topic": "a topic", "workflow": "publish"})
+    assert response.status_code == 400
+    assert "publish" in response.json()["detail"]
+    assert main.JOBS == {}, "nothing should have been created"
+
+
+def test_health_does_not_advertise_a_workflow_you_cannot_start():
+    client, _ = _client()
+    assert "publish" not in client.get("/health").json()["workflows"]
+
+
+def test_the_startable_workflows_still_work():
+    client, main = _client()
+    main.JOBS.clear()
+    for name in ("video", "script", "seo"):
+        assert (
+            client.post("/v1/jobs", json={"topic": "a topic", "workflow": name}).status_code == 202
+        )

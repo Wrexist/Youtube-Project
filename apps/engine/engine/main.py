@@ -125,7 +125,7 @@ async def health() -> dict:
             "draft": routing.spec_for("draft").model,
             "tags": routing.spec_for("tags").model,
         },
-        "workflows": sorted(video.WORKFLOWS),
+        "workflows": sorted(video.STARTABLE),
     }
 
 
@@ -153,6 +153,15 @@ async def describe_workflow(name: str) -> dict:
 
 @app.post("/v1/jobs", status_code=202)
 async def create_job(body: JobRequest) -> dict:
+    if body.workflow not in video.STARTABLE:
+        # Refused here rather than after the render: "publish" needs a live YouTube
+        # client that only the publish endpoint supplies, so starting it directly
+        # burned a full generation before failing on a KeyError.
+        raise HTTPException(
+            400,
+            f"workflow must be one of {sorted(video.STARTABLE)}; "
+            "publishing goes through POST /v1/jobs/{job_id}/publish",
+        )
     try:
         wf = video.get(body.workflow)
     except KeyError as exc:
@@ -399,7 +408,10 @@ async def get_job(job_id: str) -> dict:
     return {
         "id": job_id,
         "status": job["status"],
-        "inputs": job["inputs"],
+        # Through the serialiser, not verbatim: a publish job's inputs carry a live
+        # YouTube client holding an access token, so returning them raw both 500s on
+        # serialisation and is one annotation away from putting a token in a response.
+        "inputs": repository.jsonable(job["inputs"]),
         "stages": _serialize_stages(job),
         "cost_usd": round(sum(s.output.cost_usd for s in job["states"].values() if s.output), 4),
     }
@@ -436,6 +448,14 @@ async def stream_job(job_id: str) -> EventSourceResponse:
                 yield {"event": event["type"], "data": _json(event)}
 
             if job["status"] != "running":
+                # A terminal frame, then stop. Closing the stream without one is a
+                # *reconnect* signal to EventSource, so a finished job replayed its
+                # entire log every few seconds — re-dispatching workflow.started and
+                # flipping the Publish button's state on a loop, forever.
+                yield {
+                    "event": "stream.closed",
+                    "data": _json({"type": "stream.closed", "status": job["status"]}),
+                }
                 return
 
             await waiting.wait()
