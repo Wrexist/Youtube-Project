@@ -451,7 +451,17 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Cancel Job */
+        /**
+         * Cancel Job
+         * @description Stop a job and tell everyone watching.
+         *
+         *     The status change alone was not enough. `stream_job` parks on
+         *     `await waiting.wait()` and only re-checks the status when that Event fires, so
+         *     without the `_wake` below every open SSE connection hung forever — the browser
+         *     tab sat on a spinner for a job that had already stopped. And the row was never
+         *     written, so the cancellation survived only until the next restart, where it came
+         *     back as `interrupted`.
+         */
         post: operations["cancel_job_v1_jobs__job_id__cancel_post"];
         delete?: never;
         options?: never;
@@ -1804,7 +1814,9 @@ export interface operations {
     };
     publish_job_v1_jobs__job_id__publish_post: {
         parameters: {
-            query?: never;
+            query?: {
+                force?: boolean;
+            };
             header?: never;
             path: {
                 job_id: string;

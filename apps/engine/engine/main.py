@@ -198,6 +198,7 @@ async def _dispatch(job_id: str, start_from: str | None = None) -> None:
     if await worker.enqueue(job_id, start_from):
         # The work happens elsewhere; this process only relays the worker's events
         # to any browser watching.
+        JOBS[job_id]["enqueued"] = True
         JOBS[job_id]["task"] = asyncio.create_task(_relay(job_id))
     else:
         # Deliberately not tied to the request: closing the tab must not cancel a render.
@@ -464,7 +465,7 @@ async def stream_job(job_id: str) -> EventSourceResponse:
 
 
 @app.post("/v1/jobs/{job_id}/publish", status_code=202)
-async def publish_job(job_id: str, body: PublishRequest) -> dict:
+async def publish_job(job_id: str, body: PublishRequest, force: bool = False) -> dict:
     """Publish a finished video. **This is the approval gate.**
 
     `CLAUDE.md` non-negotiable #3: nothing publishes without an explicit approval
@@ -482,6 +483,19 @@ async def publish_job(job_id: str, body: PublishRequest) -> dict:
         raise HTTPException(409, f"job is {source['status']}; only a completed job can publish")
     if source["workflow"].name != "video":
         raise HTTPException(409, f"job ran the '{source['workflow'].name}' workflow, not 'video'")
+
+    # Idempotent unless explicitly overridden. Nothing checked for an existing
+    # publish job, and the source stays `completed` while the web Publish button
+    # re-enables — so a second click uploaded the same video to YouTube twice, at
+    # 1,600 quota units and one duplicate public video each.
+    existing = _existing_publish(job_id)
+    if existing and not force:
+        publish_id, state = existing
+        raise HTTPException(
+            409,
+            f"already published as job {publish_id} ({state}); "
+            "pass ?force=true to publish it again",
+        )
 
     creds = channels.CHANNELS.get("default")
     if creds is None:
@@ -534,6 +548,21 @@ async def publish_job(job_id: str, body: PublishRequest) -> dict:
 
     logger.info("publishing job {} as {}", job_id, publish_id)
     return {"job_id": publish_id, "status": "running", "source_job_id": job_id}
+
+
+def _existing_publish(source_job_id: str) -> tuple[str, str] | None:
+    """A publish job for this source that is running or has succeeded.
+
+    A *failed* publish is not a reason to refuse a retry — that is the case
+    `force` exists for, and refusing it would strand a video whose upload died
+    halfway.
+    """
+    for publish_id, job in JOBS.items():
+        if job.get("inputs", {}).get("source_job_id") != source_job_id:
+            continue
+        if job.get("status") in ("running", "completed"):
+            return publish_id, job["status"]
+    return None
 
 
 def _video_state(job_id: str, job: dict) -> automation.VideoState:
@@ -595,13 +624,44 @@ async def edit_stage(job_id: str, body: EditRequest) -> dict:
 
 @app.post("/v1/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str) -> dict:
+    """Stop a job and tell everyone watching.
+
+    The status change alone was not enough. `stream_job` parks on
+    `await waiting.wait()` and only re-checks the status when that Event fires, so
+    without the `_wake` below every open SSE connection hung forever — the browser
+    tab sat on a spinner for a job that had already stopped. And the row was never
+    written, so the cancellation survived only until the next restart, where it came
+    back as `interrupted`.
+    """
     job = _require(job_id)
+
+    if job["status"] not in ("running", "interrupted"):
+        # Cancelling a finished job would rewrite a real outcome with a false one.
+        return {"status": job["status"], "note": "already finished"}
+
     task = job.get("task")
     if task and not task.done():
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
     job["status"] = "cancelled"
+    job["events"].append({"type": "workflow.cancelled", "job_id": job_id})
+    # Load-bearing: this is what lets the SSE generator notice and close.
+    _wake(job)
+    await _persist(job)
+
+    if job.get("enqueued"):
+        # A job running in the worker process is not reachable by cancelling a local
+        # task — that only stops the relay. The render continues and its `finally`
+        # will overwrite this status. Say so rather than implying it stopped.
+        logger.warning(
+            "job {} is running in a worker; the local relay stopped but the render "
+            "continues until it finishes",
+            job_id,
+        )
+        return {"status": "cancelled", "note": "worker render continues; see KNOWN-ISSUES"}
+
     return {"status": "cancelled"}
 
 

@@ -1416,6 +1416,7 @@
     },
     "/v1/jobs/{job_id}/cancel": {
       "post": {
+        "description": "Stop a job and tell everyone watching.\n\nThe status change alone was not enough. `stream_job` parks on\n`await waiting.wait()` and only re-checks the status when that Event fires, so\nwithout the `_wake` below every open SSE connection hung forever \u2014 the browser\ntab sat on a spinner for a job that had already stopped. And the row was never\nwritten, so the cancellation survived only until the next restart, where it came\nback as `interrupted`.",
         "operationId": "cancel_job_v1_jobs__job_id__cancel_post",
         "parameters": [
           {
@@ -1557,6 +1558,16 @@
             "schema": {
               "title": "Job Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
             }
           }
         ],
