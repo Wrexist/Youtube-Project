@@ -12,6 +12,7 @@ import io
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -71,6 +72,7 @@ def _render_sync(
     # 1.x is EOL.
     from moviepy import (
         AudioFileClip,
+        ColorClip,
         CompositeVideoClip,
         TextClip,
         VideoFileClip,
@@ -86,14 +88,16 @@ def _render_sync(
     # runtime proportional to its estimated length. This is what keeps footage
     # aligned with what is being said — the single biggest visual-quality lever.
     fade_s = settings.transition_fade_s
-    segments = []
     beat_spans = _beat_spans(beats, total)
+    groups: list[tuple[float, Any]] = []  # (start, clip covering that beat's span)
+    segments: list[Any] = []  # every underlying clip, for close() at the end
+
     for index, (start, end) in enumerate(beat_spans):
-        beat_clips = [c for c in clips if c["beat_index"] == index and c.get("path")]
-        if not beat_clips:
-            continue
         span = end - start
-        per_clip = span / len(beat_clips)
+        beat_clips = [c for c in clips if c["beat_index"] == index and c.get("path")]
+
+        built = []
+        per_clip = span / len(beat_clips) if beat_clips else span
         for clip in beat_clips:
             try:
                 source = VideoFileClip(clip["path"])
@@ -104,30 +108,47 @@ def _render_sync(
             # `fade_s` that the overlap eats. Without it the video finishes short
             # of the narration and freezes on the last frame.
             take = min(per_clip + fade_s, source.duration)
-            segments.append(_fit(source.subclipped(0, take), width, height))
+            built.append(_fit(source.subclipped(0, take), width, height))
+
+        if not built:
+            # A beat with no usable footage used to be `continue`d, which silently
+            # shortened the timeline and dragged every later beat earlier.
+            logger.warning("beat {} has no usable footage; holding the previous shot", index + 1)
+            continue
+
+        segments.extend(built)
+        styled = [
+            effects.style_segment(
+                segment, index=i, count=len(built), ken_burns=settings.ken_burns, fade_s=fade_s
+            )
+            for i, segment in enumerate(built)
+        ]
+        group = (
+            styled[0]
+            if len(styled) == 1
+            else concatenate_videoclips(
+                styled, method="compose", padding=effects.concat_padding(len(styled), fade_s)
+            )
+        )
+        groups.append((start, _cover_span(group, span)))
         report(0.25 + 0.45 * (index + 1) / max(len(beat_spans), 1), f"beat {index + 1}")
 
-    if not segments:
+    if not groups:
         raise RuntimeError("no usable clips after download")
 
-    # Motion and dissolves go on after the whole timeline is known — the first
-    # segment is treated differently, and that cannot be decided mid-loop.
-    report(0.72, "applying motion")
-    segments = [
-        effects.style_segment(
-            segment,
-            index=index,
-            count=len(segments),
-            ken_burns=settings.ken_burns,
-            fade_s=fade_s,
-        )
-        for index, segment in enumerate(segments)
-    ]
-
-    video = concatenate_videoclips(
-        segments,
-        method="compose",
-        padding=effects.concat_padding(len(segments), fade_s),
+    report(0.72, "placing beats")
+    # Each beat is *positioned* at its own start rather than butted onto the end of
+    # the previous one. Concatenation assumed every beat's footage exactly filled its
+    # span; when a source was shorter than its slot — routine, since stock clips can
+    # be as short as 3s while a slot can be 5s or more — the timeline came up short,
+    # every later beat played early against the narration, and `.with_duration(total)`
+    # padded the difference with transparent frames that render as black. Measured on
+    # a 10s narration with 2s sources: 5 seconds of black and beat 2 playing under
+    # beat 1's audio.
+    video = CompositeVideoClip(
+        [ColorClip((width, height), color=(0, 0, 0), duration=total)]
+        + [group.with_start(start) for start, group in groups],
+        size=(width, height),
     ).with_duration(total)
 
     track = bgm.resolve() if bgm.should_mix(settings.bgm_volume) else None
@@ -170,6 +191,24 @@ def _render_sync(
     )
     for clip in (*segments, narration, final):
         clip.close()
+
+
+def _cover_span(group, span: float):
+    """Make a beat's footage last exactly as long as the beat does.
+
+    Sourced footage is regularly shorter than the slot it has to fill: stock clips
+    are accepted from 3 seconds and a beat's share of the runtime can be well past
+    that. Truncating to whatever the source had was what let the timeline finish
+    short of the narration.
+
+    Looped rather than frozen. A still frame held for two seconds reads as a
+    playback fault; repeated b-roll reads as b-roll.
+    """
+    from moviepy.video.fx import Loop
+
+    if group.duration >= span - 0.02:
+        return group.with_duration(span)
+    return group.with_effects([Loop(duration=span)]).with_duration(span)
 
 
 def _beat_spans(beats: list, total: float) -> list[tuple[float, float]]:

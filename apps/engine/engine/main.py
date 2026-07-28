@@ -377,9 +377,19 @@ async def list_jobs(status: str | None = None, limit: int = 100) -> list[JobSumm
             )
         )
 
-    # Newest first. Jobs with no timestamp (created before the column existed) sort
-    # last rather than crashing the comparison against a datetime.
-    out.sort(key=lambda j: (j.created_at is not None, j.created_at), reverse=True)
+    # Newest first, sorted on a plain number rather than on the datetimes
+    # themselves. Comparing a naive datetime with an aware one raises TypeError,
+    # and both reach here — SQLite has no timezone type, so a restored job is naive
+    # while one created in this process is aware. Missing timestamps sort last.
+    def _age(job: JobSummary) -> float:
+        if job.created_at is None:
+            return float("-inf")
+        moment = job.created_at
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment.timestamp()
+
+    out.sort(key=_age, reverse=True)
     return out[: max(1, min(limit, 500))]
 
 

@@ -297,6 +297,18 @@ def _is_json_safe(value: Any) -> bool:
     return False
 
 
+def _aware(moment: datetime | None) -> datetime | None:
+    """A datetime that can be compared with one from `datetime.now(UTC)`.
+
+    Postgres round-trips the offset; SQLite does not store one at all. Assuming UTC
+    for a naive value is correct here because every write goes through
+    `datetime.now(UTC)`.
+    """
+    if moment is None:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
 async def load_jobs(get_workflow) -> dict[str, dict]:
     """Rebuild the in-process job mirror from rows. Called once at startup.
 
@@ -349,8 +361,12 @@ async def load_jobs(get_workflow) -> dict[str, dict]:
             "wake": asyncio.Event(),
             "status": status,
             "error": row.error,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
+            # Normalised on the way out: SQLite has no timezone type and hands
+            # back naive datetimes, while a job created in this process carries an
+            # aware one. Sorting the two together raises TypeError, so `GET
+            # /v1/jobs` died the moment a restored job and a new job coexisted.
+            "created_at": _aware(row.created_at),
+            "updated_at": _aware(row.updated_at),
         }
 
     if interrupted:

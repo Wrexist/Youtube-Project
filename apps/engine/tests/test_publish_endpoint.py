@@ -290,6 +290,30 @@ def test_newest_first():
     assert topics[0] == "the newer one"
 
 
+def test_a_naive_and_an_aware_timestamp_can_coexist():
+    """SQLite has no timezone type, so a restored job is naive while one created
+    in this process is aware — and sorting the two together raises TypeError.
+
+    This is exactly the state after any restart with a SQLite database: the list
+    endpoint 500s the moment one new job is created alongside a restored one.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "the restored one"})
+    client.post("/v1/jobs", json={"topic": "the fresh one"})
+
+    for job in main.JOBS.values():
+        if job["inputs"]["topic"] == "the restored one":
+            # What SQLite hands back: no tzinfo, and older.
+            job["created_at"] = (datetime.now(UTC) - timedelta(hours=2)).replace(tzinfo=None)
+
+    response = client.get("/v1/jobs")
+    assert response.status_code == 200, response.text
+    assert [r["topic"] for r in response.json()][0] == "the fresh one"
+
+
 def test_a_job_restored_without_a_timestamp_does_not_break_the_sort():
     """Rows written before created_at was mirrored come back with None."""
     client, main = _client()
