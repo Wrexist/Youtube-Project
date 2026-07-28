@@ -24,6 +24,8 @@ import type {
   Insights,
   JobCreated,
   JobRequest,
+  JobStatus,
+  JobSummary,
   Models,
   PublishRequest,
   Quota,
@@ -137,6 +139,17 @@ export const getModels = () => get<Models>("/v1/models");
 export const getWorkflow = (name: string) => get<WorkflowGraph>(`/v1/workflows/${name}`);
 export const getJob = (id: string) => get<Record<string, unknown>>(`/v1/jobs/${id}`);
 
+/**
+ * Every job, newest first. Optionally filtered to one status.
+ *
+ * The Queue and the Library are both views over this. Before the endpoint existed
+ * they rendered `lib/demo.ts` unconditionally, so generating a video changed
+ * neither screen — the two screens someone looks at immediately after pressing
+ * Generate.
+ */
+export const getJobs = (status?: JobStatus) =>
+  get<JobSummary[]>(`/v1/jobs${status ? `?status=${status}` : ""}`);
+
 // ── writes ──────────────────────────────────────────────────────────────────
 
 export const createJob = (body: JobRequest) => post<JobCreated>("/v1/jobs", body);
@@ -149,6 +162,14 @@ export const cancelJob = (id: string) => post<unknown>(`/v1/jobs/${id}/cancel`);
  */
 export const publishJob = (id: string, body: Partial<PublishRequest> = {}) =>
   post<unknown>(`/v1/jobs/${id}/publish`, body);
+
+/**
+ * A browser-reachable URL for a generated artifact — a thumbnail, a render.
+ *
+ * Must go through `BASE`: a bare `/v1/files/...` resolves against the web app's own
+ * origin (:3000), where nothing serves it. The engine owns these files.
+ */
+export const fileUrl = (key: string) => `${BASE}/v1/files/${key}`;
 
 /** Where a browser subscribes for live progress. */
 export const eventsUrl = (id: string) => `${BASE}/v1/jobs/${id}/events`;

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Header, Page, Card, Button } from "@/components/ui";
+import { LiveBadge } from "@/components/live-badge";
 import { CHANNEL_LAUNCH, MANUAL_STEPS } from "@/lib/demo";
 
 /** New channel — one input, everything else derived.
@@ -18,7 +19,15 @@ export default function NewChannelPage() {
   if (!result) {
     return (
       <>
-        <Header title="New channel" />
+        <Header
+          title="New channel"
+          meta={
+            <span className="flex items-center gap-2">
+              {/* The launch endpoint exists; this screen does not call it yet. */}
+              <LiveBadge live={false} />
+            </span>
+          }
+        />
         <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[680px] flex-col justify-center px-8 pb-24">
           <label htmlFor="niche" className="text-[15px] text-[var(--color-muted)]">
             What should the channel be about?

@@ -1,4 +1,5 @@
 import { Header, Page, Card } from "@/components/ui";
+import { LiveBadge } from "@/components/live-badge";
 import { BigNumber, StatTile, RetentionMap } from "@/components/charts";
 import {
   VIEWS_28D,
@@ -28,7 +29,18 @@ export default function AnalyticsPage() {
 
   return (
     <>
-      <Header title="Analytics" meta={<span>Last 28 days</span>} />
+      <Header
+        title="Analytics"
+        meta={
+          <span className="flex items-center gap-2">
+            Last 28 days
+            {/* Every figure below comes from lib/demo.ts. The Analytics API needs a
+                connected channel and published videos; until then these are a
+                design, not measurements, and must say so. */}
+            <LiveBadge live={false} />
+          </span>
+        }
+      />
       <Page>
         <section className="pb-10">
           <BigNumber

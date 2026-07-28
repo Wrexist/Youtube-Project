@@ -45,6 +45,9 @@ export type CalendarSlots = Ok<paths["/v1/calendar/slots"]["get"]>;
 export type Channels = Ok<paths["/v1/channels"]["get"]>;
 export type Insights = Ok<paths["/v1/insights"]["get"]>;
 export type Models = Ok<paths["/v1/models"]["get"]>;
+/** One row of `GET /v1/jobs` — what the Queue and Library list. */
+export type JobSummary = components["schemas"]["JobSummary"];
+export type Jobs = Ok<paths["/v1/jobs"]["get"]>;
 export type ChannelLimits = Ok<paths["/v1/channels/limits"]["get"]>;
 
 // ── things FastAPI types as `object` ────────────────────────────────────────
