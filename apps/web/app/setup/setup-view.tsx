@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, Button } from "@/components/ui";
@@ -158,7 +159,14 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
         Written to <span className="mono">{setup.env_path}</span>, which is
         gitignored and readable only by you. Keys are never sent anywhere but this
         machine, and this screen cannot read one back — it only ever shows the last
-        four characters.
+        four characters.{" "}
+        <Link
+          href="/welcome"
+          className="underline decoration-[var(--color-line-hover)] underline-offset-4 hover:text-[var(--color-muted)]"
+        >
+          Walk through the guided setup again
+        </Link>
+        .
       </p>
     </>
   );

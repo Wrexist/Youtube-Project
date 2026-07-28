@@ -321,6 +321,47 @@ async def status() -> SetupStatus:
     )
 
 
+class DiagnosticCheck(BaseModel):
+    key: str
+    name: str
+    level: str
+    detail: str
+    fix: str
+    command: str
+    href: str
+
+
+class Diagnostics(BaseModel):
+    checks: list[DiagnosticCheck]
+    ready: bool
+    blockers: int
+    warnings: int
+
+
+@router.get("/diagnostics")
+async def diagnostics(network: bool = True) -> Diagnostics:
+    """What `scripts/doctor.py` prints, as data.
+
+    The same checks, so the terminal and the screen cannot disagree. It existed
+    only as a script, which meant the answer to "why did my render fail" lived
+    behind remembering a virtualenv path — on the machine of someone who has, by
+    construction, just failed to set this up.
+
+    `network=false` skips the grounding probe, which reaches out to YouTube with a
+    six-second timeout. The Setup screen loads with it off and turns it on for the
+    explicit "Run checks" press.
+    """
+    from engine import diagnostics as diag
+
+    report = await diag.run(include_network=network)
+    return Diagnostics(
+        checks=[DiagnosticCheck(**vars(c)) for c in report.checks],
+        ready=report.ready,
+        blockers=len(report.blockers),
+        warnings=len(report.warnings),
+    )
+
+
 def write_env(path: Path, updates: dict[str, str]) -> None:
     """Merge `updates` into the dotenv at `path`, atomically.
 

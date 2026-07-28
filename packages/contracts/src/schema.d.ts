@@ -778,6 +778,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/setup/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Diagnostics
+         * @description What `scripts/doctor.py` prints, as data.
+         *
+         *     The same checks, so the terminal and the screen cannot disagree. It existed
+         *     only as a script, which meant the answer to "why did my render fail" lived
+         *     behind remembering a virtualenv path — on the machine of someone who has, by
+         *     construction, just failed to set this up.
+         *
+         *     `network=false` skips the grounding probe, which reaches out to YouTube with a
+         *     six-second timeout. The Setup screen loads with it off and turns it on for the
+         *     explicit "Run checks" press.
+         */
+        get: operations["diagnostics_v1_setup_diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/setup/keys": {
         parameters: {
             query?: never;
@@ -956,6 +985,34 @@ export interface components {
             url: string;
             /** Without It */
             without_it: string;
+        };
+        /** DiagnosticCheck */
+        DiagnosticCheck: {
+            /** Command */
+            command: string;
+            /** Detail */
+            detail: string;
+            /** Fix */
+            fix: string;
+            /** Href */
+            href: string;
+            /** Key */
+            key: string;
+            /** Level */
+            level: string;
+            /** Name */
+            name: string;
+        };
+        /** Diagnostics */
+        Diagnostics: {
+            /** Blockers */
+            blockers: number;
+            /** Checks */
+            checks: components["schemas"]["DiagnosticCheck"][];
+            /** Ready */
+            ready: boolean;
+            /** Warnings */
+            warnings: number;
         };
         /** EditRequest */
         EditRequest: {
@@ -2383,6 +2440,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupStatus"];
+                };
+            };
+        };
+    };
+    diagnostics_v1_setup_diagnostics_get: {
+        parameters: {
+            query?: {
+                network?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Diagnostics"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

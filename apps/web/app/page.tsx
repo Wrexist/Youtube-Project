@@ -1,4 +1,7 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { getSetup } from "@/lib/engine";
+import { ONBOARDED_COOKIE } from "@/lib/onboarding";
 import { CreateView, type Readiness } from "./create-view";
 
 /**
@@ -17,6 +20,17 @@ import { CreateView, type Readiness } from "./create-view";
  */
 export default async function CreatePage() {
   const setup = await getSetup();
+
+  // A genuinely fresh install goes to the welcome flow instead. The condition is
+  // narrow on purpose: *nothing at all* configured, and the tour not yet
+  // dismissed. A half-configured install has clearly already met this and is
+  // better served by the Create screen's inline prompt, and an unreachable engine
+  // must never trigger it — being unable to ask is not the same as the answer
+  // being "new here".
+  if (setup && setup.credentials.every((c) => !c.configured)) {
+    const jar = await cookies();
+    if (!jar.get(ONBOARDED_COOKIE)) redirect("/welcome");
+  }
 
   const ready: Readiness = setup
     ? {

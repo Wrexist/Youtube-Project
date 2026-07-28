@@ -55,6 +55,11 @@ export type ChannelLimits = Ok<paths["/v1/channels/limits"]["get"]>;
 export type SetupStatus = Ok<paths["/v1/setup"]["get"]>;
 export type CredentialStatus = components["schemas"]["CredentialStatus"];
 
+/** `scripts/doctor.py` as data — the same checks, so the terminal and the screen
+ *  cannot disagree about whether this install works. */
+export type Diagnostics = Ok<paths["/v1/setup/diagnostics"]["get"]>;
+export type DiagnosticCheck = components["schemas"]["DiagnosticCheck"];
+
 // ── things FastAPI types as `object` ────────────────────────────────────────
 //
 // Every one of these endpoints is declared `-> dict` in the engine, so the schema

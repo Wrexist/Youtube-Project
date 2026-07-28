@@ -81,3 +81,33 @@ async def database(tmp_path, monkeypatch):
 
     await db.dispose()
     get_settings.cache_clear()
+
+
+# ── source assertions ───────────────────────────────────────────────────────
+#
+# Several guards here assert on the shape of the source rather than on behaviour,
+# because the thing being prevented is structural: a module reaching for
+# `os.environ`, a shared connection pool being disposed inside a request. Those
+# guards all hit the same trap — the comment *documenting* the rule matches the
+# pattern the rule looks for, so explaining yourself breaks the test. A rule that
+# cannot be explained in a comment is one people work around silently.
+
+
+def code_only(source: str) -> str:
+    """`source` with comments and string literals removed.
+
+    Tokenised rather than regexed: stripping everything after a `#` also mangles
+    a `#` inside a string, and stripping quotes by pattern goes wrong on nested
+    and triple quotes. `tokenize` already knows the difference.
+    """
+    import io
+    import tokenize
+
+    kept = []
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type not in (tokenize.COMMENT, tokenize.STRING):
+                kept.append(token.string)
+    except (tokenize.TokenError, IndentationError):  # pragma: no cover
+        return source  # unparseable: fall back to checking everything
+    return " ".join(kept)

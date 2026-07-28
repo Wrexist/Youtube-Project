@@ -21,6 +21,7 @@ import type {
   Calendar,
   CalendarSlots,
   Channels,
+  Diagnostics,
   Insights,
   JobCreated,
   JobRequest,
@@ -265,6 +266,16 @@ export const eventsUrl = (id: string) => `${BASE}/v1/jobs/${id}/events`;
 // `saveKeys` never receives one it did not just take from a form field.
 
 export const getSetup = () => get<SetupStatus>("/v1/setup");
+
+/**
+ * Run the health checks and report them.
+ *
+ * `network: false` skips the keyword-grounding probe, which reaches YouTube with
+ * a six-second timeout — far too long to hold a page render. Screens load without
+ * it and turn it on for an explicit "Run checks" press.
+ */
+export const getDiagnostics = (network = false) =>
+  get<Diagnostics>(`/v1/setup/diagnostics?network=${network}`);
 
 /** Save credentials. Only the names passed are touched; absent means unchanged. */
 export const saveKeys = (values: Record<string, string>) =>

@@ -210,25 +210,11 @@ _ENV_WRITE = re.compile(
 _MAY_WRITE_ENV = {"api/setup.py"}
 
 
-def _code_only(source: str) -> str:
-    """The source with comments and string literals removed.
-
-    Without this the guard fires on the prose that documents it: the comment in
-    `api/setup.py` explaining *why* `os.environ` has to be written is itself a
-    match for `os.environ`. A rule that cannot be explained in a comment without
-    breaking is a rule people work around silently.
-    """
-    import io
-    import tokenize
-
-    kept = []
-    try:
-        for token in tokenize.generate_tokens(io.StringIO(source).readline):
-            if token.type not in (tokenize.COMMENT, tokenize.STRING):
-                kept.append(token.string)
-    except (tokenize.TokenError, IndentationError):  # pragma: no cover
-        return source  # unparseable: fall back to checking everything
-    return " ".join(kept)
+#: Shared with the other source-shape guards — see the note in conftest.py. Without
+#: it this fires on the prose that documents it: the comment in `api/setup.py`
+#: explaining *why* `os.environ` has to be written is itself a match for
+#: `os.environ`.
+from conftest import code_only as _code_only  # noqa: E402
 
 
 def test_nothing_reads_os_environ_directly():

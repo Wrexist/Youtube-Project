@@ -14,12 +14,14 @@
  */
 
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 
 import {
   EngineError,
   beginYouTubeAuth,
   cancelJob,
   createJob,
+  getDiagnostics,
   publishJob,
   saveKeys,
   applySchedulePlan,
@@ -31,7 +33,8 @@ import {
   setAllRoutes,
   setRoute,
 } from "@/lib/engine";
-import type { JobRequest, PublishRequest } from "@studio/contracts";
+import { ONBOARDED_COOKIE, ONBOARDED_MAX_AGE } from "@/lib/onboarding";
+import type { Diagnostics, JobRequest, PublishRequest } from "@studio/contracts";
 
 export interface ActionResult<T = unknown> {
   ok: boolean;
@@ -327,4 +330,43 @@ export async function connectYouTube(): Promise<ActionResult<{ url: string }>> {
           : "Could not reach the engine — YouTube was not connected.",
     };
   }
+}
+
+/** Record that this browser has been through the welcome flow. */
+export async function finishOnboarding(): Promise<ActionResult> {
+  const jar = await cookies();
+  jar.set(ONBOARDED_COOKIE, "1", {
+    path: "/",
+    maxAge: ONBOARDED_MAX_AGE,
+    sameSite: "lax",
+    httpOnly: true,
+  });
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/** Show the tour again. The Setup screen offers this; nothing else does. */
+export async function replayOnboarding(): Promise<ActionResult> {
+  const jar = await cookies();
+  jar.delete(ONBOARDED_COOKIE);
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/**
+ * Re-run the health checks and hand back what they found.
+ *
+ * An action rather than a client fetch so the browser never needs to reach the
+ * engine directly — the same reason every other mutation goes this way. `network`
+ * turns on the keyword-grounding probe, which is slow enough that it only belongs
+ * behind a button press.
+ */
+export async function runDiagnostics(
+  network = true,
+): Promise<ActionResult<Diagnostics>> {
+  const data = await getDiagnostics(network);
+  if (!data) {
+    return { ok: false, error: "The engine did not answer. Is it still running?" };
+  }
+  return { ok: true, data };
 }

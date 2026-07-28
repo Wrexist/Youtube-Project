@@ -254,6 +254,80 @@
         "title": "CredentialStatus",
         "type": "object"
       },
+      "DiagnosticCheck": {
+        "properties": {
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "fix": {
+            "title": "Fix",
+            "type": "string"
+          },
+          "href": {
+            "title": "Href",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "level",
+          "detail",
+          "fix",
+          "command",
+          "href"
+        ],
+        "title": "DiagnosticCheck",
+        "type": "object"
+      },
+      "Diagnostics": {
+        "properties": {
+          "blockers": {
+            "title": "Blockers",
+            "type": "integer"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "warnings": {
+            "title": "Warnings",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checks",
+          "ready",
+          "blockers",
+          "warnings"
+        ],
+        "title": "Diagnostics",
+        "type": "object"
+      },
       "EditRequest": {
         "properties": {
           "stage": {
@@ -2320,6 +2394,50 @@
           }
         },
         "summary": "Status",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/v1/setup/diagnostics": {
+      "get": {
+        "description": "What `scripts/doctor.py` prints, as data.\n\nThe same checks, so the terminal and the screen cannot disagree. It existed\nonly as a script, which meant the answer to \"why did my render fail\" lived\nbehind remembering a virtualenv path \u2014 on the machine of someone who has, by\nconstruction, just failed to set this up.\n\n`network=false` skips the grounding probe, which reaches out to YouTube with a\nsix-second timeout. The Setup screen loads with it off and turns it on for the\nexplicit \"Run checks\" press.",
+        "operationId": "diagnostics_v1_setup_diagnostics_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "network",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Network",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Diagnostics"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Diagnostics",
         "tags": [
           "setup"
         ]

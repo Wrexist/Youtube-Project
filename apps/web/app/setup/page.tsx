@@ -1,6 +1,7 @@
 import { Header, Page, Card } from "@/components/ui";
-import { getSetup } from "@/lib/engine";
+import { getSetup, getDiagnostics } from "@/lib/engine";
 import { SetupView } from "./setup-view";
+import { DiagnosticsPanel } from "./diagnostics-panel";
 
 /** Setup — the screen that turns a fresh clone into a working install.
  *
@@ -24,7 +25,10 @@ import { SetupView } from "./setup-view";
  *  fallback the other screens use would be an outright lie.
  */
 export default async function SetupPage() {
-  const setup = await getSetup();
+  // In parallel: two independent reads, and the diagnostics call is the slower of
+  // the two even with the network probe off. Awaiting them in sequence would add
+  // its whole latency to a page someone is waiting on.
+  const [setup, checks] = await Promise.all([getSetup(), getDiagnostics(false)]);
 
   if (!setup) {
     return (
@@ -76,6 +80,7 @@ apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
       />
       <Page>
         <SetupView setup={setup} />
+        <DiagnosticsPanel initial={checks} />
       </Page>
     </>
   );

@@ -29,6 +29,12 @@ export function Rail() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
+  // The welcome flow is a takeover. Every destination in this rail is a screen
+  // that does not work yet on the install being set up, so offering eight of them
+  // beside a four-step sequence is an invitation to wander off mid-setup and an
+  // eight-fold chance of landing somewhere that says "demo data".
+  if (pathname === "/welcome") return null;
+
   return (
     <nav
       aria-label="Main"
