@@ -13,7 +13,17 @@
  * whole point of the approval gate's blocker list is that the user can read it.
  */
 
-import { EngineError, cancelJob, createJob, publishJob } from "@/lib/engine";
+import { revalidatePath } from "next/cache";
+
+import {
+  EngineError,
+  cancelJob,
+  createJob,
+  publishJob,
+  resetRoutes,
+  setAllRoutes,
+  setRoute,
+} from "@/lib/engine";
 import type { JobRequest, PublishRequest } from "@studio/contracts";
 
 export interface ActionResult<T = unknown> {
@@ -87,4 +97,61 @@ function message(error: unknown): string {
     return "The engine is not running. Start it on :8080, or see README.md.";
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+// ── model routing ───────────────────────────────────────────────────────────
+//
+// The Models screen used to keep every change in `useState` and send nothing, so
+// a routing choice survived until the next reload and the header quoted a monthly
+// cost for a configuration that was never in force.
+
+export async function routeTask(
+  task: string,
+  model: string,
+): Promise<ActionResult> {
+  try {
+    await setRoute(task, model);
+    revalidatePath("/models");
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — the routing change was not saved.",
+    };
+  }
+}
+
+export async function routeEverything(model: string): Promise<ActionResult> {
+  try {
+    await setAllRoutes(model);
+    revalidatePath("/models");
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — nothing was changed.",
+    };
+  }
+}
+
+export async function restoreDefaultRoutes(): Promise<ActionResult> {
+  try {
+    await resetRoutes();
+    revalidatePath("/models");
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — nothing was changed.",
+    };
+  }
 }

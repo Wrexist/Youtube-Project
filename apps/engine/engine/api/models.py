@@ -38,40 +38,87 @@ class AddModel(BaseModel):
     context: int = Field(default=128_000, gt=0)
 
 
+class TaskRoute(BaseModel):
+    task: str
+    group: str
+    needs: str
+    quality: str
+    model: str
+    is_local: bool
+
+
+class CatalogueEntry(BaseModel):
+    key: str
+    provider: str
+    model: str
+    label: str
+    is_local: bool
+    is_free: bool
+    json_mode: bool
+    context: int
+    input_per_m: float
+    output_per_m: float
+
+
+class RoutingProblem(BaseModel):
+    task: str
+    message: str
+
+
+class ModelsResponse(BaseModel):
+    """Everything the Models screen needs, typed.
+
+    A response model rather than a bare dict because the Models screen does real
+    work with these — grouping tasks, looking specs up by key, summing a monthly
+    cost. Returned untyped, `openapi-typescript` produced `unknown` for every
+    field, so the screen could not use them at all and instead re-declared the
+    whole shape from `lib/demo.ts` and re-implemented `Routing.problems()` by hand.
+    Two copies of one rule set is exactly what packages/contracts exists to stop.
+    """
+
+    tasks: list[TaskRoute]
+    catalogue: list[CatalogueEntry]
+    problems: list[RoutingProblem]
+    cost_multiplier: float
+    defaults: dict[str, str]
+
+
 @router.get("")
-async def list_models() -> dict:
+async def list_models() -> ModelsResponse:
     """Everything the Models screen needs in one call."""
-    return {
-        "tasks": [
-            {
-                "task": task,
-                "group": meta["group"],
-                "needs": meta["needs"],
-                "quality": meta["quality"],
-                "model": routing.spec_for(task).key(),
-                "is_local": routing.spec_for(task).is_local,
-            }
-            for task, meta in TASKS.items()
-        ],
-        "catalogue": [
-            {
-                "key": key,
-                "provider": spec.provider,
-                "model": spec.model,
-                "label": spec.label or spec.model,
-                "is_local": spec.is_local,
-                "is_free": spec.is_free,
-                "json_mode": spec.json_mode,
-                "context": spec.context,
-                "input_per_m": spec.input_per_m,
-                "output_per_m": spec.output_per_m,
-            }
-            for key, spec in routing.catalogue.items()
-        ],
-        "problems": routing.problems(),
-        "cost_multiplier": routing.estimated_cost_multiplier(),
-        "defaults": DEFAULT_ROUTES,
-    }
+    return ModelsResponse.model_validate(
+        {
+            "tasks": [
+                {
+                    "task": task,
+                    "group": meta["group"],
+                    "needs": meta["needs"],
+                    "quality": meta["quality"],
+                    "model": routing.spec_for(task).key(),
+                    "is_local": routing.spec_for(task).is_local,
+                }
+                for task, meta in TASKS.items()
+            ],
+            "catalogue": [
+                {
+                    "key": key,
+                    "provider": spec.provider,
+                    "model": spec.model,
+                    "label": spec.label or spec.model,
+                    "is_local": spec.is_local,
+                    "is_free": spec.is_free,
+                    "json_mode": spec.json_mode,
+                    "context": spec.context,
+                    "input_per_m": spec.input_per_m,
+                    "output_per_m": spec.output_per_m,
+                }
+                for key, spec in routing.catalogue.items()
+            ],
+            "problems": routing.problems(),
+            "cost_multiplier": routing.estimated_cost_multiplier(),
+            "defaults": DEFAULT_ROUTES,
+        }
+    )
 
 
 @router.put("/route")

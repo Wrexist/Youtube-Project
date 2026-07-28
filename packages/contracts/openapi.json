@@ -137,6 +137,64 @@
         "title": "CalendarResponse",
         "type": "object"
       },
+      "CatalogueEntry": {
+        "properties": {
+          "context": {
+            "title": "Context",
+            "type": "integer"
+          },
+          "input_per_m": {
+            "title": "Input Per M",
+            "type": "number"
+          },
+          "is_free": {
+            "title": "Is Free",
+            "type": "boolean"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "json_mode": {
+            "title": "Json Mode",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "output_per_m": {
+            "title": "Output Per M",
+            "type": "number"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "provider",
+          "model",
+          "label",
+          "is_local",
+          "is_free",
+          "json_mode",
+          "context",
+          "input_per_m",
+          "output_per_m"
+        ],
+        "title": "CatalogueEntry",
+        "type": "object"
+      },
       "EditRequest": {
         "properties": {
           "stage": {
@@ -354,6 +412,52 @@
         "title": "LaunchRequest",
         "type": "object"
       },
+      "ModelsResponse": {
+        "description": "Everything the Models screen needs, typed.\n\nA response model rather than a bare dict because the Models screen does real\nwork with these \u2014 grouping tasks, looking specs up by key, summing a monthly\ncost. Returned untyped, `openapi-typescript` produced `unknown` for every\nfield, so the screen could not use them at all and instead re-declared the\nwhole shape from `lib/demo.ts` and re-implemented `Routing.problems()` by hand.\nTwo copies of one rule set is exactly what packages/contracts exists to stop.",
+        "properties": {
+          "catalogue": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogueEntry"
+            },
+            "title": "Catalogue",
+            "type": "array"
+          },
+          "cost_multiplier": {
+            "title": "Cost Multiplier",
+            "type": "number"
+          },
+          "defaults": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Defaults",
+            "type": "object"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/RoutingProblem"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/TaskRoute"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tasks",
+          "catalogue",
+          "problems",
+          "cost_multiplier",
+          "defaults"
+        ],
+        "title": "ModelsResponse",
+        "type": "object"
+      },
       "PublishRequest": {
         "description": "Choices the operator makes at the approval gate.\n\nAll optional: the defaults publish the top-scored title and first thumbnail\nimmediately and publicly, which is the common case.",
         "properties": {
@@ -475,6 +579,24 @@
         "title": "RouteUpdate",
         "type": "object"
       },
+      "RoutingProblem": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "message"
+        ],
+        "title": "RoutingProblem",
+        "type": "object"
+      },
       "ScheduleRequest": {
         "properties": {
           "at": {
@@ -510,6 +632,44 @@
           "at"
         ],
         "title": "ScheduledVideo",
+        "type": "object"
+      },
+      "TaskRoute": {
+        "properties": {
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "needs": {
+            "title": "Needs",
+            "type": "string"
+          },
+          "quality": {
+            "title": "Quality",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "group",
+          "needs",
+          "quality",
+          "model",
+          "is_local"
+        ],
+        "title": "TaskRoute",
         "type": "object"
       },
       "ValidationError": {
@@ -1617,9 +1777,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Models V1 Models Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ModelsResponse"
                 }
               }
             },

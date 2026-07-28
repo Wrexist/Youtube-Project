@@ -836,6 +836,29 @@ export interface components {
             /** Scheduled */
             scheduled: components["schemas"]["ScheduledVideo"][];
         };
+        /** CatalogueEntry */
+        CatalogueEntry: {
+            /** Context */
+            context: number;
+            /** Input Per M */
+            input_per_m: number;
+            /** Is Free */
+            is_free: boolean;
+            /** Is Local */
+            is_local: boolean;
+            /** Json Mode */
+            json_mode: boolean;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Model */
+            model: string;
+            /** Output Per M */
+            output_per_m: number;
+            /** Provider */
+            provider: string;
+        };
         /** EditRequest */
         EditRequest: {
             /** Stage */
@@ -925,6 +948,31 @@ export interface components {
             niche: string;
         };
         /**
+         * ModelsResponse
+         * @description Everything the Models screen needs, typed.
+         *
+         *     A response model rather than a bare dict because the Models screen does real
+         *     work with these — grouping tasks, looking specs up by key, summing a monthly
+         *     cost. Returned untyped, `openapi-typescript` produced `unknown` for every
+         *     field, so the screen could not use them at all and instead re-declared the
+         *     whole shape from `lib/demo.ts` and re-implemented `Routing.problems()` by hand.
+         *     Two copies of one rule set is exactly what packages/contracts exists to stop.
+         */
+        ModelsResponse: {
+            /** Catalogue */
+            catalogue: components["schemas"]["CatalogueEntry"][];
+            /** Cost Multiplier */
+            cost_multiplier: number;
+            /** Defaults */
+            defaults: {
+                [key: string]: string;
+            };
+            /** Problems */
+            problems: components["schemas"]["RoutingProblem"][];
+            /** Tasks */
+            tasks: components["schemas"]["TaskRoute"][];
+        };
+        /**
          * PublishRequest
          * @description Choices the operator makes at the approval gate.
          *
@@ -993,6 +1041,13 @@ export interface components {
             /** Task */
             task: string;
         };
+        /** RoutingProblem */
+        RoutingProblem: {
+            /** Message */
+            message: string;
+            /** Task */
+            task: string;
+        };
         /** ScheduleRequest */
         ScheduleRequest: {
             /**
@@ -1009,6 +1064,21 @@ export interface components {
             at: string;
             /** Video Id */
             video_id: string;
+        };
+        /** TaskRoute */
+        TaskRoute: {
+            /** Group */
+            group: string;
+            /** Is Local */
+            is_local: boolean;
+            /** Model */
+            model: string;
+            /** Needs */
+            needs: string;
+            /** Quality */
+            quality: string;
+            /** Task */
+            task: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -1866,9 +1936,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ModelsResponse"];
                 };
             };
         };

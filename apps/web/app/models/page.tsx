@@ -1,8 +1,8 @@
-"use client";
-
-import { useMemo, useState } from "react";
-import { Header, Page, Card, Button } from "@/components/ui";
-import { MODEL_CATALOGUE, MODEL_TASKS, type ModelKey } from "@/lib/demo";
+import { Header, Page, Card } from "@/components/ui";
+import { LiveBadge } from "@/components/live-badge";
+import { getModels } from "@/lib/engine";
+import { MODEL_CATALOGUE, MODEL_TASKS } from "@/lib/demo";
+import { ModelsView, type ModelSpec, type TaskRoute } from "./models-view";
 
 /** Models — which model runs which stage.
  *
@@ -12,167 +12,71 @@ import { MODEL_CATALOGUE, MODEL_TASKS, type ModelKey } from "@/lib/demo";
  *  The warnings are the point. Routing the critique pass to a 7B is a legitimate
  *  choice; being surprised by the results is not, so the consequence is stated next
  *  to the control rather than buried in docs.
+ *
+ *  A Server Component reading `GET /v1/models`, so the screen shows the routing
+ *  actually in force. It previously seeded `useState` from demo data and never read
+ *  the engine at all, which meant the routing shown was not the routing used and
+ *  the header quoted a monthly cost for a configuration that existed nowhere.
  */
-export default function ModelsPage() {
-  const [routes, setRoutes] = useState<Record<string, ModelKey>>(
-    Object.fromEntries(MODEL_TASKS.map((t) => [t.task, t.model])),
-  );
+export default async function ModelsPage() {
+  const models = await getModels();
+  const live = models !== null;
 
-  const groups = useMemo(() => {
-    const out: Record<string, typeof MODEL_TASKS> = {};
-    for (const t of MODEL_TASKS) (out[t.group] ??= []).push(t);
-    return out;
-  }, []);
+  const tasks: TaskRoute[] = live
+    ? models.tasks.map((t) => ({
+        task: t.task,
+        group: t.group,
+        needs: t.needs,
+        quality: t.quality,
+        model: t.model,
+      }))
+    : MODEL_TASKS.map((t) => ({
+        task: t.task,
+        group: t.group,
+        needs: t.needs,
+        quality: t.quality,
+        model: t.model,
+      }));
 
-  const specOf = (key: string) => MODEL_CATALOGUE.find((m) => m.key === key)!;
+  // The engine speaks snake_case and the demo fixture camelCase; normalised here so
+  // the client component sees exactly one shape.
+  const catalogue: ModelSpec[] = live
+    ? models.catalogue.map((m) => ({
+        key: m.key,
+        label: m.label,
+        isLocal: m.is_local,
+        isFree: m.is_free,
+        jsonMode: m.json_mode,
+        context: m.context,
+        inputPerM: m.input_per_m,
+        outputPerM: m.output_per_m,
+      }))
+    : MODEL_CATALOGUE.map((m) => ({ ...m }));
 
-  /** Mirrors Routing.problems() in engine/models.py. */
-  const problems = useMemo(() => {
-    const out: { task: string; message: string }[] = [];
-    for (const t of MODEL_TASKS) {
-      const spec = specOf(routes[t.task]);
-      if (t.needs.includes("JSON") && !spec.jsonMode)
-        out.push({
-          task: t.task,
-          message: `${spec.label} is unreliable at strict JSON, which this task requires. Expect retries and occasional stage failures.`,
-        });
-      if (t.quality === "critical" && spec.isLocal && spec.context < 32000)
-        out.push({
-          task: t.task,
-          message: `${t.task} is one of the stages that decides whether a video works. A small local model here saves pennies and costs views.`,
-        });
-      if (t.needs.includes("long output") && spec.context < 16000)
-        out.push({
-          task: t.task,
-          message: `${spec.label} has a ${spec.context.toLocaleString()}-token context; long-form drafts will be truncated.`,
-        });
-    }
-    return out;
-  }, [routes]);
+  const problems = live
+    ? models.problems
+    : // Offline there is nothing to warn about — the defaults are the defaults.
+      [];
 
-  const monthly = useMemo(() => {
-    // Rough: ~30 videos a month at ~40k tokens each across the chain.
-    const perVideo = MODEL_TASKS.reduce((sum, t) => {
-      const s = specOf(routes[t.task]);
-      return sum + (s.inputPerM * 30000 + s.outputPerM * 10000) / 1_000_000;
-    }, 0);
-    return perVideo * 30;
-  }, [routes]);
-
-  const allLocal = MODEL_TASKS.every((t) => specOf(routes[t.task]).isLocal);
+  const monthly = estimateMonthly(tasks, catalogue);
+  const allLocal =
+    tasks.length > 0 &&
+    tasks.every((t) => catalogue.find((m) => m.key === t.model)?.isLocal);
 
   return (
     <>
       <Header
         title="Models"
         meta={
-          <span className="mono">
+          <span className="mono flex items-center gap-2">
             ~${monthly.toFixed(2)}/month at 30 videos
             {allLocal && " · fully local"}
+            <LiveBadge live={live} />
           </span>
-        }
-        action={
-          <div className="flex gap-2">
-            <Button
-              variant="ghost"
-              onClick={() =>
-                setRoutes(
-                  Object.fromEntries(
-                    MODEL_TASKS.map((t) => [
-                      t.task,
-                      "ollama:qwen2.5:14b" as ModelKey,
-                    ]),
-                  ),
-                )
-              }
-            >
-              All local
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() =>
-                setRoutes(
-                  Object.fromEntries(MODEL_TASKS.map((t) => [t.task, t.model])),
-                )
-              }
-            >
-              Reset
-            </Button>
-          </div>
         }
       />
       <Page>
-        {problems.length > 0 && (
-          <Card className="mb-6 border-[var(--color-warn)]/40 p-5">
-            <p className="text-[13px] font-semibold text-[var(--color-warn)]">
-              {problems.length} routing warning{problems.length > 1 ? "s" : ""}
-            </p>
-            <ul className="mt-2 grid gap-1.5">
-              {problems.map((p, i) => (
-                <li key={i} className="text-[12px] leading-relaxed text-[var(--color-muted)]">
-                  <span className="mono text-[var(--color-faint)]">{p.task}</span>{" "}
-                  — {p.message}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-3 text-[12px] text-[var(--color-faint)]">
-              These are warnings, not errors. Running everything locally is a
-              legitimate choice — this is just what it costs you.
-            </p>
-          </Card>
-        )}
-
-        {Object.entries(groups).map(([group, tasks]) => (
-          <section key={group} className="mb-8">
-            <h2 className="pb-2.5 text-[13px] font-semibold text-[var(--color-muted)]">
-              {group}
-            </h2>
-            <div className="grid gap-1.5">
-              {tasks.map((t) => {
-                const spec = specOf(routes[t.task]);
-                const flagged = problems.some((p) => p.task === t.task);
-                return (
-                  <Card key={t.task} className="flex flex-wrap items-center gap-4 px-4 py-3">
-                    <div className="min-w-[180px] flex-1">
-                      <p className="text-[13px] font-semibold">{t.task}</p>
-                      <p className="mono mt-0.5 text-[11px] text-[var(--color-faint)]">
-                        {t.needs}
-                        {t.quality === "critical" && " · high leverage"}
-                      </p>
-                    </div>
-
-                    <select
-                      value={routes[t.task]}
-                      onChange={(e) =>
-                        setRoutes({ ...routes, [t.task]: e.target.value as ModelKey })
-                      }
-                      aria-label={`Model for ${t.task}`}
-                      className="min-w-[220px] rounded-[var(--radius-btn)] border bg-[var(--color-bg)] px-2.5 py-1.5 text-[12px] transition-colors duration-150"
-                      style={{
-                        borderColor: flagged
-                          ? "var(--color-warn)"
-                          : "var(--color-line)",
-                      }}
-                    >
-                      {MODEL_CATALOGUE.map((m) => (
-                        <option key={m.key} value={m.key}>
-                          {m.label}
-                          {m.isFree ? " · free" : ""}
-                        </option>
-                      ))}
-                    </select>
-
-                    <span className="mono w-24 shrink-0 text-right text-[11px] text-[var(--color-faint)]">
-                      {spec.isFree
-                        ? "local"
-                        : `$${(spec.inputPerM + spec.outputPerM).toFixed(2)}/M`}
-                    </span>
-                  </Card>
-                );
-              })}
-            </div>
-          </section>
-        ))}
+        <ModelsView tasks={tasks} catalogue={catalogue} problems={problems} live={live} />
 
         <Card className="p-5">
           <h2 className="text-[13px] font-semibold">Local models</h2>
@@ -188,11 +92,21 @@ export default function ModelsPage() {
             frontier model for hook, draft, critique and titles.
           </p>
           <pre className="mono mt-3 overflow-x-auto rounded bg-[var(--color-raised)] p-3 text-[11px] text-[var(--color-muted)]">
-{`ollama serve
+            {`ollama serve
 ollama pull qwen2.5:14b`}
           </pre>
         </Card>
       </Page>
     </>
   );
+}
+
+/** Rough: ~30 videos a month at ~40k tokens each across the chain. */
+function estimateMonthly(tasks: TaskRoute[], catalogue: ModelSpec[]): number {
+  const perVideo = tasks.reduce((sum, t) => {
+    const spec = catalogue.find((m) => m.key === t.model);
+    if (!spec) return sum;
+    return sum + (spec.inputPerM * 30000 + spec.outputPerM * 10000) / 1_000_000;
+  }, 0);
+  return perVideo * 30;
 }

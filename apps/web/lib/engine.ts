@@ -91,8 +91,12 @@ export async function get<T>(path: string): Promise<T | null> {
 
 /** Write to the engine. Throws — a mutation that silently failed is a lie. */
 export async function post<T>(path: string, body?: unknown): Promise<T> {
+  return send<T>("POST", path, body);
+}
+
+async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
-    method: "POST",
+    method,
     cache: "no-store",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -107,6 +111,12 @@ export async function post<T>(path: string, body?: unknown): Promise<T> {
     );
   }
   return payload as T;
+}
+
+/** Same contract as `post`, for the endpoints that are genuinely idempotent
+ *  replacements — the model routing table is set, not appended to. */
+export async function put<T>(path: string, body?: unknown): Promise<T> {
+  return send<T>("PUT", path, body);
 }
 
 /** FastAPI's `detail` is a string, or a list of validation errors, or an object. */
@@ -170,6 +180,16 @@ export const publishJob = (id: string, body: Partial<PublishRequest> = {}) =>
  * origin (:3000), where nothing serves it. The engine owns these files.
  */
 export const fileUrl = (key: string) => `${BASE}/v1/files/${key}`;
+
+/** Route one task to one model. PUT, not POST — it replaces, it does not append. */
+export const setRoute = (task: string, model: string) =>
+  put<unknown>("/v1/models/route", { task, model });
+
+/** The "run it all locally" button. */
+export const setAllRoutes = (model: string) =>
+  put<unknown>("/v1/models/route/all", { model });
+
+export const resetRoutes = () => post<unknown>("/v1/models/route/reset");
 
 /** Where a browser subscribes for live progress. */
 export const eventsUrl = (id: string) => `${BASE}/v1/jobs/${id}/events`;
