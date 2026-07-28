@@ -11,6 +11,7 @@
     "lint": "npm run lint --workspace=@studio/web",
     "typecheck": "npm run typecheck --workspace=@studio/web",
     "check:toolchain": "node scripts/check-web-toolchain.mjs",
+    "reinstall": "node scripts/reinstall.mjs",
     "infra": "docker compose up -d"
   },
   "engines": {

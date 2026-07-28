@@ -216,31 +216,33 @@ docker compose --profile full up -d
 
 ## If something does not start
 
-The three things that actually go wrong, and what each looks like.
+**Most web-side problems are one command:**
+
+```bash
+npm run reinstall
+```
+
+It deletes *every* `node_modules` in the workspace — root and each workspace — then
+reinstalls and verifies. Stop the dev server first; on Windows a running server
+holds those files open, the delete fails, and the usual
+`-ErrorAction SilentlyContinue` hides that it failed. This script reports it
+instead of pretending.
+
+The specific symptoms, and what each one is:
+
+**`Configuring Next.js via 'next.config.ts' is not supported`**, or `npm audit`
+reporting ~107 findings instead of 14, or stack traces mentioning webpack,
+styled-jsx or autoprefixer — none of which this app uses. A stale
+`apps/web/node_modules` from an older layout is shadowing the root install. A clean
+install here hoists everything and creates no workspace `node_modules` at all, so
+any that exists is left over — and it wins over the root copy for anything resolved
+inside that workspace, which is how a dev server can announce Next 16 while running
+a Next 10 tree. `npm run reinstall`.
 
 **`Cannot find module '../lightningcss.win32-x64-msvc.node'`** — a 500 on the first
 page load. npm records a native optional dependency only for the platform that
-generated the lockfile, so a `node_modules` installed before that was pinned has no
-Windows binary. Fixed by reinstalling:
-
-```powershell
-Remove-Item -Recurse -Force node_modules, apps\web\node_modules, `
-    packages\contracts\node_modules -ErrorAction SilentlyContinue
-npm install
-```
-
-**Delete all three, not just the root one.** A clean install here hoists everything
-and leaves no workspace `node_modules`; one left over from an older layout shadows
-the root copy for anything inside that workspace, and deleting only the root leaves
-it exactly where it was.
-
-That is worth watching for on its own: it is how a machine ended up running Next 16
-in the dev server with a Next 10-era tree underneath it — webpack, styled-jsx,
-autoprefixer 9 — and `npm audit` reporting 107 findings including a critical, where
-a clean tree reports 14. None of the extras were real.
-
-`npm run check:toolchain` detects both problems, and `setup.ps1` / `setup.sh` repair
-them automatically.
+generated the lockfile, so a `node_modules` installed before those were pinned has
+no Windows binary. `npm run reinstall`.
 
 **`The module 'apps' could not be loaded`** — PowerShell will not run an executable
 given as a relative path. Prefix it with `.\`:
@@ -251,6 +253,12 @@ given as a relative path. Prefix it with `.\`:
 
 **`The term '```bash' is not recognized`** — that line is markdown fencing from
 these docs, not a command. Copy the lines *between* the fences.
+
+**Anything engine-side** — run the doctor; it names the single next action for
+whatever is missing.
+
+`npm run check:toolchain` reports the state of the web dependencies without
+changing anything.
 
 ---
 

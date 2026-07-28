@@ -111,10 +111,7 @@ if ($LASTEXITCODE -ne 0) {
     # for anything inside that workspace, and deleting only the root leaves it in
     # place. That is how a machine ran Next 16 with a Next 10-era tree underneath,
     # and npm audit reported 107 findings against 14 on a clean tree.
-    Remove-Item -Recurse -Force node_modules, apps\web\node_modules, `
-        packages\contracts\node_modules -ErrorAction SilentlyContinue
-    npm install --silent
-    node scripts\check-web-toolchain.mjs
+    node scripts\reinstall.mjs
     if ($LASTEXITCODE -ne 0) { Die "web dependencies are still wrong" }
 } else {
     Note "web dependencies OK"

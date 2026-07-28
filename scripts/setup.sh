@@ -86,9 +86,7 @@ if ! node scripts/check-web-toolchain.mjs >/dev/null 2>&1; then
   # and leaves no workspace node_modules; one that survives shadows the root copy
   # for anything inside that workspace, and deleting only the root leaves it in
   # place. That is how a machine ran Next 16 with a Next 10-era tree underneath it.
-  rm -rf node_modules apps/*/node_modules packages/*/node_modules
-  npm install --silent
-  node scripts/check-web-toolchain.mjs || die "web dependencies are still wrong"
+  node scripts/reinstall.mjs || die "web dependencies are still wrong"
 fi
 note "web dependencies OK"
 
