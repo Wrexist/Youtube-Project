@@ -75,6 +75,19 @@ step "Setting up the web app"
 note "installing npm workspaces"
 npm install --silent
 
+# Tailwind v4 compiles CSS through native binaries, and npm records an optional
+# dependency only for the platform that generated the lockfile. A node_modules
+# left over from before the root package.json pinned every variant is still
+# broken, and the symptom is a 500 on the first page load naming a .node file
+# nobody recognises. Catch it here, where it can be fixed silently.
+if ! node scripts/check-web-toolchain.mjs >/dev/null 2>&1; then
+  note "CSS toolchain incomplete for this platform — reinstalling node_modules"
+  rm -rf node_modules
+  npm install --silent
+  node scripts/check-web-toolchain.mjs || die "the CSS toolchain still will not load"
+fi
+note "CSS toolchain OK"
+
 # ── config ──────────────────────────────────────────────────────────────────
 
 step "Configuration"

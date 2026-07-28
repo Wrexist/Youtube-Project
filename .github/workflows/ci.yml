@@ -77,6 +77,13 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # Tailwind v4 needs a platform-specific native binary, and npm only records
+      # the optional dependency for whichever platform generated the lockfile —
+      # which is how Windows ended up with no lightningcss at all. This job runs on
+      # Linux, so it cannot catch a *missing* win32 entry, but it does catch the
+      # pinned versions in optionalDependencies drifting from the installed
+      # Tailwind, which is the failure that would silently reintroduce it.
+      - run: npm run check:toolchain
       # A stale contract is silent drift: the web app keeps compiling against types
       # the engine no longer serves. Fail the build instead.
       - name: Generated types match openapi.json

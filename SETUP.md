@@ -43,7 +43,11 @@ Re-run it any time — it is idempotent and only redoes what changed.
 To check the state at any point:
 
 ```bash
-apps/engine/.venv/bin/python apps/engine/scripts/doctor.py
+apps/engine/.venv/bin/python apps/engine/scripts/doctor.py          # macOS / Linux
+```
+
+```powershell
+.\apps\engine\.venv\Scripts\python apps\engine\scripts\doctor.py         # Windows
 ```
 
 It prints one line per dependency and, for anything missing, the single next
@@ -166,21 +170,28 @@ apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080   #
 
 ```powershell
 npm run dev
-apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080
+.\apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080
 ```
 
 Then open **<http://localhost:3000>**.
 
-The only difference on Windows is the interpreter path: `.venv\Scripts\python`
-instead of `.venv/bin/python`. Everything else is identical.
+> **The leading `.\` is required.** PowerShell will not run an executable given as a
+> relative path without it — it treats a bare `apps\...` as a command name to look
+> up and fails with `The module 'apps' could not be loaded`, which does not sound
+> like a path problem at all. This bites on every command below too.
+
+Two differences from macOS/Linux, and that is all: the interpreter is at
+`.venv\Scripts\python` rather than `.venv/bin/python`, and relative commands need
+the `.\` prefix.
 
 ### Checking it worked
 
 - <http://localhost:8080/health> returns JSON → the engine is up.
 - The web app shows **"demo data"** when it cannot reach the engine and live
   figures when it can. That label is the fastest way to tell which you are seeing.
-- `apps\engine\.venv\Scripts\python apps\engine\scripts\doctor.py` lists anything
-  still missing, one line each.
+- `.\apps\engine\.venv\Scripts\python apps\engine\scripts\doctor.py` lists anything
+  still missing, one line each. (Only the *first* path needs `.\` — it is the one
+  being executed; the second is just an argument.)
 
 ### Optional extras
 
@@ -188,7 +199,11 @@ With `docker compose up -d` also running, start the render worker so restarting 
 API cannot kill a render mid-encode:
 
 ```bash
-apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings
+apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings              # macOS / Linux
+```
+
+```powershell
+.\apps\engine\.venv\Scripts\python -m arq engine.worker.WorkerSettings     # Windows
 ```
 
 Or run the whole stack in containers — no Node or Python needed on the host:
@@ -196,6 +211,35 @@ Or run the whole stack in containers — no Node or Python needed on the host:
 ```bash
 docker compose --profile full up -d
 ```
+
+---
+
+## If something does not start
+
+The three things that actually go wrong, and what each looks like.
+
+**`Cannot find module '../lightningcss.win32-x64-msvc.node'`** — a 500 on the first
+page load. npm records a native optional dependency only for the platform that
+generated the lockfile, so a `node_modules` installed before that was pinned has no
+Windows binary. Fixed by reinstalling:
+
+```powershell
+Remove-Item -Recurse -Force node_modules
+npm install
+```
+
+`npm run check:toolchain` confirms it, and `setup.ps1` / `setup.sh` now repair it
+automatically.
+
+**`The module 'apps' could not be loaded`** — PowerShell will not run an executable
+given as a relative path. Prefix it with `.\`:
+
+```powershell
+.\apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080
+```
+
+**`The term '```bash' is not recognized`** — that line is markdown fencing from
+these docs, not a command. Copy the lines *between* the fences.
 
 ---
 

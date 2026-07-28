@@ -96,6 +96,24 @@ Note "installing npm workspaces"
 npm install --silent
 if ($LASTEXITCODE -ne 0) { Die "npm install failed" }
 
+# Tailwind v4 compiles CSS through native binaries, and npm records an optional
+# dependency only for the platform that generated the lockfile — which was Linux.
+# Windows was the platform this actually broke on: no win32 entry existed, the
+# binary was never fetched, and the first page load 500'd with "Cannot find module
+# '../lightningcss.win32-x64-msvc.node'". The root package.json now pins every
+# variant, but a node_modules installed before that is still broken, so fix it here
+# rather than letting the browser be the one to report it.
+node scripts\check-web-toolchain.mjs *> $null
+if ($LASTEXITCODE -ne 0) {
+    Note "CSS toolchain incomplete for this platform - reinstalling node_modules"
+    Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
+    npm install --silent
+    node scripts\check-web-toolchain.mjs
+    if ($LASTEXITCODE -ne 0) { Die "the CSS toolchain still will not load" }
+} else {
+    Note "CSS toolchain OK"
+}
+
 # ── config ──────────────────────────────────────────────────────────────────
 
 Step "Configuration"
@@ -142,6 +160,9 @@ if ($Doctor -eq 0) {
 Write-Host ""
 Write-Host "To run it, in two terminals:"
 Write-Host "  npm run dev" -ForegroundColor Cyan
-Write-Host "  apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080" -ForegroundColor Cyan
+# The leading .\ is required. PowerShell will not run an executable given as a
+# relative path without it — a bare `apps\...` is looked up as a command name and
+# fails with "The module 'apps' could not be loaded".
+Write-Host "  .\apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080" -ForegroundColor Cyan
 Write-Host "Then open http://localhost:3000"
 Write-Host ""
