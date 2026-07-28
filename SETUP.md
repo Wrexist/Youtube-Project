@@ -9,9 +9,27 @@ no API for it.
 
 ## First: one command
 
+**macOS / Linux**
+
 ```bash
 ./scripts/setup.sh
 ```
+
+**Windows (PowerShell)**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+```
+
+> The `-ExecutionPolicy Bypass` is required, not a suggestion — Windows refuses to
+> run unsigned scripts by default and you get "running scripts is disabled on this
+> system" instead.
+>
+> `./scripts/setup.sh` on Windows opens the "how do you want to open this file?"
+> picker, because `.sh` is a bash script and nothing is registered to run it.
+>
+> And do not paste the <code>```bash</code> line — that is markdown fencing, not a
+> command. PowerShell reports it as `The term '```bash' is not recognized`.
 
 Creates the venv, installs both toolchains, writes `.env`, creates the database
 schema, runs the tests, and finishes by telling you exactly which of the items
@@ -134,25 +152,50 @@ and country. Name, handle, avatar and banner stay manual permanently.
 
 ## Running it
 
+Two processes, so **two terminals**, both from the repo root. Neither exits — that
+is correct; leave them running.
+
+**macOS / Linux**
+
 ```bash
-npm run dev                                                              # :3000
-apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
+npm run dev                                                              # terminal 1 → :3000
+apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080   # terminal 2
 ```
 
-With `docker compose up -d` also running, start the render worker so a restart
-cannot kill a render:
+**Windows (PowerShell)**
+
+```powershell
+npm run dev
+apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080
+```
+
+Then open **<http://localhost:3000>**.
+
+The only difference on Windows is the interpreter path: `.venv\Scripts\python`
+instead of `.venv/bin/python`. Everything else is identical.
+
+### Checking it worked
+
+- <http://localhost:8080/health> returns JSON → the engine is up.
+- The web app shows **"demo data"** when it cannot reach the engine and live
+  figures when it can. That label is the fastest way to tell which you are seeing.
+- `apps\engine\.venv\Scripts\python apps\engine\scripts\doctor.py` lists anything
+  still missing, one line each.
+
+### Optional extras
+
+With `docker compose up -d` also running, start the render worker so restarting the
+API cannot kill a render mid-encode:
 
 ```bash
 apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings
 ```
 
-Or run the whole stack in containers:
+Or run the whole stack in containers — no Node or Python needed on the host:
 
 ```bash
 docker compose --profile full up -d
 ```
-
-On Windows the interpreter is at `.venv/Scripts/python`.
 
 ---
 
