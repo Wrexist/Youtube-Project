@@ -80,6 +80,38 @@ function checkPins() {
 }
 
 /**
+ * Is every pin actually recorded in the lockfile?
+ *
+ * `checkPins` above compares versions, which catches a Tailwind bump that left the
+ * pins behind. It cannot catch the failure the pins exist to prevent, because that
+ * one is about *presence*: npm records an optional dependency only for the platform
+ * it resolved on, so a lockfile generated on Linux carries no win32 entry, `npm ci`
+ * on Windows never fetches the binary, and Tailwind dies at the first CSS import.
+ *
+ * Pinning every variant in `optionalDependencies` is what forces them all into the
+ * lockfile — but only if the lockfile was regenerated afterwards. Add a pin, forget
+ * to `npm install`, commit: the versions all match, this script prints success, and
+ * Windows is broken again in exactly the original way. That is the gap, and it is
+ * invisible from Linux without looking at the lockfile itself.
+ */
+function checkLockfile() {
+  const lockPath = join(ROOT, "package-lock.json");
+  if (!existsSync(lockPath)) return []; // nothing to check against
+
+  const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  const pins = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"))
+    .optionalDependencies ?? {};
+
+  // npm 7+ lockfiles key packages by install path. A hoisted dependency lands at
+  // `node_modules/<name>`; the nested copies are checked by substring so a package
+  // Tailwind installs under itself still counts as recorded.
+  const recorded = Object.keys(lock.packages ?? {});
+  return Object.keys(pins).filter(
+    (name) => !recorded.some((path) => path === `node_modules/${name}` || path.endsWith(`/node_modules/${name}`)),
+  );
+}
+
+/**
  * Is there a stale nested install shadowing the root one?
  *
  * A clean `npm install` in this repo hoists everything and leaves no
@@ -157,4 +189,15 @@ if (stale.length) {
   process.exit(1);
 }
 
-console.log(`  CSS toolchain loads on ${platform}, and the platform pins match`);
+const unrecorded = checkLockfile();
+if (unrecorded.length) {
+  console.error("\n  These platform pins are not in package-lock.json:\n");
+  for (const name of unrecorded) console.error(`    ${name}`);
+  console.error("\n  They were added to package.json but the lockfile was never");
+  console.error("  regenerated, so `npm ci` will not fetch them — which is the exact");
+  console.error("  state that breaks Tailwind on the platforms they exist to cover.\n");
+  console.error("    npm install        # then commit the updated package-lock.json\n");
+  process.exit(1);
+}
+
+console.log(`  CSS toolchain loads on ${platform}, pins match, and the lockfile has them all`);

@@ -315,6 +315,56 @@ async def test_enqueue_uses_the_worker_when_one_is_alive(monkeypatch):
     assert enqueued == [("run_job_task", ("job-1", None))]
 
 
+async def test_enqueue_gives_up_on_a_redis_that_answers_nothing(monkeypatch):
+    """Reachable-but-catatonic, which is not the same as unreachable.
+
+    arq passes `conn_timeout` as `socket_connect_timeout` and never sets
+    `socket_timeout`, so once a socket is open every command waits forever. A
+    Redis that accepts connections and then stops answering — paused container,
+    failing over, swapping — therefore hung `enqueue`, which runs inside
+    `POST /v1/jobs`. Measured against a socket that accepts and never replies:
+    still hanging at 20 seconds.
+    """
+    import asyncio
+
+    from engine import worker
+
+    class Catatonic:
+        async def exists(self, _key):
+            await asyncio.sleep(3600)  # answers, eventually, in the heat death
+
+        async def enqueue_job(self, *_a, **_kw):
+            raise AssertionError("should never get this far")
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(worker, "create_pool", lambda *_a, **_kw: _resolve(Catatonic()))
+    monkeypatch.setattr(worker, "PROBE_BUDGET_S", 0.2)
+
+    started = asyncio.get_running_loop().time()
+    assert await worker.enqueue("job-1") is False
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed < 2.0, f"took {elapsed:.1f}s — the deadline is not bounding anything"
+
+
+def test_the_probe_budget_covers_the_whole_handover():
+    """Per-call timeouts would let a merely-slow Redis spend the budget repeatedly.
+
+    Connect, health-key lookup and enqueue are three round trips; bounding each
+    separately means the worst case is three times what the constant says.
+    """
+    import inspect
+
+    from conftest import code_only
+
+    from engine import worker
+
+    body = code_only(inspect.getsource(worker.enqueue))
+    assert body.count("wait_for") == 1, "the deadline should wrap the sequence, not each call"
+    assert "PROBE_BUDGET_S" in body
+
+
 async def test_enqueue_falls_back_when_redis_is_absent(monkeypatch):
     from engine import worker
 

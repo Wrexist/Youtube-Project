@@ -137,7 +137,13 @@ Step "Creating the database schema"
 Push-Location apps\engine
 $env:STUDIO_PERSIST = "true"
 & $VenvPython -c "import asyncio; from engine import db; print('  ' + asyncio.run(db.ensure_schema()))"
+# Checked, like every other native call here. `$ErrorActionPreference` does not
+# stop on a non-zero exit from an external program, so a failed schema creation
+# scrolled past and setup went on to run the tests and print "Setup complete" —
+# on an install whose database does not exist.
+$Schema = $LASTEXITCODE
 Pop-Location
+if ($Schema -ne 0) { Die "could not create the database schema" }
 
 # ── verify ──────────────────────────────────────────────────────────────────
 
