@@ -18,6 +18,13 @@ export default async function CalendarPage() {
 
   const quotaByDay = calendar?.quota_by_day ?? quota?.by_day ?? QUOTA_BY_DAY;
 
+  // Bookings the engine already holds. This page destructured only `quota_by_day`,
+  // so an upload the engine had already scheduled was invisible — and the same day
+  // could be double-booked against a ceiling the screen could not see.
+  const initialScheduled = (calendar?.scheduled ?? []).map(
+    (s: { video_id: string; at: string }) => ({ videoId: s.video_id, at: new Date(s.at) }),
+  );
+
   return (
     <>
       <Header
@@ -32,7 +39,17 @@ export default async function CalendarPage() {
         }
       />
       <Page>
-        <Calendar videos={PENDING_VIDEOS} quotaByDay={quotaByDay} />
+        <Calendar
+          videos={PENDING_VIDEOS}
+          quotaByDay={quotaByDay}
+          initialScheduled={initialScheduled}
+          live={live}
+          // Rendered once on the server and handed down, so the grid and the
+          // is-this-day-past test agree between the server pass and the client
+          // pass. Calling `new Date()` in both is a hydration mismatch by
+          // construction.
+          now={new Date().toISOString()}
+        />
       </Page>
     </>
   );

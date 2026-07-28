@@ -119,6 +119,11 @@ export async function put<T>(path: string, body?: unknown): Promise<T> {
   return send<T>("PUT", path, body);
 }
 
+/** Unscheduling is a DELETE — the slot is removed, not set to nothing. */
+export async function del<T>(path: string): Promise<T> {
+  return send<T>("DELETE", path);
+}
+
 /** FastAPI's `detail` is a string, or a list of validation errors, or an object. */
 function describe(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null;
@@ -204,6 +209,22 @@ export const rerunStage = (id: string, stage: string) =>
 /** Replace a stage's value, keeping it done and regenerating what depended on it. */
 export const editStage = (id: string, stage: string, value: unknown) =>
   post<{ invalidated: string[]; status: string }>(`/v1/jobs/${id}/edit`, { stage, value });
+
+// ── scheduling ──────────────────────────────────────────────────────────────
+//
+// The Calendar's drag-and-drop kept everything in one `useState` and called none
+// of these, so a schedule survived until the next reload and "N videos scheduled"
+// was printed having sent nothing.
+
+/** Book one video. 409s with a readable reason when the move breaks a rule. */
+export const scheduleVideo = (videoId: string, at: string) =>
+  post<unknown>("/v1/calendar/schedule", { video_id: videoId, at });
+
+export const unscheduleVideo = (videoId: string) =>
+  del<unknown>(`/v1/calendar/schedule/${videoId}`);
+
+export const applySchedulePlan = (assignments: { video_id: string; at: string }[]) =>
+  post<{ applied: number }>("/v1/calendar/auto/apply", { assignments });
 
 /** Where a browser subscribes for live progress. */
 export const eventsUrl = (id: string) => `${BASE}/v1/jobs/${id}/events`;

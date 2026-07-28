@@ -20,8 +20,11 @@ import {
   cancelJob,
   createJob,
   publishJob,
+  applySchedulePlan,
   editStage,
   rerunStage,
+  scheduleVideo,
+  unscheduleVideo,
   resetRoutes,
   setAllRoutes,
   setRoute,
@@ -200,6 +203,67 @@ export async function editStageValue(
         error instanceof EngineError
           ? error.message
           : "Could not reach the engine — the edit was not applied.",
+    };
+  }
+}
+
+
+// ── scheduling ──────────────────────────────────────────────────────────────
+//
+// The Calendar stored bookings in a single `useState` and called nothing. A drag
+// survived until the next reload; `applyPlan` announced "N videos scheduled"
+// having sent nothing anywhere; and because `GET /v1/calendar`'s `scheduled` was
+// never read, uploads the engine had already booked were invisible — so the same
+// day could be double-booked against a ceiling the screen could not see.
+
+export async function scheduleAt(videoId: string, at: string): Promise<ActionResult> {
+  try {
+    await scheduleVideo(videoId, at);
+    revalidatePath("/calendar");
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      // The engine's 409 carries the reason — over quota, too close to another
+      // upload, in the past. It is shown verbatim rather than reduced to "failed".
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — nothing was scheduled.",
+    };
+  }
+}
+
+export async function unscheduleAt(videoId: string): Promise<ActionResult> {
+  try {
+    await unscheduleVideo(videoId);
+    revalidatePath("/calendar");
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — nothing was unscheduled.",
+    };
+  }
+}
+
+export async function applyPlanToCalendar(
+  assignments: { video_id: string; at: string }[],
+): Promise<ActionResult<{ applied: number }>> {
+  try {
+    const data = await applySchedulePlan(assignments);
+    revalidatePath("/calendar");
+    return { ok: true, data };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — the plan was not applied.",
     };
   }
 }
