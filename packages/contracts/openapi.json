@@ -50,45 +50,52 @@
         "title": "AddModel",
         "type": "object"
       },
-      "ApplyRequest": {
+      "Assignment": {
         "properties": {
-          "confirm_channel_created": {
-            "default": false,
-            "title": "Confirm Channel Created",
-            "type": "boolean"
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
           },
-          "launch_id": {
-            "title": "Launch Id",
+          "video_id": {
+            "minLength": 1,
+            "title": "Video Id",
             "type": "string"
           }
         },
         "required": [
-          "launch_id"
+          "video_id",
+          "at"
         ],
-        "title": "ApplyRequest",
+        "title": "Assignment",
         "type": "object"
       },
       "AutoScheduleRequest": {
         "properties": {
           "horizon_days": {
             "default": 28,
+            "maximum": 365.0,
+            "minimum": 1.0,
             "title": "Horizon Days",
             "type": "integer"
           },
           "long_per_week": {
             "default": 1,
+            "maximum": 50.0,
+            "minimum": 0.0,
             "title": "Long Per Week",
             "type": "integer"
           },
           "shorts_per_week": {
             "default": 3,
+            "maximum": 50.0,
+            "minimum": 0.0,
             "title": "Shorts Per Week",
             "type": "integer"
           },
           "videos": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/PendingVideo"
             },
             "title": "Videos",
             "type": "array"
@@ -605,6 +612,47 @@
         "title": "ModelsResponse",
         "type": "object"
       },
+      "PendingVideo": {
+        "description": "One video waiting for a slot.\n\nWas `dict`, which meant a missing `id` reached `auto_schedule` and came back\nas a 500 with a KeyError \u2014 four ordinary malformed payloads all did. Declaring\nthe shape turns each of them into a 422 naming the field.",
+        "properties": {
+          "format": {
+            "default": "short",
+            "enum": [
+              "short",
+              "long"
+            ],
+            "title": "Format",
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "ready_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready At"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "PendingVideo",
+        "type": "object"
+      },
       "PublishRequest": {
         "description": "Choices the operator makes at the approval gate.\n\nAll optional: the defaults publish the top-scored title and first thumbnail\nimmediately and publicly, which is the common case.",
         "properties": {
@@ -933,6 +981,40 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "engine__api__channels__ApplyRequest": {
+        "properties": {
+          "confirm_channel_created": {
+            "default": false,
+            "title": "Confirm Channel Created",
+            "type": "boolean"
+          },
+          "launch_id": {
+            "title": "Launch Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "launch_id"
+        ],
+        "title": "ApplyRequest",
+        "type": "object"
+      },
+      "engine__api__publishing__ApplyRequest": {
+        "properties": {
+          "assignments": {
+            "items": {
+              "$ref": "#/components/schemas/Assignment"
+            },
+            "title": "Assignments",
+            "type": "array"
+          }
+        },
+        "required": [
+          "assignments"
+        ],
+        "title": "ApplyRequest",
+        "type": "object"
       }
     }
   },
@@ -1215,14 +1297,13 @@
     },
     "/v1/calendar/auto/apply": {
       "post": {
+        "description": "Book a whole plan, or as much of it as the rules allow.\n\nTwo things were wrong with the old version, and they compounded.\n\nIt **wrote as it went**, so a malformed entry at position three left one and\ntwo booked and the caller with a 500 \u2014 no way to know what had landed short\nof re-reading the calendar. Everything is now checked before the first write,\nso the outcome is all-or-reported, never half-applied-and-unexplained.\n\nAnd it **never called `validate_move`**, which `schedule_one` twenty lines\nabove does on every manual drag. The same times that endpoint 409s \u2014 in the\npast, too close to another upload, over the day's quota \u2014 were persisted here\nwithout complaint, which is how a calendar ends up describing a schedule\nYouTube will refuse.\n\nRejected entries come back in `skipped` with a reason rather than failing the\nrequest: a fourteen-video plan with one bad slot should book thirteen and say\nwhich one it did not.",
         "operationId": "apply_plan_v1_calendar_auto_apply_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Body",
-                "type": "object"
+                "$ref": "#/components/schemas/engine__api__publishing__ApplyRequest"
               }
             }
           },
@@ -1357,6 +1438,8 @@
             "required": false,
             "schema": {
               "default": 14,
+              "maximum": 90,
+              "minimum": 1,
               "title": "Days",
               "type": "integer"
             }
@@ -1466,7 +1549,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ApplyRequest"
+                "$ref": "#/components/schemas/engine__api__channels__ApplyRequest"
               }
             }
           },

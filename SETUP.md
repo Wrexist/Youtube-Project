@@ -7,15 +7,22 @@ no API for it.
 
 ## The short version
 
-```bash
-./scripts/setup.sh      # or: powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
-npm start
-```
+**Windows — nothing to type.** Double-click **`Install Studio.cmd`** once, then
+**`Studio.cmd`** (or the **Studio** shortcut it puts on your Desktop) whenever
+you want to use it.
 
-Then open **<http://localhost:3000/setup>** and paste your keys into the screen.
-It says what each one unlocks, links to where to get it, and turns green when
-you have enough to make a video. You do not need to edit a file, and you do not
-need to restart anything — a save takes effect immediately.
+**macOS / Linux** — run `./scripts/setup.sh` once. After that, open **Studio**
+from Applications (macOS) or the Studio launcher on your Desktop (Linux).
+`npm start` works everywhere too.
+
+Your browser opens by itself. On a fresh install it lands on a short setup flow
+that asks for your keys — it says what each one unlocks, links to where to get
+it, and turns green when you have enough to make a video. You do not need to
+edit a file, and you do not need to restart anything: a save takes effect
+immediately.
+
+Double-clicking the launcher while Studio is already running just brings the
+browser back rather than starting a second copy.
 
 The rest of this page is the same information at length, for when something goes
 wrong or you would rather edit `.env` by hand. **You can stop reading here.**
@@ -178,21 +185,22 @@ and country. Name, handle, avatar and banner stay manual permanently.
 
 ## Running it
 
-```bash
-npm start
-```
+Double-click the **Studio** launcher — the Desktop shortcut on Windows and Linux,
+or Studio in Applications on macOS. `Studio.cmd` in this folder is the same
+thing. From a terminal, `npm start` is the same thing again.
 
-One command, both halves, on every platform. It prints where each one is
-listening, labels their output so you can tell an engine traceback from a Next
-one, and takes both down together on Ctrl-C — a web app talking to a dead engine
-quietly falls back to demo data and looks like it is working, which is worse than
-stopping.
+All three run one process that starts both halves, labels their output so you can
+tell an engine traceback from a Next one, waits for the web app to actually
+answer, and then opens your browser. A window stays open while Studio runs — that
+is deliberate, it is where errors appear, and closing it is how you quit. Both
+halves go down together: a web app talking to a dead engine quietly falls back to
+demo data and looks like it is working, which is worse than stopping.
 
-Then open **<http://localhost:3000>**.
+Launching it again while it is already running just brings the browser back
+rather than starting a second copy.
 
-If the ports are busy it says so and suggests different ones rather than letting
-uvicorn print `[Errno 98] Address already in use`. The usual cause is that Studio
-is already running in another terminal.
+If something *else* holds the ports it says so, and suggests different ones,
+rather than letting uvicorn print `[Errno 98] Address already in use`.
 
 <details>
 <summary>Starting the two halves separately</summary>

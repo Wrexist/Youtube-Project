@@ -13,18 +13,30 @@ Idea → researched script → narrated, subtitled, rendered video → grounded 
 
 ## Run it
 
+**Windows — no terminal needed.** Double-click these, in this order:
+
+| | |
+|---|---|
+| **`Install Studio.cmd`** | Once. Installs everything, a couple of minutes. |
+| **`Studio.cmd`** | Every time after. Or the **Studio** shortcut it puts on your Desktop. |
+
+**macOS / Linux**
+
 ```bash
-./scripts/setup.sh      # or on Windows: powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
-npm start
+./scripts/setup.sh
 ```
 
-Then open **<http://localhost:3000/setup>** and paste in your keys. The screen
-says what each one unlocks, links to where to get it, and turns green when you
-have enough to make a video — no file to edit and nothing to restart.
+Then open **Studio** from Applications (macOS) or the Studio launcher on your
+Desktop (Linux). `npm start` does the same thing from a terminal, on any platform.
 
-`setup.sh` does the whole install: venv, both toolchains, `.env`, database schema,
-tests. **No Docker needed** — the engine defaults to SQLite and runs renders
-in-process. `npm start` runs both halves and takes them down together.
+Either way your browser opens by itself once the app is ready. On a fresh install
+it lands on a short setup flow that asks for your keys — it says what each one
+unlocks, links to where to get it, and turns green when you have enough to make a
+video. No file to edit, nothing to restart.
+
+Setup does the whole install: venv, both toolchains, `.env`, database schema,
+tests, and the desktop launcher. **No Docker needed** — the engine defaults to
+SQLite and runs renders in-process.
 
 Two keys is the whole list: one LLM provider, one stock-footage provider. Both are
 free to obtain and together take about five minutes. Publishing to YouTube needs a

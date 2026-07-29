@@ -135,6 +135,11 @@ if [ $TESTS -ne 0 ]; then
   exit 1
 fi
 
+step "Adding a launcher"
+# Never fatal: a missing shortcut is a small inconvenience, and a setup script
+# that aborts over one having already installed everything is a much bigger one.
+node scripts/install-shortcut.mjs || true
+
 step "Checking what is still missing"
 set +e
 "$ROOT/$VENV_BIN/python" apps/engine/scripts/doctor.py
@@ -151,12 +156,17 @@ echo
 # Setup used to end here, having installed everything and never said how to start
 # it. The next command is the whole point of having run this one.
 echo "${bold}Next:${reset}"
-echo "  ${bold}npm start${reset}"
+if [ "$(uname -s)" = "Darwin" ]; then
+  echo "  Open ${bold}Studio${reset} from your Applications folder."
+else
+  echo "  Double-click the ${bold}Studio${reset} launcher on your Desktop."
+fi
+echo "  (or run ${bold}npm start${reset} here — same thing)"
 echo
 if [ $DOCTOR -ne 0 ]; then
-  echo "  then open ${bold}http://localhost:3000/setup${reset} and paste your keys in."
-  echo "  The screen says what each one unlocks and links to where to get it."
+  echo "  Your browser opens by itself, on the setup screen. Paste your keys in"
+  echo "  there — it says what each one unlocks and links to where to get it."
 else
-  echo "  then open ${bold}http://localhost:3000${reset} and type a topic."
+  echo "  Your browser opens by itself. Type a topic and press Generate."
 fi
 echo

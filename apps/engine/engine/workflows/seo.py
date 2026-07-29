@@ -282,6 +282,10 @@ class DescriptionStage(Stage[str]):
     title = "Description"
     depends_on = ("titles", "grounding")
     estimated_cost_usd = 0.06
+    # Plain text, and the edit people actually want: fixing a sentence beats
+    # re-running the stage and hoping for better wording.
+    editable = True
+    editable_type = str
 
     async def run(self, ctx: WorkflowContext) -> StageOutput[str]:
         variants: list[TitleVariant] = ctx.get("titles")
@@ -335,6 +339,10 @@ class TagsStage(Stage[list]):
     title = "Tags"
     depends_on = ("grounding", "titles")
     estimated_cost_usd = 0.01
+    # A list of plain strings. Adding or removing one by hand is reasonable and
+    # cannot break anything downstream that a re-run would not also produce.
+    editable = True
+    editable_type = list
 
     async def run(self, ctx: WorkflowContext) -> StageOutput[list]:
         evidence: keywords.KeywordEvidence = ctx.get("grounding")

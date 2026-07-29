@@ -167,6 +167,10 @@ if ($Tests -ne 0) {
     Die "the engine is not working on this machine - please open an issue with the output above"
 }
 
+Step "Adding a launcher"
+# Never fatal — see the note in setup.sh.
+node scripts\install-shortcut.mjs
+
 Step "Checking what is still missing"
 & $VenvPython (Join-Path $Root "apps\engine\scripts\doctor.py")
 $Doctor = $LASTEXITCODE
@@ -181,13 +185,15 @@ if ($Doctor -eq 0) {
 
 Write-Host ""
 Write-Host "Next:"
-Write-Host "  npm start" -ForegroundColor Cyan
+Write-Host "  Double-click the Studio shortcut on your Desktop." -ForegroundColor Cyan
+Write-Host "  (or Studio.cmd in this folder — same thing)"
 Write-Host ""
 if ($Doctor -eq 0) {
-    Write-Host "  then open http://localhost:3000 and type a topic."
+    Write-Host "  Your browser opens by itself. Type a topic and press Generate."
 } else {
-    Write-Host "  then open http://localhost:3000/setup and paste your keys in."
-    Write-Host "  The screen says what each one unlocks and links to where to get it."
+    Write-Host "  Your browser opens by itself, on the setup screen. Paste your"
+    Write-Host "  keys in there — it says what each one unlocks and links to"
+    Write-Host "  where to get it."
 }
 Write-Host ""
 # `npm start` runs both halves. Kept here for when you want to restart one on its

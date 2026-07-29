@@ -14,8 +14,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -28,7 +29,7 @@ from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
 from engine.api.setup import router as setup_router
 from engine.providers import youtube
-from engine.quota import ledger
+from engine.quota import QuotaExceeded, ledger
 from engine.settings import get_settings
 from engine.storage import store
 from engine.workflows import video
@@ -78,6 +79,55 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── expected failures, with the status code that says what they are ─────────
+#
+# Both of these are raised deep in the provider layer and were caught nowhere, so
+# each surfaced as a bare 500 with a stack trace in the log and nothing useful in
+# the response. They are not bugs — they are the two things that routinely go
+# wrong in normal operation — and each has a specific remedy the caller can act
+# on. Handled centrally rather than in try/except at every call site, because
+# they can be raised from any route that touches YouTube.
+
+
+@app.exception_handler(QuotaExceeded)
+async def _quota_exceeded(_request: Request, exc: QuotaExceeded) -> JSONResponse:
+    """429, because it is a rate limit and it will resolve on its own.
+
+    The body carries the numbers so the caller can decide whether to wait or to
+    drop something: a 1,600-unit upload against 400 remaining is a wait until
+    midnight Pacific, not a retry in a minute.
+    """
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": str(exc),
+            "operation": exc.operation,
+            "cost": exc.cost,
+            "remaining": exc.remaining,
+            "resets": "midnight Pacific",
+        },
+    )
+
+
+@app.exception_handler(youtube.ChannelDisconnected)
+async def _channel_disconnected(
+    _request: Request, exc: youtube.ChannelDisconnected
+) -> JSONResponse:
+    """409, and it names the way out.
+
+    A dead refresh token cannot be retried around — the only fix is a human
+    re-authorising — so the response says where to do that rather than leaving
+    the caller to infer it from a 500.
+    """
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": f"{exc} — reconnect the channel to continue",
+            "reconnect_at": "/v1/auth/google",
+        },
+    )
 
 
 class JobRequest(BaseModel):
@@ -268,6 +318,10 @@ def _wake(job: dict) -> None:
 async def _run_job(job_id: str, start_from: str | None = None) -> None:
     job = JOBS[job_id]
 
+    # Cleared up front, so a job that failed, was re-run and then succeeded does
+    # not keep reporting the old reason next to a "completed" status.
+    job["error"] = None
+
     async def emit(event: dict) -> None:
         # The event log is the single source of truth. Subscribers read it by
         # cursor, so one append serves every viewer exactly once — see stream_job.
@@ -290,9 +344,15 @@ async def _run_job(job_id: str, start_from: str | None = None) -> None:
         job["status"] = "completed"
     except WorkflowError as exc:
         job["status"] = "failed"
+        # Recorded, not just logged. `GET /v1/jobs` reads this, and without it
+        # every in-process failure reported `error: null` — so the Queue showed a
+        # bare "failed" and the only way to learn why was the server's terminal.
+        # That covers budget aborts too: `BudgetExceeded` subclasses this.
+        job["error"] = str(exc)
         logger.error("job {} failed: {}", job_id, exc)
     except Exception as exc:  # noqa: BLE001
         job["status"] = "failed"
+        job["error"] = str(exc)
         logger.exception("job {} crashed", job_id)
         await emit({"type": "workflow.failed", "job_id": job_id, "error": str(exc)})
     finally:
@@ -764,7 +824,11 @@ def _serialize_stages(job: dict) -> list[dict]:
                 "cost_usd": round(state.output.cost_usd, 4) if state.output else 0.0,
                 "elapsed_ms": state.elapsed_ms,
                 "error": state.error,
-                "editable": state.status is StageStatus.DONE,
+                # Both conditions, not just "it finished". The stage also has to
+                # hold something a person can meaningfully retype — most hold
+                # dataclasses, and offering an edit the endpoint will refuse is
+                # how a UI teaches people not to trust it.
+                "editable": state.status is StageStatus.DONE and stage.editable,
             }
         )
     return out

@@ -5,10 +5,11 @@ from __future__ import annotations
 import secrets
 import time
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from engine import repository
 from engine.providers import youtube
@@ -94,11 +95,34 @@ class ScheduleRequest(BaseModel):
     at: datetime
 
 
+class PendingVideo(BaseModel):
+    """One video waiting for a slot.
+
+    Was `dict`, which meant a missing `id` reached `auto_schedule` and came back
+    as a 500 with a KeyError — four ordinary malformed payloads all did. Declaring
+    the shape turns each of them into a 422 naming the field.
+    """
+
+    id: str = Field(min_length=1)
+    title: str = ""
+    format: Literal["short", "long"] = "short"
+    ready_at: datetime | None = None
+
+
 class AutoScheduleRequest(BaseModel):
-    videos: list[dict]
-    shorts_per_week: int = 3
-    long_per_week: int = 1
-    horizon_days: int = 28
+    videos: list[PendingVideo]
+    shorts_per_week: int = Field(default=3, ge=0, le=50)
+    long_per_week: int = Field(default=1, ge=0, le=50)
+    horizon_days: int = Field(default=28, ge=1, le=365)
+
+
+class Assignment(BaseModel):
+    video_id: str = Field(min_length=1)
+    at: datetime
+
+
+class ApplyRequest(BaseModel):
+    assignments: list[Assignment]
 
 
 # ── OAuth ───────────────────────────────────────────────────────────────────
@@ -194,7 +218,14 @@ async def calendar() -> CalendarResponse:
 
 
 @router.get("/calendar/slots")
-async def slots(days: int = 14) -> dict:
+async def slots(
+    # Bounded, and synchronously so. `candidate_slots` builds every slot in the
+    # horizon before ranking: `days=5000` produced 120,000 of them in 0.75s on
+    # this machine, so `days=100000` blocks the event loop for tens of seconds —
+    # stalling every SSE stream and every in-process render relay in the process.
+    # The endpoint returns at most 40 slots, so a longer horizon buys nothing.
+    days: int = Query(14, ge=1, le=90),
+) -> dict:
     """Ranked publish times, so the calendar can show *why* a slot is good."""
     profile = AudienceProfile()
     ranked = candidate_slots(datetime.now(UTC), days, profile)[:40]
@@ -243,13 +274,13 @@ async def auto(body: AutoScheduleRequest) -> dict:
     """
     profile = AudienceProfile()
     plan = auto_schedule(
+        # Straight through now that `videos` is typed: the hand-rolled `v["id"]`,
+        # `v.get(...)` and `datetime.fromisoformat` were each a 500 waiting for a
+        # payload that omitted a key or spelled a date wrong. Pydantic does all
+        # three, and reports the field that was wrong instead of the line that
+        # raised.
         [
-            Pending(
-                id=v["id"],
-                title=v.get("title", ""),
-                format=v.get("format", "short"),
-                ready_at=(datetime.fromisoformat(v["ready_at"]) if v.get("ready_at") else None),
-            )
+            Pending(id=v.id, title=v.title, format=v.format, ready_at=v.ready_at)
             for v in body.videos
         ],
         start=datetime.now(UTC),
@@ -280,9 +311,56 @@ async def auto(body: AutoScheduleRequest) -> dict:
 
 
 @router.post("/calendar/auto/apply")
-async def apply_plan(body: dict) -> dict:
-    for assignment in body.get("assignments", []):
-        at = datetime.fromisoformat(assignment["at"])
-        SCHEDULE[assignment["video_id"]] = at
-        await repository.save_slot(assignment["video_id"], at)
-    return {"applied": len(body.get("assignments", []))}
+async def apply_plan(body: ApplyRequest) -> dict:
+    """Book a whole plan, or as much of it as the rules allow.
+
+    Two things were wrong with the old version, and they compounded.
+
+    It **wrote as it went**, so a malformed entry at position three left one and
+    two booked and the caller with a 500 — no way to know what had landed short
+    of re-reading the calendar. Everything is now checked before the first write,
+    so the outcome is all-or-reported, never half-applied-and-unexplained.
+
+    And it **never called `validate_move`**, which `schedule_one` twenty lines
+    above does on every manual drag. The same times that endpoint 409s — in the
+    past, too close to another upload, over the day's quota — were persisted here
+    without complaint, which is how a calendar ends up describing a schedule
+    YouTube will refuse.
+
+    Rejected entries come back in `skipped` with a reason rather than failing the
+    request: a fourteen-video plan with one bad slot should book thirteen and say
+    which one it did not.
+    """
+    planned: list[tuple[str, datetime]] = []
+    skipped: list[dict] = []
+    #: Permitted, but worth saying — two uploads close enough to split their own
+    #: audience. Reported rather than dropped: `validate_move` distinguishes a
+    #: block from a warning, and collapsing the two would throw away the only
+    #: signal that an accepted plan is still a poor one.
+    warnings: list[dict] = []
+
+    # Validated against the schedule *as it is being built*, not just as it was:
+    # two assignments an hour apart are both fine against the stored calendar and
+    # not fine against each other, and checking only the former is how a plan
+    # double-books itself.
+    projected = dict(SCHEDULE)
+
+    for assignment in body.assignments:
+        ok, message = validate_move(
+            assignment.at,
+            existing=[t for vid, t in projected.items() if vid != assignment.video_id],
+            quota_used_by_day=ledger.usage_by_day(),
+        )
+        if not ok:
+            skipped.append({"video_id": assignment.video_id, "reason": message})
+            continue
+        if message:
+            warnings.append({"video_id": assignment.video_id, "warning": message})
+        projected[assignment.video_id] = assignment.at
+        planned.append((assignment.video_id, assignment.at))
+
+    for video_id, at in planned:
+        SCHEDULE[video_id] = at
+        await repository.save_slot(video_id, at)
+
+    return {"applied": len(planned), "skipped": skipped, "warnings": warnings}
