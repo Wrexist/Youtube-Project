@@ -24,22 +24,17 @@ def _stub(name: str, **attrs: object) -> None:
     sys.modules[name] = mod
 
 
-# engine.providers is a real package (engine/providers/__init__.py exists).
-# Only stub the llm sub-module so stages can be imported without needing real
-# API keys.  engine.providers.images is NOT stubbed — its PlaceholderProvider
-# works without any credentials and the image tests test the real module.
+# `engine.providers.llm` is deliberately NOT stubbed.
 #
-# The stub has to satisfy every name the import chain pulls from it, not just the
-# one the stages call: engine.main -> api.channels -> workflows.channel_launch and
-# api.models both import module-level constants and classes from here.
-_stub(
-    "engine.providers.llm",
-    for_task=lambda *_: None,
-    DEFAULT_OLLAMA_URL="http://localhost:11434",
-    LLM=type("LLM", (), {}),
-    ProviderUnavailable=type("ProviderUnavailable", (Exception,), {}),
-    probe_ollama=lambda *_a, **_kw: None,
-)
+# It used to be, with a `types.ModuleType` installed here before collection — which
+# meant the real module, the four transports and the JSON-retry loop, was never
+# imported by a single test, while the docs claimed otherwise. Nothing required the
+# stub: importing the module opens no connection and reads no key (the anthropic SDK
+# import is inside the transport, and `get_settings()` tolerates an empty `.env`), so
+# the only thing the stub bought was a coverage hole. See test_llm.py.
+#
+# `engine.providers.images` is likewise real — its PlaceholderProvider works without
+# credentials.
 
 
 # ── a real database ─────────────────────────────────────────────────────────

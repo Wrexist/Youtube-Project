@@ -466,3 +466,106 @@ async def test_channel_writes_are_skipped_when_persistence_is_off(monkeypatch):
         await repository.save_channel("default", Credentials(refresh_token_encrypted="x"))
     finally:
         get_settings.cache_clear()
+
+
+# ── the schema is stamped, so the documented migration command works ─────────
+#
+# `ensure_schema` built the tables with `create_all` and left `alembic_version`
+# empty, so `alembic upgrade head` — documented in README, SETUP.md and CLAUDE.md —
+# replayed the initial revision on top of tables that already existed and died with
+# `table channel_launches already exists`. Any machine that had started the app once
+# hit it, which is every machine.
+
+
+def _head() -> str:
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+    return ScriptDirectory.from_config(Config(str(ini))).get_current_head()
+
+
+async def _version_rows(url: str) -> list[str]:
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    eng = create_async_engine(url)
+    try:
+        async with eng.begin() as conn:
+            names = await conn.run_sync(
+                lambda c: __import__("sqlalchemy").inspect(c).get_table_names()
+            )
+            if "alembic_version" not in names:
+                return []
+            return [
+                r[0] for r in (await conn.execute(text("SELECT version_num FROM alembic_version")))
+            ]
+    finally:
+        await eng.dispose()
+
+
+@pytest.fixture
+async def fresh_sqlite(tmp_path, monkeypatch):
+    """A private SQLite file, unlike the `database` fixture's shared handling.
+
+    SQLite specifically, not `STUDIO_TEST_DATABASE_URL`: these tests are about the
+    state of a *brand-new* database, and CI's Postgres is neither new nor private —
+    the `database` fixture has already run `create_all` against it.
+    """
+    url = f"sqlite+aiosqlite:///{tmp_path / 'stamp.db'}"
+    get_settings.cache_clear()
+    db.engine.cache_clear()
+    monkeypatch.setenv("STUDIO_DATABASE_URL", url)
+    monkeypatch.setenv("STUDIO_PERSIST", "true")
+    yield url
+    await db.engine().dispose()
+    get_settings.cache_clear()
+    db.engine.cache_clear()
+
+
+async def test_a_schema_built_from_metadata_is_stamped_at_head(fresh_sqlite):
+    summary = await db.ensure_schema()
+    assert _head() in summary, "the startup log should say which revision it landed on"
+    assert await _version_rows(fresh_sqlite) == [_head()]
+
+
+async def test_stamping_is_not_repeated_on_the_second_boot(fresh_sqlite):
+    """A second row makes Alembic ambiguous about where the database is."""
+    await db.ensure_schema()
+    assert await db.ensure_schema() == "schema present (6 tables)"
+    assert await _version_rows(fresh_sqlite) == [_head()]
+
+
+async def test_a_partial_schema_is_not_stamped(fresh_sqlite):
+    """The one case where claiming head would be a lie.
+
+    Some tables present and some absent means a revision was probably added and not
+    applied. Stamping there would make `upgrade head` skip the very migration that
+    is pending — a silently missing column rather than a loud error.
+    """
+    from sqlalchemy import text
+
+    from engine.tables import Base
+
+    async with db.engine().begin() as conn:
+        await conn.run_sync(
+            lambda c: Base.metadata.tables["jobs"].create(c)  # one table, not the set
+        )
+        await conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+
+    summary = await db.ensure_schema()
+    assert "consider `alembic upgrade head`" in summary
+    assert await _version_rows(fresh_sqlite) == []
+
+
+async def test_a_missing_alembic_ini_does_not_break_startup(fresh_sqlite, monkeypatch):
+    """Degrade to an unstamped schema, never to a boot failure.
+
+    The engine reads `alembic.ini` from its own parent directory, which is not
+    guaranteed to exist — installed as a wheel, it is not there.
+    """
+    monkeypatch.setattr(db, "_stamp_head", lambda conn: None)
+    assert await db.ensure_schema() == "created schema (6 tables)"
+    assert await _version_rows(fresh_sqlite) == []

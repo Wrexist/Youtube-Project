@@ -44,10 +44,17 @@ jobs:
       # one fails with `relation "channel_launches" already exists` — and would
       # only fail *sometimes*, depending on step order. A dedicated database also
       # makes the check mean what it says: migrations applied to an empty schema.
-      - name: Migrations apply to an empty database
+      #
+      # `upgrade` alone proves the revisions run; it does not prove they still
+      # describe `tables.py`. `check` is what catches a column added to a model
+      # without a revision — and that gap is silent in production rather than loud,
+      # because boot-time `ensure_schema()` only creates absent *tables*, so a new
+      # column on a table that already exists is simply missing.
+      - name: Migrations apply to an empty database and match the models
         run: |
           PGPASSWORD=studio createdb -h localhost -U studio migrations_check
           alembic upgrade head
+          alembic check
         env:
           STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@localhost:5432/migrations_check
       # The committed schema is what generates the web app's types. If a route
