@@ -6,12 +6,15 @@ Ordered by how likely it is to bite you.
 > **A full-system audit on 2026-07-26 found 20 issues this file did not list.**
 > **19 are now fixed.** Publishing is wired up and gated, CI is green, SSE no longer
 > duplicates events, every setting either works or is gone, state survives a restart,
-> renders run in a worker, and the web app reads live data. The exception is the npm
+> renders run in a worker, and most of the web app reads live data (seven of ten
+> screens — see §5.5, which is the honest version). The exception is the npm
 > advisories, which need an upstream Next release — see [AUDIT.md](AUDIT.md) §4.7 for
 > what each actually exposes. Several entries below are now out of date; AUDIT.md is
 > the current record.
 
-**314 engine tests passing. Web builds, lints and typechecks clean.**
+**Web builds, lints and typechecks clean.** The engine test count is not recorded
+here on purpose — it went stale every time it was written down. Run
+`apps/engine/.venv/bin/python -m pytest apps/engine/tests -q | tail -1`.
 
 One unrelated fix came with it: `stats.two_tailed_p` fell back to `math.betainc`,
 which **no released CPython has**. `scipy` was not declared anywhere, so a clean
@@ -42,15 +45,20 @@ Every generation stage needs a model. Either set a key, or route everything to O
 on the Models screen (see 1.3). Without one of the two, the pipeline fails at the
 first stage.
 
-### 1.3 Ollama is supported but has no test coverage at all
-The routing table, cost model, `/api/chat` transport, and the `format: json`
-constraint are all implemented. **None of it is tested** — not against a live
-daemon, and not by unit tests either: `tests/conftest.py` replaces the whole of
-`engine.providers.llm` with a stub so stages can be imported without API keys, so
-every test in this repository runs with that module absent. The routing table and
-cost model in `engine/models.py` *are* covered; the transport underneath is not.
+### 1.3 No LLM provider has been called for real
+Unit coverage is now honest — the `conftest.py` stub that hid the whole of
+`engine.providers.llm` from every test is gone, and `tests/test_llm.py` exercises
+`_extract_json`, the JSON-retry loop's attempt arithmetic and error feedback, and all
+four transports against mocked HTTP. What that proves is the request shape and the
+response parsing.
 
-`probe_ollama` and `register_ollama` are the two to distrust most.
+What it does **not** prove: that any real provider accepts those requests. No
+Anthropic, OpenAI-compatible, Gemini or Ollama endpoint has been called from this
+repository. A wrong header name, a renamed usage field or a rejected parameter would
+pass the suite and fail on first contact.
+
+`probe_ollama` and `register_ollama` remain the two to distrust most — both are
+mock-tested only, and `register_ollama` writes to the routing table.
 
 **To fix:** `ollama serve`, `ollama pull qwen2.5:14b`, then
 `POST /v1/models/ollama/register` and `POST /v1/models/test`.
@@ -77,9 +85,10 @@ These were actually executed on this machine, not assumed:
 - **Edge TTS + subtitle cues.** Real audio, real word-boundary timings, correctly
   grouped into readable lines. Fixed a real bug — see 4.2.
 - **FastAPI app imports** with all routes registered.
-- **314 unit tests**, covering the workflow framework, scheduling, quota arithmetic,
-  statistics, attribution, automation, model routing, and — new — stock-provider
-  response parsing, Ken Burns ramps, font resolution and BGM path safety.
+- **The unit suite**, covering the workflow framework, scheduling, quota arithmetic,
+  statistics, attribution, automation, model routing, the LLM client's transports and
+  JSON-retry loop, stock-provider response parsing, Ken Burns ramps, font resolution
+  and BGM path safety.
 - **A real render of the new features**, measured rather than eyeballed:
   - 1080×1920 MP4, 9.04s against 9.0s of narration — the crossfade overlap does
     not shorten the timeline.
@@ -238,15 +247,28 @@ startup; a job that was mid-run at shutdown comes back marked `interrupted` and 
 be resumed. `STUDIO_PERSIST=false` turns persistence off, which is what the test
 suite uses.
 
-### 5.5 ~~The web app runs entirely on demo data~~ — mostly fixed
-Every screen now reads the engine, and the live job views subscribe over SSE.
-`apps/web/lib/demo.ts` is still there and still rendered — but only as the fallback
-for when the engine is unreachable, and a screen showing it says so with a badge
-rather than implying the numbers are real.
+### 5.5 ~~The web app runs entirely on demo data~~ — seven of ten screens fixed
+This entry and the header above used to disagree with each other — one said "every
+screen renders from demo.ts", the other "the web app reads live data". Neither was
+right. Per screen, as of today:
 
-What is genuinely still demo-only: the Queue's "Needs review" section, which renders
-`REVIEW_QUEUE` whenever the engine is down. The publish gate's blocker list is
-computed by the engine; that section is the pre-engine view of it.
+| Screen | Data |
+|---|---|
+| Create | live; `POST /v1/jobs` then SSE, falling back to `DEMO_JOB` if the create fails |
+| Queue, Library, Models | live, falling back to `demo.ts` when the engine is unreachable |
+| Setup, Welcome | live only — no fallback, deliberately. They show "the engine is not running" instead of plausible fiction, because a setup screen that invents its own state is worse than one that admits it is blind |
+| Calendar | mixed even when live: quota and bookings come from the engine, the draggable video tray is always `PENDING_VIDEOS` |
+| Analytics, Series, New channel | demo only, **no network call at all** — there is no series table, the Analytics API is unwired, and the channel-launch endpoint has no caller |
+
+The fallback is not a flag or an env var: `get<T>()` in `apps/web/lib/engine.ts`
+returns `null` on any failure including a non-2xx, and each page does
+`const live = x !== null`. Consequences worth knowing: it also swallows a genuine
+500, so a broken endpoint looks identical to a stopped engine. Mutations do *not*
+fall back — `send()` throws, so a failed publish never reads as success.
+
+Everything showing fixtures carries a "demo data" badge, Library omits views and CTR
+in live mode rather than showing zeros, and Calendar refuses to persist a drag when
+`!live` and says "nothing was saved".
 
 ### 5.6 Duplicate detection is lexical, not semantic
 Jaccard overlap on content words. Catches "why bridges collapse" vs "the reason
@@ -291,5 +313,5 @@ docker compose up -d
 2. Run `scripts/setup.sh` (or `.\scripts\setup.ps1` on Windows), then add
    `ANTHROPIC_API_KEY` and `PEXELS_API_KEY` to the `.env` it wrote
 3. Generate **one short** end to end and watch where it breaks
-4. Point a real Ollama daemon at it (1.3) — that transport is the one thing here
-   with no test coverage at all
+4. Point a real Ollama daemon at it (1.3) — every transport is mock-tested and none
+   has met a live endpoint

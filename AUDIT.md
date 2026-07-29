@@ -9,9 +9,12 @@ verbatim.
 
 > **Status — all phases done. 19 of 20 findings fixed and verified.**
 > The one exception is §4.7 (npm advisories), which cannot be fixed from this
-> repository — see its entry for the assessment. Engine tests went 156 → 314, the
-> app survives a restart, renders run in a worker, the web app reads live data, and
-> every CI step is green. Each finding below carries its own status line.
+> repository — see its entry for the assessment. The engine test count roughly
+> doubled (156 at the start; run `pytest apps/engine/tests -q` for today's figure —
+> the number written here went stale three times), the app survives a restart,
+> renders run in a worker, most of the web app reads live data (seven of ten screens;
+> KNOWN-ISSUES §5.5 is per-screen), and every CI step is green. Each finding below
+> carries its own status line.
 
 Each finding below has: what is wrong, the evidence that proves it, the fix, and a
 **Done when** that can be checked. Phases are ordered by dependency — P0 first
@@ -25,7 +28,7 @@ Stated first so the list below is read in proportion.
 
 | Area | Status | Evidence |
 |---|---|---|
-| Engine unit tests | **223 pass** (now 314) | `pytest -q`, 7.5s |
+| Engine unit tests | **223 pass** at the time of the audit; roughly double that now | `pytest -q`, 7.5s |
 | Web typecheck | **clean** | `tsc --noEmit`, no output |
 | Web build | **clean** | Next 16.2.11, 8 static routes |
 | Web render | **all 8 routes 200** | headless Chromium, no console errors |
@@ -674,7 +677,7 @@ rather than by unit test alone:
 
 | Fix | How it was confirmed |
 |---|---|
-| CI green | every step run locally: ruff check, ruff format, pytest (314), openapi check, contracts check, npm lint, typecheck, build |
+| CI green | every step run locally: ruff check, ruff format, pytest, openapi check, contracts check, npm lint, typecheck, build |
 | Persistence | spent 4,800 quota units, booked a slot, started a job on a live Postgres; **killed the server**; on restart quota read 4,800 with uploads_left 2, the booking returned, and the job restored with its stage states |
 | Persistence, portable | the same 21-test suite passes identically on SQLite and on Postgres 16 |
 | arq worker | API enqueued, worker executed (its log shows the run, the API's shows none), 8 events reached an SSE subscriber with no duplicates; killing Redis produced a job the API ran itself, logging "running in-process" |

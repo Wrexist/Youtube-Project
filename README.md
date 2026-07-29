@@ -114,15 +114,35 @@ vendor/        MoneyPrinterTurbo, read-only reference. Never imported.
 
 ## Status
 
-Phases 0–10 are code-complete; 314 engine tests pass. **Neither Google API has been
-exercised against a live account** — upload, captions and analytics are reviewed
-code, not proven code. That needs OAuth credentials from a Google Cloud project.
+Phases 0–10 are code-complete. The test count is deliberately not written down here
+— every figure this file has carried went stale within a week. Ask the suite:
+
+```bash
+apps/engine/.venv/bin/python -m pytest apps/engine/tests -q | tail -1
+```
+
+**Neither Google API has been exercised against a live account** — upload, captions
+and analytics are reviewed code, not proven code. That needs OAuth credentials from
+a Google Cloud project.
 
 Motion, crossfades and the music bed were verified by a real MoviePy render with
 measurements, not by eye — see [KNOWN-ISSUES.md](KNOWN-ISSUES.md) §2. That render
 used synthetic clips and tones; the pipeline has still not been run end to end
 against live Pexels footage and edge-tts audio.
 
-State survives a restart (Postgres), renders run in an arq worker, and the web app
-reads live engine data with a labelled demo fallback. See [AUDIT.md](AUDIT.md) for
-what was found, fixed and measured.
+State survives a restart (Postgres) and renders run in an arq worker.
+
+The web app is **seven of ten screens live, three not wired at all** — a distinction
+"reads live engine data with a labelled demo fallback" glossed over, so it is worth
+stating plainly:
+
+| | |
+|---|---|
+| Create, Queue, Library, Models | live, with `lib/demo.ts` as the fallback when the engine is unreachable |
+| Setup, Welcome | live only — they refuse to fake it and say the engine is down |
+| Calendar | quota and bookings live; the video tray it drags from is always demo |
+| Analytics, Series, New channel | demo only, **no network call** — the endpoints behind them do not exist yet |
+
+Every screen showing fixtures carries a "demo data" badge, and Calendar declines to
+persist a drag it cannot save rather than appearing to succeed. See
+[AUDIT.md](AUDIT.md) for what was found, fixed and measured.
