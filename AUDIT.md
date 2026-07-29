@@ -565,7 +565,11 @@ here with the dependency order that matters. One to two weeks.
 
 ### 5.1 · All state is in module-level dicts (P1)
 
-> **FIXED** — Postgres + Alembic; verified by killing a live server and restarting.
+> **FIXED, with one exception** — Postgres + Alembic; verified by killing a live
+> server and restarting. The exception is `LAUNCHES`: the table and the
+> `save_launch`/`load_launches` pair exist but have no application caller, so a
+> channel launch is still lost on restart. Left that way deliberately —
+> KNOWN-ISSUES §5.8 has the reasoning.
 
 `JOBS`, `CHANNELS`, `SCHEDULE`, `RECORDS`, `LAUNCHES`. A restart loses every job,
 channel, schedule and quota record. `database_url` and `redis_url` are configured and
@@ -594,7 +598,9 @@ Redis pub/sub.
 
 ### 5.3 · The web app is not connected to the engine at all (P1)
 
-> **FIXED** — Server Component reads, Server Actions, SSE live job view.
+> **FIXED for seven of ten screens** — Server Component reads, Server Actions, SSE
+> live job view. Analytics, Series and New channel still make no network call,
+> because the endpoints behind them do not exist. KNOWN-ISSUES §5.5 is per-screen.
 
 Every screen renders from `apps/web/lib/demo.ts`. There is **no** `fetch`, no
 `EventSource`, no Server Action against the engine — only an env passthrough in

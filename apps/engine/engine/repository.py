@@ -1,9 +1,18 @@
 """Persistence for the things that used to be module-level dicts.
 
-`JOBS`, `CHANNELS`, `SCHEDULE` and `LAUNCHES` were dicts, so a restart lost every
-job, channel, booking and launch — and, worst of all, the day's quota spend. The
-dict shapes were kept compatible with this on purpose, so these functions are
-mostly a serialise/deserialise pair rather than a redesign.
+`JOBS`, `CHANNELS` and `SCHEDULE` were dicts, so a restart lost every job, channel
+and booking — and, worst of all, the day's quota spend. The dict shapes were kept
+compatible with this on purpose, so these functions are mostly a serialise/
+deserialise pair rather than a redesign.
+
+**`LAUNCHES` is the exception and this docstring used to imply otherwise.**
+`save_launch`/`load_launches` exist and work, but nothing in the application calls
+either — only a test does — so a channel launch is still lost on restart. It is not a
+one-line fix: `load_launches` returns a flattened dict that does not match the mirror
+shape `api/channels.py` reads (which needs `states`, `events`, `inputs`), so wiring it
+up means rewriting the loader. What is lost is a regenerable LLM artifact on a flow
+whose manual channel-creation step is a documented gap anyway, which is why this is
+recorded rather than fixed. See KNOWN-ISSUES §5.8.
 
 Jobs keep a **live in-process mirror** as well as their row. A running job holds
 things that cannot go in a database — the `asyncio.Event` subscribers wait on,
@@ -493,6 +502,11 @@ async def load_schedule() -> dict[str, datetime]:
 
 
 # ── channel launches ────────────────────────────────────────────────────────
+#
+# UNWIRED. Neither function below has an application caller — grep says the only
+# call site in the repository is a test. A channel launch therefore does not survive
+# a restart, whatever the `ChannelLaunch` table's existence suggests. Do not treat
+# this section as working persistence; see the note at the top of the module.
 
 
 async def save_launch(launch_id: str, status: str, niche: str, payload: dict) -> None:

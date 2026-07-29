@@ -131,6 +131,15 @@ Default quota is 10,000 units/day; an upload costs 1,600. That is **~6 uploads/d
 and roughly 4 once thumbnails and captions are counted. More requires an audited
 application to Google that takes weeks.
 
+### 3.2b Analytics calls are not metered — the one exception to CLAUDE.md #5
+"Cost is tracked per video" holds for every provider call except the YouTube
+Analytics API, which has its own far larger quota pool. Recording it into the same
+ledger would make `spent()`/`remaining()` refuse uploads there is budget for, and
+modelling it properly means a second pool — real work for a breakdown panel nobody
+reads. Recorded here so it stops being re-flagged as a bug: it is a decision, not an
+oversight. `providers/analytics.py` used to claim in its own docstring that these
+calls *were* recorded; that claim is gone.
+
 ### 3.3 Music licensing
 Nothing ships with licensed music. MoneyPrinterTurbo's bundled `resource/songs` has
 unclear provenance and is deliberately **not** carried over — it is excluded from the
@@ -280,6 +289,28 @@ catalogue and needs to be explainable on the idea card.
 ### 5.7 The 500-char keyword and tag trimmers are naive
 They keep the earliest entries and drop the rest. Should drop the *lowest-value*
 ones.
+
+### 5.8 Two surfaces exist, cost something, and are read by nothing
+Both are decisions rather than oversights, recorded so they stop being re-found:
+
+**Channel launches are not persisted.** `repository.save_launch`/`load_launches` and
+the `ChannelLaunch` table all exist; no application code calls either, so a launch is
+lost on restart. Wiring it up is a loader rewrite, not a missing call — `load_launches`
+returns a flattened dict that does not match the mirror shape `api/channels.py` reads
+(`states`, `events`, `inputs`). What is lost is a regenerable LLM artifact on a flow
+whose manual channel-creation step is a documented gap anyway (§3.1). The module
+docstring used to claim launches survived a restart; that claim is gone.
+
+**`ChaptersStage` output is generated, billed and consumed by nothing.** YouTube only
+renders chapters from timestamps in the description, and nothing appends them there —
+`SeoPackage` (which has a `chapters` field) is never constructed anywhere. So the
+stage costs about $0.01 per run for a value no caller reads. It is left in place
+rather than deleted because plumbing it properly is a real design choice: either
+append the block to the description with 5000-char guarding, or reorder the graph to
+`titles → chapters → description`, which drags `subtitles` into the SEO chain. Its
+dependency declaration *was* wrong and is fixed — it read `ctx.get("subtitles")` while
+declaring only `("titles",)`, so re-running the voiceover left chapter timestamps
+pointing at cues that no longer existed.
 
 ---
 
