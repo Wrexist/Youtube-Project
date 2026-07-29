@@ -11,6 +11,25 @@ Idea → researched script → narrated, subtitled, rendered video → grounded 
 - [AUDIT.md](AUDIT.md) — **full-system audit, 20 findings, phased plan with fixes**
 - [FIX-TASKS.md](FIX-TASKS.md) — paste-able agent prompts to fix all of it
 
+## What you need
+
+Two pieces of software, and two free API keys. That is the whole list.
+
+| | | |
+|---|---|---|
+| **Python 3.11+** | runs the render engine | <https://www.python.org/downloads/> |
+| **Node.js 20+** | runs the web app | <https://nodejs.org> |
+
+On Windows the installer offers to fetch both for you via `winget`; on
+macOS and Linux it prints the one command for your package manager. **Nothing
+else is required** — no Docker, no database server, no ffmpeg install (one ships
+with the engine's dependencies). Postgres and Redis are optional upgrades, not
+prerequisites.
+
+The two keys — one model provider, one stock-footage provider — are asked for
+inside the app on first run, and both are free to obtain. See
+[SETUP.md](SETUP.md).
+
 ## Run it
 
 **Windows — no terminal needed.** Double-click these, in this order:

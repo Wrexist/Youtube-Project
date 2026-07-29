@@ -21,15 +21,18 @@ cd /d "%~dp0"
 
 title Studio
 
+rem Both checks point at one place — "Install Studio.cmd" — rather than at the
+rem underlying cause. Whether Node is missing or node_modules is, the next action
+rem is identical, and the installer itself explains and offers to fix whichever
+rem prerequisite is actually absent.
 where node >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo   Node.js is not installed, or is not on your PATH.
+  echo   Studio is not set up on this computer yet.
   echo.
-  echo   Studio needs it to run. Install the LTS version from:
-  echo     https://nodejs.org
-  echo.
-  echo   Then double-click this file again.
+  echo   Double-click "Install Studio.cmd" in this folder first.
+  echo   It installs everything Studio needs, including Node.js, and takes
+  echo   a couple of minutes. You only have to do it once.
   echo.
   pause
   exit /b 1
@@ -39,11 +42,7 @@ if not exist "node_modules\" (
   echo.
   echo   Studio is not installed yet.
   echo.
-  echo   Right-click Setup.ps1 in this folder and choose "Run with PowerShell",
-  echo   or run this in PowerShell from this folder:
-  echo.
-  echo     powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
-  echo.
+  echo   Double-click "Install Studio.cmd" in this folder first.
   echo   It takes a couple of minutes and only has to be done once.
   echo.
   pause

@@ -5,6 +5,26 @@ which is **API keys and one Google form**. Nothing here is busywork — each ite
 exists because it needs an account only you can hold, or because Google provides
 no API for it.
 
+## What you need first
+
+| | | |
+|---|---|---|
+| **Python 3.11+** | runs the render engine | <https://www.python.org/downloads/> |
+| **Node.js 20+** | runs the web app | <https://nodejs.org> |
+
+That is the whole list. **No Docker, no database server, no ffmpeg** — one ships
+with the engine's Python dependencies. Postgres and Redis are optional upgrades
+(see the bottom of this page), never prerequisites.
+
+You do not have to install these by hand. On Windows the installer offers to
+fetch both through `winget`, which ships with Windows 10 and 11; on macOS and
+Linux it prints the exact one-line command for your package manager and stops.
+Either way you are told what is missing and how to get it, rather than meeting a
+failure halfway through.
+
+On Windows, tick **"Add Python to PATH"** if you do install it yourself — it is
+off by default, and nothing works without it.
+
 ## The short version
 
 **Windows — nothing to type.** Double-click **`Install Studio.cmd`** once, then
