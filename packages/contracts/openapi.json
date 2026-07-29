@@ -137,6 +137,197 @@
         "title": "CalendarResponse",
         "type": "object"
       },
+      "CatalogueEntry": {
+        "properties": {
+          "context": {
+            "title": "Context",
+            "type": "integer"
+          },
+          "input_per_m": {
+            "title": "Input Per M",
+            "type": "number"
+          },
+          "is_free": {
+            "title": "Is Free",
+            "type": "boolean"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "json_mode": {
+            "title": "Json Mode",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "output_per_m": {
+            "title": "Output Per M",
+            "type": "number"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "provider",
+          "model",
+          "label",
+          "is_local",
+          "is_free",
+          "json_mode",
+          "context",
+          "input_per_m",
+          "output_per_m"
+        ],
+        "title": "CatalogueEntry",
+        "type": "object"
+      },
+      "CredentialStatus": {
+        "description": "One credential, as the setup screen sees it. Never carries the value.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "effort": {
+            "title": "Effort",
+            "type": "string"
+          },
+          "env": {
+            "title": "Env",
+            "type": "string"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "tail": {
+            "title": "Tail",
+            "type": "string"
+          },
+          "unlocks": {
+            "title": "Unlocks",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "without_it": {
+            "title": "Without It",
+            "type": "string"
+          }
+        },
+        "required": [
+          "env",
+          "label",
+          "unlocks",
+          "without_it",
+          "url",
+          "effort",
+          "group",
+          "required",
+          "configured",
+          "tail"
+        ],
+        "title": "CredentialStatus",
+        "type": "object"
+      },
+      "DiagnosticCheck": {
+        "properties": {
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "fix": {
+            "title": "Fix",
+            "type": "string"
+          },
+          "href": {
+            "title": "Href",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "level",
+          "detail",
+          "fix",
+          "command",
+          "href"
+        ],
+        "title": "DiagnosticCheck",
+        "type": "object"
+      },
+      "Diagnostics": {
+        "properties": {
+          "blockers": {
+            "title": "Blockers",
+            "type": "integer"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "warnings": {
+            "title": "Warnings",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checks",
+          "ready",
+          "blockers",
+          "warnings"
+        ],
+        "title": "Diagnostics",
+        "type": "object"
+      },
       "EditRequest": {
         "properties": {
           "stage": {
@@ -221,6 +412,128 @@
         "title": "JobRequest",
         "type": "object"
       },
+      "JobSummary": {
+        "description": "One job, as the Queue and Library list them.\n\nA response model rather than a bare dict because both screens do arithmetic and\nfiltering on these fields; without it the generated TypeScript types every one\nas `unknown` and the UI has to cast, which is what `packages/contracts` exists\nto prevent.",
+        "properties": {
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "current_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Stage"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "render_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Render Key"
+          },
+          "stages_done": {
+            "title": "Stages Done",
+            "type": "integer"
+          },
+          "stages_total": {
+            "title": "Stages Total",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "thumbnail_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Thumbnail Keys",
+            "type": "array"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "workflow": {
+            "title": "Workflow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "topic",
+          "workflow",
+          "cost_usd",
+          "stages_done",
+          "stages_total"
+        ],
+        "title": "JobSummary",
+        "type": "object"
+      },
+      "KeyUpdate": {
+        "description": "A save. Only the names present here are touched.\n\n`dict[str, str]` rather than a field per credential so that adding one to\n`CREDENTIALS` needs no change here \u2014 the allowlist is `CREDENTIALS` itself,\nchecked at write time, which keeps the two from drifting apart.",
+        "properties": {
+          "values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "title": "KeyUpdate",
+        "type": "object"
+      },
       "LaunchRequest": {
         "properties": {
           "country": {
@@ -244,6 +557,52 @@
           "niche"
         ],
         "title": "LaunchRequest",
+        "type": "object"
+      },
+      "ModelsResponse": {
+        "description": "Everything the Models screen needs, typed.\n\nA response model rather than a bare dict because the Models screen does real\nwork with these \u2014 grouping tasks, looking specs up by key, summing a monthly\ncost. Returned untyped, `openapi-typescript` produced `unknown` for every\nfield, so the screen could not use them at all and instead re-declared the\nwhole shape from `lib/demo.ts` and re-implemented `Routing.problems()` by hand.\nTwo copies of one rule set is exactly what packages/contracts exists to stop.",
+        "properties": {
+          "catalogue": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogueEntry"
+            },
+            "title": "Catalogue",
+            "type": "array"
+          },
+          "cost_multiplier": {
+            "title": "Cost Multiplier",
+            "type": "number"
+          },
+          "defaults": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Defaults",
+            "type": "object"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/RoutingProblem"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/TaskRoute"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tasks",
+          "catalogue",
+          "problems",
+          "cost_multiplier",
+          "defaults"
+        ],
+        "title": "ModelsResponse",
         "type": "object"
       },
       "PublishRequest": {
@@ -349,6 +708,19 @@
         "title": "QuotaResponse",
         "type": "object"
       },
+      "RerunRequest": {
+        "properties": {
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage"
+        ],
+        "title": "RerunRequest",
+        "type": "object"
+      },
       "RouteUpdate": {
         "properties": {
           "model": {
@@ -365,6 +737,29 @@
           "model"
         ],
         "title": "RouteUpdate",
+        "type": "object"
+      },
+      "RoutingProblem": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "severity": {
+            "default": "warn",
+            "title": "Severity",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "message"
+        ],
+        "title": "RoutingProblem",
         "type": "object"
       },
       "ScheduleRequest": {
@@ -402,6 +797,101 @@
           "at"
         ],
         "title": "ScheduledVideo",
+        "type": "object"
+      },
+      "SetupStatus": {
+        "properties": {
+          "can_connect": {
+            "title": "Can Connect",
+            "type": "boolean"
+          },
+          "can_publish": {
+            "title": "Can Publish",
+            "type": "boolean"
+          },
+          "can_render": {
+            "title": "Can Render",
+            "type": "boolean"
+          },
+          "channels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "credentials": {
+            "items": {
+              "$ref": "#/components/schemas/CredentialStatus"
+            },
+            "title": "Credentials",
+            "type": "array"
+          },
+          "env_path": {
+            "title": "Env Path",
+            "type": "string"
+          },
+          "missing_required": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Required",
+            "type": "array"
+          },
+          "worker_running": {
+            "title": "Worker Running",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "credentials",
+          "can_render",
+          "can_publish",
+          "can_connect",
+          "channels",
+          "missing_required",
+          "env_path",
+          "worker_running"
+        ],
+        "title": "SetupStatus",
+        "type": "object"
+      },
+      "TaskRoute": {
+        "properties": {
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "needs": {
+            "title": "Needs",
+            "type": "string"
+          },
+          "quality": {
+            "title": "Quality",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "group",
+          "needs",
+          "quality",
+          "model",
+          "is_local"
+        ],
+        "title": "TaskRoute",
         "type": "object"
       },
       "ValidationError": {
@@ -1080,6 +1570,44 @@
         ]
       }
     },
+    "/v1/files/{key}": {
+      "get": {
+        "description": "Serve a generated artifact.\n\n`ObjectStore.url()` has always pointed here and this route did not exist, so\nnothing could show a thumbnail or play a render \u2014 the Library and the variant\npicker had URLs that 404'd.\n\nThree separate checks, because this is the one endpoint that turns a string from\na client into a filesystem read: the prefix must be one we publish, the suffix\nmust be a media type we produce, and `store` must agree the resolved path is\nstill inside the storage root.",
+        "operationId": "get_file_v1_files__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get File"
+      }
+    },
     "/v1/insights": {
       "get": {
         "description": "Findings, each carrying its verdict and sample size.\n\nSuggestive findings are returned so the user can see them; only confirmed ones\nare ever fed back into generation.",
@@ -1129,6 +1657,67 @@
       }
     },
     "/v1/jobs": {
+      "get": {
+        "description": "Every job, newest first.\n\nThis did not exist, so the Queue and Library had nothing to read and rendered\ndemo data permanently \u2014 generate a video and neither screen would ever change.\nThey are the two screens someone looks at immediately after pressing Generate.\n\n`status` filters to one state; the Library asks for `completed` and the Queue\ntakes everything.",
+        "operationId": "list_jobs_v1_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobSummary"
+                  },
+                  "title": "Response List Jobs V1 Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Jobs"
+      },
       "post": {
         "operationId": "create_job_v1_jobs_post",
         "requestBody": {
@@ -1211,6 +1800,7 @@
     },
     "/v1/jobs/{job_id}/cancel": {
       "post": {
+        "description": "Stop a job and tell everyone watching.\n\nThe status change alone was not enough. `stream_job` parks on\n`await waiting.wait()` and only re-checks the status when that Event fires, so\nwithout the `_wake` below every open SSE connection hung forever \u2014 the browser\ntab sat on a spinner for a job that had already stopped. And the row was never\nwritten, so the cancellation survived only until the next restart, where it came\nback as `interrupted`.",
         "operationId": "cancel_job_v1_jobs__job_id__cancel_post",
         "parameters": [
           {
@@ -1353,6 +1943,16 @@
               "title": "Job Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
           }
         ],
         "requestBody": {
@@ -1392,6 +1992,58 @@
         "summary": "Publish Job"
       }
     },
+    "/v1/jobs/{job_id}/rerun": {
+      "post": {
+        "description": "Re-run one stage and everything downstream of it.\n\nDistinct from `/edit`, which *replaces* a stage's value and keeps it DONE. This\ndiscards the value and regenerates \u2014 which is what the Create screen's \"Re-run\nfrom here\" means, and what its own caption promises: \"Everything below this\nstage regenerates. Nothing above it is touched.\"\n\nThat control existed and called `console.log`. It could not call `/edit`,\nbecause doing so needs the stage's current value and the API never gives the\nclient one \u2014 `GET /v1/jobs/{id}` returns a `summary` string, not the object.",
+        "operationId": "rerun_stage_v1_jobs__job_id__rerun_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rerun Stage V1 Jobs  Job Id  Rerun Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rerun Stage"
+      }
+    },
     "/v1/models": {
       "get": {
         "description": "Everything the Models screen needs in one call.",
@@ -1401,9 +2053,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Models V1 Models Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ModelsResponse"
                 }
               }
             },
@@ -1724,6 +2374,114 @@
         "summary": "Quota",
         "tags": [
           "publishing"
+        ]
+      }
+    },
+    "/v1/setup": {
+      "get": {
+        "description": "Everything the setup screen needs, and no secret material.",
+        "operationId": "status_v1_setup_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Status",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/v1/setup/diagnostics": {
+      "get": {
+        "description": "What `scripts/doctor.py` prints, as data.\n\nThe same checks, so the terminal and the screen cannot disagree. It existed\nonly as a script, which meant the answer to \"why did my render fail\" lived\nbehind remembering a virtualenv path \u2014 on the machine of someone who has, by\nconstruction, just failed to set this up.\n\n`network=false` skips the grounding probe, which reaches out to YouTube with a\nsix-second timeout. The Setup screen loads with it off and turns it on for the\nexplicit \"Run checks\" press.",
+        "operationId": "diagnostics_v1_setup_diagnostics_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "network",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Network",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Diagnostics"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Diagnostics",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/v1/setup/keys": {
+      "put": {
+        "description": "Write credentials to `.env` and make them live in this process.\n\nReturns the new status rather than an acknowledgement, so the screen shows\nwhat is actually in force instead of what it hoped it had set.",
+        "operationId": "save_keys_v1_setup_keys_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Keys",
+        "tags": [
+          "setup"
         ]
       }
     },

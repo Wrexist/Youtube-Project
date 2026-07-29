@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,7 +21,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from engine.crypto import decrypt, encrypt
+from engine.crypto import DecryptionFailed, decrypt, encrypt
 from engine.quota import ledger
 from engine.settings import get_settings
 
@@ -37,6 +38,54 @@ SCOPES = (
 )
 
 CHUNK = 8 * 1024 * 1024
+
+#: Consecutive transient failures on the same chunk before giving up. The loop was
+#: a bare `continue` with no cap and no delay, so a persistent 503 spun as fast as
+#: the network allowed, forever, against an API that was asking us to slow down.
+MAX_CHUNK_RETRIES = 6
+#: Doubling from 2s: 2, 4, 8, 16, 32, 60. Capped so a Retry-After of an hour does
+#: not park a render for an hour.
+BACKOFF_BASE_S = 2.0
+BACKOFF_MAX_S = 60.0
+
+
+def _backoff(attempt: int, retry_after: str | None) -> float:
+    """How long to wait before re-sending a chunk.
+
+    Honours `Retry-After` when the server sends one — on a 429 that header is the
+    server telling us the answer, and ignoring it earns a longer ban.
+    """
+    if retry_after:
+        try:
+            return min(max(float(retry_after), 0.0), BACKOFF_MAX_S)
+        except ValueError:
+            pass  # it may be an HTTP-date; fall through to the exponential
+    return min(BACKOFF_BASE_S * (2 ** (attempt - 1)), BACKOFF_MAX_S)
+
+
+def _resume_offset(header: str | None, offset: int) -> int:
+    """Where to resume from after a 308.
+
+    The server's `Range` is authoritative and may confirm less than we sent, so it
+    is the only thing worth believing. Everything else resumes from where we were.
+
+    That fallback used to be `offset + chunk_len` — assume the whole chunk landed.
+    It is wrong in exactly the case it fires: Google's resumable-upload protocol
+    says a 308 with *no* `Range` means zero bytes have been persisted, so assuming
+    the chunk landed skips it, and the finished video is missing a hole in the
+    middle. Re-sending a range the server already has is free — the protocol is
+    idempotent per byte range — while skipping one is unrecoverable.
+    """
+    if header:
+        # Strictly `bytes=<first>-<last>`. Splitting on "-" and taking [1] happens to
+        # produce a *number* for plenty of malformed headers too ("0-1-2-3" yields
+        # 2), and a plausible-but-wrong offset silently corrupts the uploaded file —
+        # worse than not parsing it at all.
+        match = re.fullmatch(r"\s*bytes\s*=\s*(\d+)\s*-\s*(\d+)\s*", header)
+        if match:
+            return int(match.group(2)) + 1
+        logger.warning("unparseable Range header {!r}; re-sending from byte {}", header, offset)
+    return offset
 
 
 class YouTubeError(Exception):
@@ -115,11 +164,22 @@ async def refresh(creds: Credentials) -> Credentials:
     """Refresh on demand. Never scheduled — an access token lasts an hour and
     scheduling refreshes just adds a way to be wrong."""
     s = get_settings()
+    try:
+        refresh_token = decrypt(creds.refresh_token_encrypted)
+    except DecryptionFailed as exc:
+        # The key changed, or the row was restored without storage/.secret_key
+        # beside it. Indistinguishable from a revoked grant from here, and the fix
+        # is the same one — so say that, rather than surfacing a 500 nobody can act on.
+        raise ChannelDisconnected(
+            "this channel's stored credential cannot be decrypted with the current "
+            "key — reconnect the channel to store a fresh one"
+        ) from exc
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
             TOKEN_URL,
             data={
-                "refresh_token": decrypt(creds.refresh_token_encrypted),
+                "refresh_token": refresh_token,
                 "client_id": s.google_client_id,
                 "client_secret": s.google_client_secret,
                 "grant_type": "refresh_token",
@@ -225,7 +285,10 @@ class YouTube:
             body["status"]["publishAt"] = publish_at.astimezone(UTC).isoformat()
 
         size = (await asyncio.to_thread(video_path.stat)).st_size
-        ledger.check("videos.insert")
+        # Freshly, not from this process's cache: the worker uploads and the API
+        # serves, so each would otherwise miss the other's spend and both could
+        # approve the same last 1,600 units.
+        await ledger.check_fresh("videos.insert")
 
         # 1. Open the resumable session.
         headers = {
@@ -246,8 +309,20 @@ class YouTube:
 
         session_url = init.headers["Location"]
 
+        # Booked here, not on success. Google charges the 1,600 units when the
+        # session is created, whatever happens afterwards — so recording it only on
+        # 200/201 meant every failed upload spent real quota the ledger never saw.
+        # Enough of those and `check_fresh` waves through an upload there is no
+        # budget left for, which is the silent overrun this ledger exists to stop.
+        await ledger.record("videos.insert", channel_id=self.creds.channel_id, note=title[:60])
+
         # 2. Push chunks, resuming from the last byte the server confirmed.
         offset = 0
+        # Transient failures are retried, but not forever and not immediately. This
+        # was a bare `continue` in a `while True`: a persistent 503 spun as fast as
+        # the network allowed, indefinitely, hammering the API that was already
+        # asking us to back off.
+        attempts = 0
         async with httpx.AsyncClient(timeout=None) as client:
             with video_path.open("rb") as fh:
                 while offset < size:
@@ -266,22 +341,46 @@ class YouTube:
                     )
 
                     if resp.status_code in (200, 201):
-                        await ledger.record(
-                            "videos.insert", channel_id=self.creds.channel_id, note=title[:60]
-                        )
                         return resp.json()["id"]
 
                     if resp.status_code == 308:  # incomplete; continue
-                        rng = resp.headers.get("Range")
-                        offset = int(rng.split("-")[1]) + 1 if rng else offset + len(chunk)
-                        if on_progress:
-                            await on_progress(offset / size, "uploading")
+                        moved = _resume_offset(resp.headers.get("Range"), offset)
+                        if moved > offset:
+                            offset = moved
+                            attempts = 0  # progress was made
+                            if on_progress:
+                                await on_progress(offset / size, "uploading")
+                            continue
+
+                        # A 308 that confirmed nothing. Re-sending is correct, but
+                        # a server that keeps confirming nothing has to hit the same
+                        # ceiling as a 503 — otherwise the loop spins on one chunk
+                        # for as long as the API keeps answering.
+                        attempts += 1
+                        if attempts > MAX_CHUNK_RETRIES:
+                            raise YouTubeError(
+                                f"upload stalled at byte {offset} of {size}: "
+                                f"{MAX_CHUNK_RETRIES} consecutive 308s confirmed no bytes"
+                            )
+                        await asyncio.sleep(_backoff(attempts, resp.headers.get("Retry-After")))
                         continue
 
                     if resp.status_code in (500, 502, 503, 504, 429):
+                        attempts += 1
+                        if attempts > MAX_CHUNK_RETRIES:
+                            raise YouTubeError(
+                                f"upload gave up after {MAX_CHUNK_RETRIES} consecutive "
+                                f"{resp.status_code}s at byte {offset} of {size}"
+                            )
+                        delay = _backoff(attempts, resp.headers.get("Retry-After"))
                         logger.warning(
-                            "transient {} during upload; retrying chunk", resp.status_code
+                            "transient {} during upload; retrying chunk in {:.1f}s (attempt {}/{})",
+                            resp.status_code,
+                            delay,
+                            attempts,
+                            MAX_CHUNK_RETRIES,
                         )
+                        await asyncio.sleep(delay)
                         continue
 
                     # 4xx is deterministic — retrying burns quota for nothing.

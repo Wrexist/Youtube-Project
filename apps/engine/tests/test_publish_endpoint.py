@@ -220,3 +220,207 @@ def test_privacy_is_validated(client):
     _connect_channel()
     resp = client.post("/v1/jobs/src/publish", json={"privacy": "secret"})
     assert resp.status_code == 422
+
+
+# ── the job list ────────────────────────────────────────────────────────────
+#
+# `GET /v1/jobs` did not exist, so the Queue and Library screens had nothing to
+# read and rendered demo data permanently: generate a video and neither screen
+# would ever change. They are the two screens someone looks at immediately after
+# pressing Generate.
+
+
+def _client():
+    from fastapi.testclient import TestClient
+
+    from engine import main
+
+    return TestClient(main.app), main
+
+
+def test_the_job_list_is_empty_rather_than_missing():
+    client, main = _client()
+    main.JOBS.clear()
+    response = client.get("/v1/jobs")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_a_created_job_appears_in_the_list():
+    client, main = _client()
+    main.JOBS.clear()
+    created = client.post("/v1/jobs", json={"topic": "why bridges collapse"})
+    assert created.status_code == 202
+    job_id = created.json()["job_id"]
+
+    rows = client.get("/v1/jobs").json()
+    assert [r["id"] for r in rows] == [job_id]
+    row = rows[0]
+    assert row["topic"] == "why bridges collapse"
+    assert row["workflow"] == "video"
+    assert row["stages_total"] > 0
+    assert row["stages_done"] <= row["stages_total"]
+
+
+def test_the_list_can_be_filtered_by_status():
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "a topic that is long enough"})
+    for job in main.JOBS.values():
+        job["status"] = "completed"
+
+    assert len(client.get("/v1/jobs?status=completed").json()) == 1
+    assert client.get("/v1/jobs?status=failed").json() == []
+
+
+def test_newest_first():
+    """The Queue reads top-down; oldest-first would bury the job just started."""
+    from datetime import UTC, datetime, timedelta
+
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "the older one"})
+    client.post("/v1/jobs", json={"topic": "the newer one"})
+
+    for job in main.JOBS.values():
+        if job["inputs"]["topic"] == "the older one":
+            job["created_at"] = datetime.now(UTC) - timedelta(hours=1)
+
+    topics = [r["topic"] for r in client.get("/v1/jobs").json()]
+    assert topics[0] == "the newer one"
+
+
+def test_a_naive_and_an_aware_timestamp_can_coexist():
+    """SQLite has no timezone type, so a restored job is naive while one created
+    in this process is aware — and sorting the two together raises TypeError.
+
+    This is exactly the state after any restart with a SQLite database: the list
+    endpoint 500s the moment one new job is created alongside a restored one.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "the restored one"})
+    client.post("/v1/jobs", json={"topic": "the fresh one"})
+
+    for job in main.JOBS.values():
+        if job["inputs"]["topic"] == "the restored one":
+            # What SQLite hands back: no tzinfo, and older.
+            job["created_at"] = (datetime.now(UTC) - timedelta(hours=2)).replace(tzinfo=None)
+
+    response = client.get("/v1/jobs")
+    assert response.status_code == 200, response.text
+    assert [r["topic"] for r in response.json()][0] == "the fresh one"
+
+
+def test_a_job_restored_without_a_timestamp_does_not_break_the_sort():
+    """Rows written before created_at was mirrored come back with None."""
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "a topic that is long enough"})
+    for job in main.JOBS.values():
+        job.pop("created_at", None)
+
+    assert client.get("/v1/jobs").status_code == 200
+
+
+def test_artifacts_are_exposed_so_the_library_can_show_them():
+    from engine.workflows.base import Provenance, StageOutput, StageStatus
+
+    client, main = _client()
+    main.JOBS.clear()
+    client.post("/v1/jobs", json={"topic": "a topic that is long enough"})
+    job = next(iter(main.JOBS.values()))
+
+    state = job["states"]["render"]
+    state.status = StageStatus.DONE
+    state.output = StageOutput(
+        value="renders/x.mp4",
+        provenance=Provenance(model="m"),
+        artifacts={"render": "renders/x.mp4"},
+    )
+    thumb = job["states"]["thumbnail"]
+    thumb.status = StageStatus.DONE
+    thumb.output = StageOutput(
+        value=[],
+        provenance=Provenance(model="m"),
+        artifacts={"thumbnail_0": "thumbnails/x-0.jpg", "thumbnail_1": "thumbnails/x-1.jpg"},
+    )
+
+    row = client.get("/v1/jobs").json()[0]
+    assert row["render_key"] == "renders/x.mp4"
+    assert row["thumbnail_keys"] == ["thumbnails/x-0.jpg", "thumbnails/x-1.jpg"]
+
+
+# ── the publish job's live client ───────────────────────────────────────────
+
+
+def test_the_youtube_client_never_reaches_a_response():
+    """`get_job` returned job["inputs"] verbatim, and a publish job's inputs hold a
+    live YouTube client carrying an access token — so the endpoint 500'd on
+    serialisation, and was one annotation change away from returning the token."""
+    from engine import repository
+
+    served = repository.jsonable(
+        {
+            "topic": "x",
+            "youtube_client": object(),
+            "access_token": "ya29.SECRET",
+            "nested": {"ok": 1},
+        }
+    )
+    assert "youtube_client" not in served
+    assert served["topic"] == "x"
+    assert served["nested"] == {"ok": 1}
+
+
+def test_a_scheduled_publish_keeps_its_time_across_a_restart():
+    """`publish_at` is a datetime, which the json filter dropped outright.
+
+    A scheduled publish that survived a restart therefore came back with no
+    publish_at at all — and UploadStage reads that as "publish now, publicly"
+    rather than "private until the scheduled time".
+    """
+    from datetime import UTC, datetime
+
+    from engine.repository import _restore_inputs, jsonable
+
+    when = datetime(2026, 9, 1, 14, 30, tzinfo=UTC)
+    restored = _restore_inputs(jsonable({"publish_at": when, "privacy": "private"}))
+    assert restored["publish_at"] == when
+    assert restored["privacy"] == "private"
+
+
+def test_a_corrupt_stored_timestamp_does_not_crash_the_restore():
+    from engine.repository import _restore_inputs
+
+    assert "publish_at" not in _restore_inputs({"publish_at": "not-a-date"})
+
+
+# ── the publish workflow is not directly startable ──────────────────────────
+
+
+def test_starting_the_publish_workflow_directly_is_refused():
+    """It used to return 202, run the entire paid render, then die on a bare
+    KeyError: 'youtube_client' in a stage with max_attempts = 1."""
+    client, main = _client()
+    main.JOBS.clear()
+    response = client.post("/v1/jobs", json={"topic": "a topic", "workflow": "publish"})
+    assert response.status_code == 400
+    assert "publish" in response.json()["detail"]
+    assert main.JOBS == {}, "nothing should have been created"
+
+
+def test_health_does_not_advertise_a_workflow_you_cannot_start():
+    client, _ = _client()
+    assert "publish" not in client.get("/health").json()["workflows"]
+
+
+def test_the_startable_workflows_still_work():
+    client, main = _client()
+    main.JOBS.clear()
+    for name in ("video", "script", "seo"):
+        assert (
+            client.post("/v1/jobs", json={"topic": "a topic", "workflow": name}).status_code == 202
+        )

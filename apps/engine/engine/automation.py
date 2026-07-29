@@ -34,7 +34,11 @@ DEFAULT_COST_PER_VIDEO_USD: float = 2.50
 _TITLE_MAX_LEN: int = 100
 
 # Critique severity at or above this threshold blocks publication.
-_WEAK_SCRIPT_THRESHOLD: int = 5
+#: On the 1-5 scale the critique prompt actually asks for (script.py). This was 5
+#: while the blocker message said "/10", so it could only ever fire at the absolute
+#: maximum — and it never fired at all, because the value it compared was misread.
+#: 4 means "the critique thinks this is weak", which is what the gate is asking.
+_WEAK_SCRIPT_THRESHOLD: int = 4
 
 
 # ── domain objects ───────────────────────────────────────────────────────────
@@ -285,7 +289,7 @@ def publish_blockers(video: VideoState, series: Series) -> list[Blocker]:  # noq
             Blocker(
                 code="weak_script",
                 message=(
-                    f"Script critique severity is {video.critique_severity}/10, "
+                    f"Script critique severity is {video.critique_severity}/5, "
                     f"which is at or above the threshold of {_WEAK_SCRIPT_THRESHOLD}. "
                     f"Revise the script before publishing."
                 ),

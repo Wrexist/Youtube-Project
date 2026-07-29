@@ -196,14 +196,60 @@ def test_settings_module_has_no_config_toml_lookup():
     assert "config.app.get(" not in source
 
 
+#: Writing to `os.environ` — assignment, `pop`, `setdefault`. Stripped before the
+#: read check below, because the rule is about where configuration is *read* from.
+_ENV_WRITE = re.compile(
+    r"os\.environ\[[^\]]+\]\s*=|os\.environ\.(pop|setdefault|update)\(",
+)
+
+#: The one module allowed to write. `api/setup.py` saves credentials to `.env`, and
+#: `os.environ` takes precedence over the dotenv in pydantic-settings — so without
+#: also updating the process environment, a variable that was already exported keeps
+#: its old value and Save reports success while changing nothing until a full
+#: restart. That is the opposite of drift: it is what makes Settings correct.
+_MAY_WRITE_ENV = {"api/setup.py"}
+
+
+#: Shared with the other source-shape guards — see the note in conftest.py. Without
+#: it this fires on the prose that documents it: the comment in `api/setup.py`
+#: explaining *why* `os.environ` has to be written is itself a match for
+#: `os.environ`.
+from conftest import code_only as _code_only  # noqa: E402
+
+
 def test_nothing_reads_os_environ_directly():
-    """Settings is the single source; a stray getenv is how drift starts."""
-    offenders = [
+    """Settings is the single source; a stray getenv is how drift starts.
+
+    Reads only. A module that *writes* the environment is not competing with
+    Settings for the answer, it is updating the thing Settings reads — which is
+    exactly what saving a credential has to do to take effect in this process.
+    """
+    offenders = []
+    for path in ENGINE.rglob("*.py"):
+        if path.name == "settings.py":
+            continue
+        source = _code_only(path.read_text())
+        rel = path.relative_to(ENGINE).as_posix()
+        if rel in _MAY_WRITE_ENV:
+            source = _ENV_WRITE.sub("", source)
+        if re.search(r"os\.environ|os\.getenv", source):
+            offenders.append(rel)
+    assert not offenders, f"reads the environment directly: {offenders}"
+
+
+def test_only_the_setup_endpoint_writes_the_environment():
+    """The exemption above must stay one module wide.
+
+    Anything else mutating `os.environ` is reconfiguring the process behind
+    Settings' back, which is the drift the rule exists to stop — and it would be
+    invisible, because the read check would keep passing.
+    """
+    writers = [
         p.relative_to(ENGINE).as_posix()
         for p in ENGINE.rglob("*.py")
-        if p.name != "settings.py" and re.search(r"os\.environ|os\.getenv", p.read_text())
+        if p.name != "settings.py" and _ENV_WRITE.search(_code_only(p.read_text()))
     ]
-    assert not offenders, f"reads the environment directly: {offenders}"
+    assert set(writers) <= _MAY_WRITE_ENV, f"unexpected environment writer: {writers}"
 
 
 def test_no_secret_is_logged():
@@ -269,6 +315,56 @@ async def test_enqueue_uses_the_worker_when_one_is_alive(monkeypatch):
     assert enqueued == [("run_job_task", ("job-1", None))]
 
 
+async def test_enqueue_gives_up_on_a_redis_that_answers_nothing(monkeypatch):
+    """Reachable-but-catatonic, which is not the same as unreachable.
+
+    arq passes `conn_timeout` as `socket_connect_timeout` and never sets
+    `socket_timeout`, so once a socket is open every command waits forever. A
+    Redis that accepts connections and then stops answering — paused container,
+    failing over, swapping — therefore hung `enqueue`, which runs inside
+    `POST /v1/jobs`. Measured against a socket that accepts and never replies:
+    still hanging at 20 seconds.
+    """
+    import asyncio
+
+    from engine import worker
+
+    class Catatonic:
+        async def exists(self, _key):
+            await asyncio.sleep(3600)  # answers, eventually, in the heat death
+
+        async def enqueue_job(self, *_a, **_kw):
+            raise AssertionError("should never get this far")
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(worker, "create_pool", lambda *_a, **_kw: _resolve(Catatonic()))
+    monkeypatch.setattr(worker, "PROBE_BUDGET_S", 0.2)
+
+    started = asyncio.get_running_loop().time()
+    assert await worker.enqueue("job-1") is False
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed < 2.0, f"took {elapsed:.1f}s — the deadline is not bounding anything"
+
+
+def test_the_probe_budget_covers_the_whole_handover():
+    """Per-call timeouts would let a merely-slow Redis spend the budget repeatedly.
+
+    Connect, health-key lookup and enqueue are three round trips; bounding each
+    separately means the worst case is three times what the constant says.
+    """
+    import inspect
+
+    from conftest import code_only
+
+    from engine import worker
+
+    body = code_only(inspect.getsource(worker.enqueue))
+    assert body.count("wait_for") == 1, "the deadline should wrap the sequence, not each call"
+    assert "PROBE_BUDGET_S" in body
+
+
 async def test_enqueue_falls_back_when_redis_is_absent(monkeypatch):
     from engine import worker
 
@@ -288,3 +384,37 @@ def test_the_health_check_interval_makes_the_key_a_liveness_signal():
 
 async def _resolve(value):
     return value
+
+
+def test_the_enqueue_probe_does_not_retry_five_times():
+    """`enqueue` runs inside POST /v1/jobs, so its Redis timeout is user-facing.
+
+    With no Redis — the documented zero-config setup, where renders run in-process
+    anyway — arq's defaults of five retries at one second each meant every Generate
+    sat for five seconds before falling back to the path it was always going to
+    take. Measured at 5.02s before this, 0.01s after.
+    """
+    from engine.worker import build_redis_settings, probe_redis_settings
+
+    probe = probe_redis_settings()
+    assert probe.conn_retries <= 1
+    assert probe.conn_retry_delay == 0
+    assert probe.conn_timeout <= 2
+
+    # The worker keeps the generous defaults: it is long-running and should ride
+    # out a Redis restart rather than dying on one refused connection.
+    assert build_redis_settings().conn_retries > probe.conn_retries
+
+
+async def test_the_fallback_is_fast_when_redis_is_absent(monkeypatch):
+    import time
+
+    from engine import worker
+
+    async def refuse(*_a, **_kw):
+        raise ConnectionError("no redis")
+
+    monkeypatch.setattr(worker, "create_pool", refuse)
+    started = time.monotonic()
+    assert await worker.enqueue("job-1") is False
+    assert time.monotonic() - started < 1.0

@@ -15,11 +15,25 @@ const ITEMS = [
   { href: "/models", label: "Models", icon: "M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5" },
 ];
 
+/** Pinned to the bottom, away from the daily-use items. It is the first screen a
+ *  new install needs and roughly the last one anybody opens again. */
+const SETUP = {
+  href: "/setup",
+  label: "Setup",
+  icon: "M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1.08-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1.08 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z",
+};
+
 /** 64px icon rail, expanding to 220px on hover. The command palette carries
  *  everything else, which is what lets each screen stay sparse. */
 export function Rail() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+
+  // The welcome flow is a takeover. Every destination in this rail is a screen
+  // that does not work yet on the install being set up, so offering eight of them
+  // beside a four-step sequence is an invitation to wander off mid-setup and an
+  // eight-fold chance of landing somewhere that says "demo data".
+  if (pathname === "/welcome") return null;
 
   return (
     <nav
@@ -78,6 +92,34 @@ export function Rail() {
       </ul>
 
       <div className="absolute bottom-4 left-0 w-full px-3">
+        <Link
+          href={SETUP.href}
+          aria-current={pathname === SETUP.href ? "page" : undefined}
+          title={SETUP.label}
+          className={`mb-1 flex items-center gap-4 rounded-[var(--radius-btn)] px-2.5 py-2.5 text-sm transition-colors duration-150 ${
+            pathname === SETUP.href
+              ? "bg-[var(--color-raised)] text-[var(--color-ink)]"
+              : "text-[var(--color-muted)] hover:bg-[var(--color-raised)] hover:text-[var(--color-ink)]"
+          }`}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            className="size-[19px] shrink-0"
+            aria-hidden
+          >
+            <path d={SETUP.icon} />
+          </svg>
+          <span
+            className="whitespace-nowrap transition-opacity duration-150"
+            style={{ opacity: open ? 1 : 0 }}
+          >
+            {SETUP.label}
+          </span>
+        </Link>
         <kbd
           className="mono flex items-center gap-2 rounded-[var(--radius-btn)] px-2.5 py-2 text-[11px] text-[var(--color-faint)]"
           style={{ opacity: open ? 1 : 0 }}

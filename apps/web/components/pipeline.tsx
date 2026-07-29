@@ -13,11 +13,18 @@ export function StageRow({
   expanded,
   onToggle,
   onRerun,
+  onChoose,
+  chosen,
+  canRerun = true,
 }: {
   stage: Stage;
   expanded: boolean;
   onToggle: () => void;
   onRerun: (name: string) => void;
+  onChoose?: (stage: string, index: number) => void;
+  chosen?: number;
+  /** False while the job is running — the engine 409s a re-run on a live job. */
+  canRerun?: boolean;
 }) {
   const interactive = stage.status === "done" || stage.status === "failed";
 
@@ -79,7 +86,11 @@ export function StageRow({
       {expanded && interactive && (
         <div className="border-t border-[var(--color-line)] bg-[var(--color-bg)] px-4 py-4">
           {stage.variants ? (
-            <VariantPicker variants={stage.variants} />
+            <VariantPicker
+              variants={stage.variants}
+              chosen={chosen}
+              onChoose={onChoose ? (i) => onChoose(stage.name, i) : undefined}
+            />
           ) : (
             <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-[var(--color-muted)]">
               {stage.detail ?? stage.summary ?? "No detail captured for this stage."}
@@ -88,12 +99,15 @@ export function StageRow({
           <div className="mt-4 flex items-center gap-3">
             <button
               onClick={() => onRerun(stage.name)}
-              className="rounded-[var(--radius-btn)] border border-[var(--color-line)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--color-muted)] transition-colors duration-150 hover:border-[var(--color-line-hover)] hover:text-[var(--color-ink)]"
+              disabled={!canRerun}
+              className="rounded-[var(--radius-btn)] border border-[var(--color-line)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--color-muted)] transition-colors duration-150 hover:border-[var(--color-line-hover)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               Re-run from here
             </button>
             <p className="text-[12px] text-[var(--color-faint)]">
-              Everything below this stage regenerates. Nothing above it is touched.
+              {canRerun
+                ? "Everything below this stage regenerates. Nothing above it is touched."
+                : "Available once the job finishes."}
             </p>
           </div>
         </div>
@@ -137,8 +151,21 @@ function RunningBar() {
 
 /** Variant picker — side by side, score visible, one click to choose.
  *  Used for hooks, titles, and thumbnails. */
-export function VariantPicker({ variants }: { variants: Variant[] }) {
-  const [chosen, setChosen] = useState(0);
+export function VariantPicker({
+  variants,
+  chosen: controlled,
+  onChoose,
+}: {
+  variants: Variant[];
+  /** Supplied by the Create screen so the choice reaches the publish call. */
+  chosen?: number;
+  onChoose?: (index: number) => void;
+}) {
+  // Uncontrolled where nobody is listening — the Library preview still wants a
+  // working radio group even though nothing acts on it.
+  const [local, setLocal] = useState(0);
+  const chosen = controlled ?? local;
+  const setChosen = (i: number) => (onChoose ? onChoose(i) : setLocal(i));
 
   return (
     <div className="grid gap-2.5" role="radiogroup" aria-label="Variants">
@@ -190,9 +217,16 @@ export function VariantPicker({ variants }: { variants: Variant[] }) {
 export function Pipeline({
   stages,
   onRerun,
+  onChoose,
+  chosen,
+  canRerun = true,
 }: {
   stages: Stage[];
   onRerun: (name: string) => void;
+  onChoose?: (stage: string, index: number) => void;
+  /** Chosen variant index per stage, so the Create screen can publish the pick. */
+  chosen?: Record<string, number>;
+  canRerun?: boolean;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const done = stages.filter((s) => s.status === "done").length;
@@ -213,6 +247,9 @@ export function Pipeline({
             expanded={open === stage.name}
             onToggle={() => setOpen(open === stage.name ? null : stage.name)}
             onRerun={onRerun}
+            onChoose={onChoose}
+            chosen={chosen?.[stage.name]}
+            canRerun={canRerun}
           />
         ))}
       </ul>

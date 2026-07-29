@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
+import { applyPlanToCalendar, scheduleAt, unscheduleAt } from "@/app/actions";
 import {
   DAILY_LIMIT,
   MAX_PER_DAY,
@@ -35,11 +36,28 @@ export interface CalendarVideo {
 export function Calendar({
   videos,
   quotaByDay,
+  initialScheduled = [],
+  now,
+  live = false,
 }: {
   videos: CalendarVideo[];
   quotaByDay: Record<string, number>;
+  /** Bookings the engine already holds. `GET /v1/calendar` returns these and the
+   *  page destructured only `quota_by_day`, so an upload the engine had already
+   *  booked was invisible here — and the same day could be double-booked against
+   *  a ceiling this screen could not see. */
+  initialScheduled?: Scheduled[];
+  /** A reference instant from the server, as an ISO string.
+   *
+   *  The grid and the "is this day past" test both called `new Date()` during
+   *  render, which differs between the server pass and the client pass and is a
+   *  hydration mismatch by construction. */
+  now?: string;
+  /** With no engine, drops are refused rather than silently kept in memory. */
+  live?: boolean;
 }) {
-  const [scheduled, setScheduled] = useState<Scheduled[]>([]);
+  const [scheduled, setScheduled] = useState<Scheduled[]>(initialScheduled);
+  const [, startTransition] = useTransition();
   const [dragging, setDragging] = useState<string | null>(null);
   const [hoverDay, setHoverDay] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "warn" | "bad"; text: string } | null>(
@@ -52,8 +70,14 @@ export function Calendar({
   const tray = videos.filter((v) => !scheduledIds.has(v.id));
 
   // A 4-week grid starting on the Monday of the current week.
+  const today = useMemo(() => (now ? new Date(now) : new Date()), [now]);
+  const startOfToday = useMemo(() => {
+    const d = new Date(today);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [today]);
+
   const weeks = useMemo(() => {
-    const today = new Date();
     const monday = new Date(today);
     monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
     monday.setHours(0, 0, 0, 0);
@@ -64,7 +88,7 @@ export function Calendar({
         return date;
       }),
     );
-  }, []);
+  }, [today]);
 
   function drop(day: Date) {
     if (!dragging) return;
@@ -83,7 +107,15 @@ export function Calendar({
       return;
     }
 
+    // Optimistic, then reverted if the engine refuses. The alternative — waiting
+    // for the round trip — makes a drag feel broken on a slow connection.
+    const previous = scheduled;
     setScheduled([...others, { videoId: dragging, at }]);
+    persist(
+      () => scheduleAt(dragging, at.toISOString()),
+      previous,
+      "could not schedule that video",
+    );
     setNotice(
       message
         ? { tone: "warn", text: message }
@@ -96,8 +128,37 @@ export function Calendar({
   }
 
   function unschedule(videoId: string) {
+    const previous = scheduled;
     setScheduled(scheduled.filter((s) => s.videoId !== videoId));
     setNotice(null);
+    persist(() => unscheduleAt(videoId), previous, "could not unschedule that video");
+  }
+
+  /**
+   * Send a change and put the old state back if it is refused.
+   *
+   * Every mutation on this screen used to call `setScheduled` and stop there, so a
+   * booking lasted until the next reload and nothing ever reached the engine. The
+   * engine's 409 carries the reason — over quota, too close to another upload, in
+   * the past — and it is shown verbatim rather than reduced to "failed".
+   */
+  function persist(
+    action: () => Promise<{ ok: boolean; error?: string }>,
+    previous: Scheduled[],
+    fallback: string,
+  ) {
+    if (!live) {
+      setScheduled(previous);
+      setNotice({ tone: "bad", text: "The engine is not reachable — nothing was saved." });
+      return;
+    }
+    startTransition(async () => {
+      const result = await action();
+      if (!result.ok) {
+        setScheduled(previous);
+        setNotice({ tone: "bad", text: result.error ?? fallback });
+      }
+    });
   }
 
   function proposePlan() {
@@ -107,12 +168,22 @@ export function Calendar({
 
   function applyPlan() {
     if (!plan) return;
-    setScheduled([
-      ...scheduled,
-      ...plan.assignments.map((a) => ({ videoId: a.videoId, at: a.at })),
-    ]);
-    setNotice({ tone: "ok", text: `${plan.assignments.length} videos scheduled` });
+    const previous = scheduled;
+    const assignments = plan.assignments;
+
+    setScheduled([...scheduled, ...assignments.map((a) => ({ videoId: a.videoId, at: a.at }))]);
+    setNotice({ tone: "ok", text: `${assignments.length} videos scheduled` });
     setPlan(null);
+
+    // This one printed "N videos scheduled" having sent nothing at all.
+    persist(
+      () =>
+        applyPlanToCalendar(
+          assignments.map((a) => ({ video_id: a.videoId, at: a.at.toISOString() })),
+        ),
+      previous,
+      "could not apply the plan",
+    );
   }
 
   const proposedByDay = new Map<string, { videoId: string; at: Date; reason: string }[]>();
@@ -224,7 +295,7 @@ export function Calendar({
                     const used = quotaByDay[key] ?? 0;
                     const budget = Math.floor((DAILY_LIMIT - used) / PUBLISH_COST);
                     const full = items.length >= Math.min(budget, MAX_PER_DAY);
-                    const past = day < new Date(new Date().setHours(0, 0, 0, 0));
+                    const past = day < startOfToday;
                     const active = hoverDay === key && !!dragging;
 
                     return (

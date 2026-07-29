@@ -6,13 +6,49 @@
     "packages/*"
   ],
   "scripts": {
+    "prestart": "node scripts/check-web-toolchain.mjs",
+    "start": "node scripts/start.mjs",
+    "predev": "node scripts/check-web-toolchain.mjs",
     "dev": "npm run dev --workspace=@studio/web",
+    "prebuild": "node scripts/check-web-toolchain.mjs",
     "build": "npm run build --workspace=@studio/web",
     "lint": "npm run lint --workspace=@studio/web",
     "typecheck": "npm run typecheck --workspace=@studio/web",
+    "check:toolchain": "node scripts/check-web-toolchain.mjs",
+    "reinstall": "node scripts/reinstall.mjs",
     "infra": "docker compose up -d"
   },
   "engines": {
     "node": ">=20"
+  },
+  "//optionalDependencies": [
+    "Native binaries for platforms other than the one that generated the lockfile.",
+    "",
+    "npm records an optional dependency only for the platform it resolved on, so a",
+    "package-lock.json generated on Linux has lightningcss-linux-x64-gnu and no",
+    "win32 entry at all. `npm install` on Windows then never fetches the binary and",
+    "Tailwind dies at the first CSS import with 'Cannot find module",
+    "../lightningcss.win32-x64-msvc.node'. This is npm/cli#4828, and `npm install",
+    "--os=win32` does not fix it — it prunes rather than adds.",
+    "",
+    "Declaring them here forces every variant into the lockfile. They stay optional,",
+    "and each one carries its own os/cpu constraints, so npm still installs only the",
+    "one that matches and silently skips the rest. Next.js already does this for",
+    "@next/swc, which is why that package alone worked on both platforms.",
+    "",
+    "Versions must track @tailwindcss/oxide and the lightningcss under",
+    "@tailwindcss/node. `npm run check:toolchain` fails when they drift, and CI",
+    "runs it — so a Tailwind bump that forgets these is caught, even though CI",
+    "runs on Linux and cannot see a missing win32 binary directly."
+  ],
+  "optionalDependencies": {
+    "@tailwindcss/oxide-win32-x64-msvc": "4.3.3",
+    "@tailwindcss/oxide-win32-arm64-msvc": "4.3.3",
+    "@tailwindcss/oxide-darwin-x64": "4.3.3",
+    "@tailwindcss/oxide-darwin-arm64": "4.3.3",
+    "lightningcss-win32-x64-msvc": "1.32.0",
+    "lightningcss-win32-arm64-msvc": "1.32.0",
+    "lightningcss-darwin-x64": "1.32.0",
+    "lightningcss-darwin-arm64": "1.32.0"
   }
 }

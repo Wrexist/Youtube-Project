@@ -278,13 +278,51 @@ def _cost_of(job: dict) -> float:
     )
 
 
-def _jsonable(inputs: dict) -> dict:
-    """Inputs minus anything that is not data.
+#: Input keys that are datetimes. Stored as ISO strings and parsed back on load —
+#: without this they were dropped entirely by the json-safety filter, so a publish
+#: job that survived a restart lost its `publish_at` and `UploadStage` read None,
+#: which means "publish now, publicly" instead of "private until the scheduled time".
+_DATETIME_INPUTS = ("publish_at",)
 
-    `youtube_client` is a live client instance that a publish job carries; it is
-    rebuilt from the channel row on resume, never serialised.
+
+def jsonable(inputs: dict) -> dict:
+    """Inputs reduced to what can be stored and served.
+
+    `youtube_client` is a live client instance that a publish job carries — it holds
+    an access token, so it must reach neither the database nor an HTTP response. It
+    is rebuilt from the channel row on resume.
     """
-    return {k: v for k, v in inputs.items() if _is_json_safe(v)}
+    out = {}
+    for key, value in inputs.items():
+        if isinstance(value, datetime):
+            out[key] = value.isoformat()
+        elif _is_json_safe(value):
+            out[key] = value
+    return out
+
+
+# The old private name, kept because save_job and the tests both use it.
+_jsonable = jsonable
+
+
+def _restore_inputs(inputs: dict) -> dict:
+    """Turn the ISO strings from `jsonable` back into datetimes.
+
+    `UploadStage` calls `.astimezone()` on `publish_at`, so handing it a string
+    would trade a dropped schedule for an AttributeError mid-upload.
+    """
+    out = dict(inputs)
+    for key in _DATETIME_INPUTS:
+        raw = out.get(key)
+        if isinstance(raw, str):
+            try:
+                parsed = datetime.fromisoformat(raw)
+            except ValueError:
+                logger.warning("could not parse {}={!r}; dropping it", key, raw)
+                out.pop(key)
+                continue
+            out[key] = parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return out
 
 
 def _is_json_safe(value: Any) -> bool:
@@ -295,6 +333,18 @@ def _is_json_safe(value: Any) -> bool:
     if isinstance(value, dict):
         return all(isinstance(k, str) and _is_json_safe(v) for k, v in value.items())
     return False
+
+
+def _aware(moment: datetime | None) -> datetime | None:
+    """A datetime that can be compared with one from `datetime.now(UTC)`.
+
+    Postgres round-trips the offset; SQLite does not store one at all. Assuming UTC
+    for a naive value is correct here because every write goes through
+    `datetime.now(UTC)`.
+    """
+    if moment is None:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 async def load_jobs(get_workflow) -> dict[str, dict]:
@@ -343,12 +393,18 @@ async def load_jobs(get_workflow) -> dict[str, dict]:
         mirror[row.id] = {
             "id": row.id,
             "workflow": workflow,
-            "inputs": row.inputs or {},
+            "inputs": _restore_inputs(row.inputs or {}),
             "states": states,
             "events": row.events or [],
             "wake": asyncio.Event(),
             "status": status,
             "error": row.error,
+            # Normalised on the way out: SQLite has no timezone type and hands
+            # back naive datetimes, while a job created in this process carries an
+            # aware one. Sorting the two together raises TypeError, so `GET
+            # /v1/jobs` died the moment a restored job and a new job coexisted.
+            "created_at": _aware(row.created_at),
+            "updated_at": _aware(row.updated_at),
         }
 
     if interrupted:

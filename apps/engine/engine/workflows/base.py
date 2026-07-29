@@ -296,21 +296,42 @@ class Workflow:
             # Refuse to start a stage we cannot afford to finish. Failing here is far
             # better than failing after the spend.
             if ctx.spent_usd + stage.estimated_cost_usd > budget_usd:
-                state.status = StageStatus.FAILED
-                state.error = (
+                reason = (
                     f"budget ceiling ${budget_usd:.2f} would be exceeded "
                     f"(spent ${ctx.spent_usd:.2f}, '{stage.name}' needs "
                     f"~${stage.estimated_cost_usd:.2f})"
                 )
+                state.error = reason
+
+                if stage.optional:
+                    # Optional means optional. This branch used to raise regardless,
+                    # and since ThumbnailStage is both optional and last, an
+                    # unaffordable thumbnail marked the whole job `failed` — while
+                    # `POST /v1/jobs/{id}/publish` refuses anything not `completed`.
+                    # A finished, rendered, stored MP4 became unpublishable over a
+                    # skippable stage. The retry-exhaustion path below already got
+                    # this right; only the pre-flight check did not.
+                    state.status = StageStatus.SKIPPED
+                    await emit(
+                        {
+                            "type": "stage.skipped",
+                            "job_id": job_id,
+                            "stage": stage.name,
+                            "message": reason,
+                        }
+                    )
+                    continue
+
+                state.status = StageStatus.FAILED
                 await emit(
                     {
                         "type": "workflow.failed",
                         "job_id": job_id,
                         "stage": stage.name,
-                        "error": state.error,
+                        "error": reason,
                     }
                 )
-                raise BudgetExceeded(state.error)
+                raise BudgetExceeded(reason)
 
             await self._run_stage(stage, state, ctx, emit, job_id)
 

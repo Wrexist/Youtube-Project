@@ -124,8 +124,8 @@ Full spec: **[docs/UI-DESIGN.md](docs/UI-DESIGN.md)** — tokens, the five scree
 7. **Exit:** an SEO panel showing variants, scores, character counts, and a live YouTube-search-result preview.
 
 ### Phase 5 — Thumbnails *(2 days)*
-1. Concept generation from the script's core tension (3 distinct concepts).
-2. Image generation (the Higgsfield MCP `generate_image` is available; keep a provider interface so this is swappable).
+1. Concept generation from the script's core tension (3 distinct concepts), briefed on the actual video — title, alternates, beats with their visual direction and energy — not just a title and a hook. Five archetypes in [templates.py](apps/engine/engine/render/templates.py) (stakes, big number, versus, before/after, revelation), each a real layout rather than a prompt tweak; the three variants are forced onto three different ones so the picker is a genuine choice.
+2. Image generation ([images.py](apps/engine/engine/providers/images.py) — OpenAI and Imagen behind one interface, metered per image). It reuses `OPENAI_API_KEY`/`GEMINI_API_KEY` rather than adding a key, and returns None when neither is set so a keyless clone still gets a composed thumbnail over a flat panel.
 3. Text overlay engine: 3–5 words max, huge weight, high contrast, safe zones for the duration badge.
 4. Render 1280×720, under 2MB, and preview at actual feed sizes (small mobile thumb is the real test).
 5. Store variants for later A/B swapping.

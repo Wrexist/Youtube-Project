@@ -99,7 +99,7 @@ async def audience() -> dict:
     return {
         "source": profile.source,
         "measured": profile.is_measured,
-        "weekday": profile.weekday,
+        "weekday": profile.daily,
         "hourly": profile.hourly,
         "note": (
             "YouTube exposes no hourly dimension through the public API, so the "

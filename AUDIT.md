@@ -614,7 +614,7 @@ Not defects; scope that was consciously left out. Tracked so it is not rediscove
 | Item | Where |
 |---|---|
 | No auth on the engine | §6 — do not expose it |
-| Thumbnails are placeholders; no image model | §5.3 |
+| Image APIs unproven against a live key | §5.3 |
 | Subtitles lose commas and quotes | §5.1 |
 | Duplicate detection is lexical, not semantic | §5.6 |
 | Keyword/tag trimmers drop by position, not value | §5.7 |

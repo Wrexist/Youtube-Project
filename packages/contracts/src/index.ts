@@ -45,7 +45,20 @@ export type CalendarSlots = Ok<paths["/v1/calendar/slots"]["get"]>;
 export type Channels = Ok<paths["/v1/channels"]["get"]>;
 export type Insights = Ok<paths["/v1/insights"]["get"]>;
 export type Models = Ok<paths["/v1/models"]["get"]>;
+/** One row of `GET /v1/jobs` — what the Queue and Library list. */
+export type JobSummary = components["schemas"]["JobSummary"];
+export type Jobs = Ok<paths["/v1/jobs"]["get"]>;
 export type ChannelLimits = Ok<paths["/v1/channels/limits"]["get"]>;
+
+/** What the Setup screen reads. Reports whether each credential is set, never
+ *  what it is — the engine has no endpoint that returns a key's value. */
+export type SetupStatus = Ok<paths["/v1/setup"]["get"]>;
+export type CredentialStatus = components["schemas"]["CredentialStatus"];
+
+/** `scripts/doctor.py` as data — the same checks, so the terminal and the screen
+ *  cannot disagree about whether this install works. */
+export type Diagnostics = Ok<paths["/v1/setup/diagnostics"]["get"]>;
+export type DiagnosticCheck = components["schemas"]["DiagnosticCheck"];
 
 // ── things FastAPI types as `object` ────────────────────────────────────────
 //
@@ -77,7 +90,11 @@ export type JobEventType =
   | "stage.failed"
   | "stage.retrying"
   | "stage.skipped"
-  | "stage.replayed";
+  | "stage.replayed"
+  // Terminal. The engine sends this immediately before closing the stream, because
+  // a stream that just ends is a *reconnect* signal to EventSource — a finished job
+  // replayed its whole log every few seconds without it.
+  | "stream.closed";
 
 export interface JobEvent {
   type: JobEventType;
@@ -89,4 +106,6 @@ export interface JobEvent {
   error?: string;
   attempt?: number;
   cost_usd?: number;
+  /** Only on `stream.closed`: the job's final status. */
+  status?: JobStatus;
 }

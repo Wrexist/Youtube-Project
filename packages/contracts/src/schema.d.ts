@@ -325,6 +325,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/files/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get File
+         * @description Serve a generated artifact.
+         *
+         *     `ObjectStore.url()` has always pointed here and this route did not exist, so
+         *     nothing could show a thumbnail or play a render — the Library and the variant
+         *     picker had URLs that 404'd.
+         *
+         *     Three separate checks, because this is the one endpoint that turns a string from
+         *     a client into a filesystem read: the prefix must be one we publish, the suffix
+         *     must be a media type we produce, and `store` must agree the resolved path is
+         *     still inside the storage root.
+         */
+        get: operations["get_file_v1_files__key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/insights": {
         parameters: {
             query?: never;
@@ -375,7 +404,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Jobs
+         * @description Every job, newest first.
+         *
+         *     This did not exist, so the Queue and Library had nothing to read and rendered
+         *     demo data permanently — generate a video and neither screen would ever change.
+         *     They are the two screens someone looks at immediately after pressing Generate.
+         *
+         *     `status` filters to one state; the Library asks for `completed` and the Queue
+         *     takes everything.
+         */
+        get: operations["list_jobs_v1_jobs_get"];
         put?: never;
         /** Create Job */
         post: operations["create_job_v1_jobs_post"];
@@ -411,7 +451,17 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Cancel Job */
+        /**
+         * Cancel Job
+         * @description Stop a job and tell everyone watching.
+         *
+         *     The status change alone was not enough. `stream_job` parks on
+         *     `await waiting.wait()` and only re-checks the status when that Event fires, so
+         *     without the `_wake` below every open SSE connection hung forever — the browser
+         *     tab sat on a spinner for a job that had already stopped. And the row was never
+         *     written, so the cancellation survived only until the next restart, where it came
+         *     back as `interrupted`.
+         */
         post: operations["cancel_job_v1_jobs__job_id__cancel_post"];
         delete?: never;
         options?: never;
@@ -496,6 +546,35 @@ export interface paths {
          *     *checks*.
          */
         post: operations["publish_job_v1_jobs__job_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs/{job_id}/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rerun Stage
+         * @description Re-run one stage and everything downstream of it.
+         *
+         *     Distinct from `/edit`, which *replaces* a stage's value and keeps it DONE. This
+         *     discards the value and regenerates — which is what the Create screen's "Re-run
+         *     from here" means, and what its own caption promises: "Everything below this
+         *     stage regenerates. Nothing above it is touched."
+         *
+         *     That control existed and called `console.log`. It could not call `/edit`,
+         *     because doing so needs the stage's current value and the API never gives the
+         *     client one — `GET /v1/jobs/{id}` returns a `summary` string, not the object.
+         */
+        post: operations["rerun_stage_v1_jobs__job_id__rerun_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -679,6 +758,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Status
+         * @description Everything the setup screen needs, and no secret material.
+         */
+        get: operations["status_v1_setup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Diagnostics
+         * @description What `scripts/doctor.py` prints, as data.
+         *
+         *     The same checks, so the terminal and the screen cannot disagree. It existed
+         *     only as a script, which meant the answer to "why did my render fail" lived
+         *     behind remembering a virtualenv path — on the machine of someone who has, by
+         *     construction, just failed to set this up.
+         *
+         *     `network=false` skips the grounding probe, which reaches out to YouTube with a
+         *     six-second timeout. The Setup screen loads with it off and turns it on for the
+         *     explicit "Run checks" press.
+         */
+        get: operations["diagnostics_v1_setup_diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save Keys
+         * @description Write credentials to `.env` and make them live in this process.
+         *
+         *     Returns the new status rather than an acknowledgement, so the screen shows
+         *     what is actually in force instead of what it hoped it had set.
+         */
+        put: operations["save_keys_v1_setup_keys_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workflows/{name}": {
         parameters: {
             query?: never;
@@ -786,6 +937,83 @@ export interface components {
             /** Scheduled */
             scheduled: components["schemas"]["ScheduledVideo"][];
         };
+        /** CatalogueEntry */
+        CatalogueEntry: {
+            /** Context */
+            context: number;
+            /** Input Per M */
+            input_per_m: number;
+            /** Is Free */
+            is_free: boolean;
+            /** Is Local */
+            is_local: boolean;
+            /** Json Mode */
+            json_mode: boolean;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Model */
+            model: string;
+            /** Output Per M */
+            output_per_m: number;
+            /** Provider */
+            provider: string;
+        };
+        /**
+         * CredentialStatus
+         * @description One credential, as the setup screen sees it. Never carries the value.
+         */
+        CredentialStatus: {
+            /** Configured */
+            configured: boolean;
+            /** Effort */
+            effort: string;
+            /** Env */
+            env: string;
+            /** Group */
+            group: string;
+            /** Label */
+            label: string;
+            /** Required */
+            required: boolean;
+            /** Tail */
+            tail: string;
+            /** Unlocks */
+            unlocks: string;
+            /** Url */
+            url: string;
+            /** Without It */
+            without_it: string;
+        };
+        /** DiagnosticCheck */
+        DiagnosticCheck: {
+            /** Command */
+            command: string;
+            /** Detail */
+            detail: string;
+            /** Fix */
+            fix: string;
+            /** Href */
+            href: string;
+            /** Key */
+            key: string;
+            /** Level */
+            level: string;
+            /** Name */
+            name: string;
+        };
+        /** Diagnostics */
+        Diagnostics: {
+            /** Blockers */
+            blockers: number;
+            /** Checks */
+            checks: components["schemas"]["DiagnosticCheck"][];
+            /** Ready */
+            ready: boolean;
+            /** Warnings */
+            warnings: number;
+        };
         /** EditRequest */
         EditRequest: {
             /** Stage */
@@ -822,6 +1050,57 @@ export interface components {
              */
             workflow: string;
         };
+        /**
+         * JobSummary
+         * @description One job, as the Queue and Library list them.
+         *
+         *     A response model rather than a bare dict because both screens do arithmetic and
+         *     filtering on these fields; without it the generated TypeScript types every one
+         *     as `unknown` and the UI has to cast, which is what `packages/contracts` exists
+         *     to prevent.
+         */
+        JobSummary: {
+            /** Cost Usd */
+            cost_usd: number;
+            /** Created At */
+            created_at?: string | null;
+            /** Current Stage */
+            current_stage?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            /** Render Key */
+            render_key?: string | null;
+            /** Stages Done */
+            stages_done: number;
+            /** Stages Total */
+            stages_total: number;
+            /** Status */
+            status: string;
+            /** Thumbnail Keys */
+            thumbnail_keys?: string[];
+            /** Topic */
+            topic: string;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Workflow */
+            workflow: string;
+        };
+        /**
+         * KeyUpdate
+         * @description A save. Only the names present here are touched.
+         *
+         *     `dict[str, str]` rather than a field per credential so that adding one to
+         *     `CREDENTIALS` needs no change here — the allowlist is `CREDENTIALS` itself,
+         *     checked at write time, which keeps the two from drifting apart.
+         */
+        KeyUpdate: {
+            /** Values */
+            values?: {
+                [key: string]: string;
+            };
+        };
         /** LaunchRequest */
         LaunchRequest: {
             /**
@@ -836,6 +1115,31 @@ export interface components {
             language: string;
             /** Niche */
             niche: string;
+        };
+        /**
+         * ModelsResponse
+         * @description Everything the Models screen needs, typed.
+         *
+         *     A response model rather than a bare dict because the Models screen does real
+         *     work with these — grouping tasks, looking specs up by key, summing a monthly
+         *     cost. Returned untyped, `openapi-typescript` produced `unknown` for every
+         *     field, so the screen could not use them at all and instead re-declared the
+         *     whole shape from `lib/demo.ts` and re-implemented `Routing.problems()` by hand.
+         *     Two copies of one rule set is exactly what packages/contracts exists to stop.
+         */
+        ModelsResponse: {
+            /** Catalogue */
+            catalogue: components["schemas"]["CatalogueEntry"][];
+            /** Cost Multiplier */
+            cost_multiplier: number;
+            /** Defaults */
+            defaults: {
+                [key: string]: string;
+            };
+            /** Problems */
+            problems: components["schemas"]["RoutingProblem"][];
+            /** Tasks */
+            tasks: components["schemas"]["TaskRoute"][];
         };
         /**
          * PublishRequest
@@ -899,10 +1203,27 @@ export interface components {
             /** Uploads Left */
             uploads_left: number;
         };
+        /** RerunRequest */
+        RerunRequest: {
+            /** Stage */
+            stage: string;
+        };
         /** RouteUpdate */
         RouteUpdate: {
             /** Model */
             model: string;
+            /** Task */
+            task: string;
+        };
+        /** RoutingProblem */
+        RoutingProblem: {
+            /** Message */
+            message: string;
+            /**
+             * Severity
+             * @default warn
+             */
+            severity: string;
             /** Task */
             task: string;
         };
@@ -922,6 +1243,40 @@ export interface components {
             at: string;
             /** Video Id */
             video_id: string;
+        };
+        /** SetupStatus */
+        SetupStatus: {
+            /** Can Connect */
+            can_connect: boolean;
+            /** Can Publish */
+            can_publish: boolean;
+            /** Can Render */
+            can_render: boolean;
+            /** Channels */
+            channels: string[];
+            /** Credentials */
+            credentials: components["schemas"]["CredentialStatus"][];
+            /** Env Path */
+            env_path: string;
+            /** Missing Required */
+            missing_required: string[];
+            /** Worker Running */
+            worker_running: boolean;
+        };
+        /** TaskRoute */
+        TaskRoute: {
+            /** Group */
+            group: string;
+            /** Is Local */
+            is_local: boolean;
+            /** Model */
+            model: string;
+            /** Needs */
+            needs: string;
+            /** Quality */
+            quality: string;
+            /** Task */
+            task: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -1449,6 +1804,37 @@ export interface operations {
             };
         };
     };
+    get_file_v1_files__key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     insights_v1_insights_get: {
         parameters: {
             query?: never;
@@ -1489,6 +1875,38 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    list_jobs_v1_jobs_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1664,7 +2082,9 @@ export interface operations {
     };
     publish_job_v1_jobs__job_id__publish_post: {
         parameters: {
-            query?: never;
+            query?: {
+                force?: boolean;
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -1679,6 +2099,43 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rerun_stage_v1_jobs__job_id__rerun_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RerunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1714,9 +2171,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ModelsResponse"];
                 };
             };
         };
@@ -1965,6 +2420,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuotaResponse"];
+                };
+            };
+        };
+    };
+    status_v1_setup_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatus"];
+                };
+            };
+        };
+    };
+    diagnostics_v1_setup_diagnostics_get: {
+        parameters: {
+            query?: {
+                network?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Diagnostics"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_keys_v1_setup_keys_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

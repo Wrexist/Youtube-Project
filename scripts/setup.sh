@@ -75,6 +75,21 @@ step "Setting up the web app"
 note "installing npm workspaces"
 npm install --silent
 
+# Tailwind v4 compiles CSS through native binaries, and npm records an optional
+# dependency only for the platform that generated the lockfile. A node_modules
+# left over from before the root package.json pinned every variant is still
+# broken, and the symptom is a 500 on the first page load naming a .node file
+# nobody recognises. Catch it here, where it can be fixed silently.
+if ! node scripts/check-web-toolchain.mjs >/dev/null 2>&1; then
+  note "web dependencies are wrong for this platform — reinstalling from scratch"
+  # Every one of them, not just the root. A clean install here hoists everything
+  # and leaves no workspace node_modules; one that survives shadows the root copy
+  # for anything inside that workspace, and deleting only the root leaves it in
+  # place. That is how a machine ran Next 16 with a Next 10-era tree underneath it.
+  node scripts/reinstall.mjs || die "web dependencies are still wrong"
+fi
+note "web dependencies OK"
+
 # ── config ──────────────────────────────────────────────────────────────────
 
 step "Configuration"
@@ -102,7 +117,23 @@ print('  ' + asyncio.run(db.ensure_schema()))
 # ── verify ──────────────────────────────────────────────────────────────────
 
 step "Running the test suite"
-(cd apps/engine && STUDIO_PERSIST=false "$ROOT/$VENV_BIN/python" -m pytest -q 2>&1 | tail -3)
+# Captured, not piped straight through. `... | tail -3` makes the pipeline's exit
+# status tail's, which is always 0 — so a failing suite scrolled three lines past
+# and setup went on to print "Setup complete", the one thing this step exists to
+# stop. (The same bug was in setup.ps1.)
+set +e
+TEST_OUTPUT=$(cd apps/engine && STUDIO_PERSIST=false "$ROOT/$VENV_BIN/python" -m pytest -q 2>&1)
+TESTS=$?
+set -e
+echo "$TEST_OUTPUT" | tail -3 | sed 's/^/  /'
+if [ $TESTS -ne 0 ]; then
+  echo
+  echo "${bold}The test suite failed.${reset} Full output:"
+  echo "$TEST_OUTPUT" | sed 's/^/  /'
+  echo
+  echo "The engine is not working on this machine — please open an issue with the above."
+  exit 1
+fi
 
 step "Checking what is still missing"
 set +e
@@ -114,7 +145,18 @@ echo
 if [ $DOCTOR -eq 0 ]; then
   echo "${green}${bold}Setup complete and nothing is missing.${reset}"
 else
-  echo "${bold}Setup complete.${reset} The items marked ✗ above need an API key —"
-  echo "see ${bold}SETUP.md${reset} for where to get each one. Nothing else needs doing."
+  echo "${bold}Setup complete.${reset} The items marked ✗ above need an API key."
+fi
+echo
+# Setup used to end here, having installed everything and never said how to start
+# it. The next command is the whole point of having run this one.
+echo "${bold}Next:${reset}"
+echo "  ${bold}npm start${reset}"
+echo
+if [ $DOCTOR -ne 0 ]; then
+  echo "  then open ${bold}http://localhost:3000/setup${reset} and paste your keys in."
+  echo "  The screen says what each one unlocks and links to where to get it."
+else
+  echo "  then open ${bold}http://localhost:3000${reset} and type a topic."
 fi
 echo

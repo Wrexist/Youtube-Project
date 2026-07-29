@@ -42,11 +42,15 @@ Every generation stage needs a model. Either set a key, or route everything to O
 on the Models screen (see 1.3). Without one of the two, the pipeline fails at the
 first stage.
 
-### 1.3 Ollama is supported but untested against a real daemon
+### 1.3 Ollama is supported but has no test coverage at all
 The routing table, cost model, `/api/chat` transport, and the `format: json`
-constraint are all implemented and unit-tested. **No actual Ollama server has been
-called.** `probe_ollama` and `register_ollama` in particular are unverified against a
-live daemon.
+constraint are all implemented. **None of it is tested** — not against a live
+daemon, and not by unit tests either: `tests/conftest.py` replaces the whole of
+`engine.providers.llm` with a stub so stages can be imported without API keys, so
+every test in this repository runs with that module absent. The routing table and
+cost model in `engine/models.py` *are* covered; the transport underneath is not.
+
+`probe_ollama` and `register_ollama` are the two to distrust most.
 
 **To fix:** `ollama serve`, `ollama pull qwen2.5:14b`, then
 `POST /v1/models/ollama/register` and `POST /v1/models/test`.
@@ -209,22 +213,40 @@ scheduler measures **weekday** from real data and **estimates hour-of-day** from
 built-in evening-weighted curve. The API labels this `measured_weekday_only` and the
 UI says "estimated" rather than implying precision it does not have.
 
-### 5.3 Thumbnails are placeholder images
-`make_thumbnail` composes real typography with correct safe zones onto a solid
-background. **No image model is wired in.** The composition and text layer are the
-parts worth getting right first; the background is a two-line swap once you pick a
-provider.
+### 5.3 Thumbnail backgrounds are generated but the image APIs are unproven
+Backgrounds now come from GPT Image (or Imagen), through
+[providers/images.py](apps/engine/engine/providers/images.py), reusing
+`OPENAI_API_KEY`/`GEMINI_API_KEY` rather than adding a key. With neither set the
+composition falls back to a flat panel, so a keyless clone still gets a thumbnail.
 
-### 5.4 Storage and job state are in-process
-`JOBS`, `CHANNELS`, `SCHEDULE`, `RECORDS`, `LAUNCHES` are module-level dicts. A
-restart loses everything. The shapes match what the Postgres tables need, so the swap
-is contained — but until then, do not run this anywhere that restarts.
+**Neither transport has been called against a live API** — the request and response
+shapes are covered by tests against recorded envelopes, not by a real key. Same
+standing as the Google clients in §1.1.
 
-### 5.5 The web app runs entirely on demo data
-Every screen renders from `apps/web/lib/demo.ts`. **Nothing is wired to the engine
-yet** — no `fetch`, no SSE subscription. That was deliberate (a design you cannot
-look at is a design you cannot judge), but it means the UI currently proves the
-design, not the integration.
+Five archetypes with genuinely different layouts live in
+[render/templates.py](apps/engine/engine/render/templates.py), and the three variants
+are forced onto three different ones. Note what is *not* possible here: MrBeast-style
+thumbnails are built on a human face at maximum expression, and this system is
+faceless by design. What is ported is the machinery underneath — one idea readable at
+168px, stakes made visible, saturation past tasteful, big numerals, reserved negative
+space.
+
+### 5.4 ~~Storage and job state are in-process~~ — fixed
+Job state, channels, the schedule and the quota ledger are Postgres-backed. The
+module-level dicts survive as a read cache that `repository.restore()` hydrates at
+startup; a job that was mid-run at shutdown comes back marked `interrupted` and can
+be resumed. `STUDIO_PERSIST=false` turns persistence off, which is what the test
+suite uses.
+
+### 5.5 ~~The web app runs entirely on demo data~~ — mostly fixed
+Every screen now reads the engine, and the live job views subscribe over SSE.
+`apps/web/lib/demo.ts` is still there and still rendered — but only as the fallback
+for when the engine is unreachable, and a screen showing it says so with a badge
+rather than implying the numbers are real.
+
+What is genuinely still demo-only: the Queue's "Needs review" section, which renders
+`REVIEW_QUEUE` whenever the engine is down. The publish gate's blocker list is
+computed by the engine; that section is the pre-engine view of it.
 
 ### 5.6 Duplicate detection is lexical, not semantic
 Jaccard overlap on content words. Catches "why bridges collapse" vs "the reason
@@ -266,7 +288,8 @@ docker compose up -d
 ```
 
 1. Start the Google Cloud OAuth application (slowest thing on this list)
-2. `cp .env.example .env`, add `ANTHROPIC_API_KEY` and `PEXELS_API_KEY`
+2. Run `scripts/setup.sh` (or `.\scripts\setup.ps1` on Windows), then add
+   `ANTHROPIC_API_KEY` and `PEXELS_API_KEY` to the `.env` it wrote
 3. Generate **one short** end to end and watch where it breaks
-4. Wire the web app to the engine (5.5) — until then the UI is a very detailed mockup
-5. Move job state to Postgres (5.4) before running anything unattended
+4. Point a real Ollama daemon at it (1.3) — that transport is the one thing here
+   with no test coverage at all

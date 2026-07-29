@@ -1,4 +1,5 @@
 import { Header, Page, Card, Button } from "@/components/ui";
+import { LiveBadge } from "@/components/live-badge";
 import { SERIES, BACKLOG } from "@/lib/demo";
 
 /** Series — standing instructions to keep making a kind of video at a rate.
@@ -14,7 +15,13 @@ export default function SeriesPage() {
       <Header
         title="Series"
         action={<Button>New series</Button>}
-        meta={<span>{SERIES.filter((s) => !s.paused).length} active</span>}
+        meta={
+          <span className="flex items-center gap-2">
+            {SERIES.filter((s) => !s.paused).length} active
+            {/* No endpoint serves series yet — the engine has no series table. */}
+            <LiveBadge live={false} />
+          </span>
+        }
       />
       <Page>
         <div className="grid gap-3">

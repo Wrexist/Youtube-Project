@@ -23,6 +23,7 @@ installed, exactly as it did before this file existed.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import suppress
 from typing import Any
@@ -44,7 +45,50 @@ HEALTH_KEY = default_queue_name + health_check_key_suffix
 
 
 def build_redis_settings() -> RedisSettings:
+    """Connection details for the worker process.
+
+    Keeps arq's generous retry defaults on purpose: the worker is long-running and
+    should ride out a Redis restart rather than dying on one refused connection.
+    """
     return RedisSettings.from_dsn(get_settings().redis_url)
+
+
+def probe_redis_settings() -> RedisSettings:
+    """Connection details for the API's "is there a worker?" question.
+
+    The same defaults that are right for the worker are wrong here. `enqueue` runs
+    inside `POST /v1/jobs`, and with no Redis — the documented zero-config setup,
+    where renders run in-process — arq's five retries at one second each meant every
+    Generate sat for **five seconds** before falling back to the path it was always
+    going to take. Measured, not guessed.
+
+    One attempt, one second. Redis is either there or it is not; asking six times
+    does not change the answer, and the caller has a working fallback either way.
+    """
+    settings = RedisSettings.from_dsn(get_settings().redis_url)
+    # Zero, not one. arq counts *retries*, not attempts — `if retry < conn_retries`
+    # with retry starting at 0 — so `1` here was two connections and two seconds,
+    # twice what the paragraph above says this function does.
+    settings.conn_retries = 0
+    settings.conn_retry_delay = 0
+    settings.conn_timeout = 1
+    return settings
+
+
+#: How long the whole "is there a worker?" sequence gets, end to end.
+#:
+#: `conn_timeout` above bounds only the *connection*: arq passes it as
+#: `socket_connect_timeout` and never sets `socket_timeout`, so once a socket is
+#: open, every command waits indefinitely. A Redis that accepts connections and
+#: then stops answering — paused container, failing over, swapping, blocked on a
+#: slow command — therefore hung `enqueue`, which runs inside `POST /v1/jobs`.
+#: Not reachable-Redis-is-down, which is handled: reachable-Redis-is-catatonic,
+#: where the request never returns at all.
+#:
+#: Three seconds covers a connect, a key lookup and a push on any Redis worth
+#: talking to, and the caller has a working in-process fallback the moment this
+#: gives up.
+PROBE_BUDGET_S = 3.0
 
 
 # Kept as an alias because `main._relay` and `enqueue` both want the connection
@@ -135,17 +179,36 @@ async def enqueue(job_id: str, start_from: str | None = None) -> bool:
     """
     pool = None
     try:
-        pool = await create_pool(redis_settings())
-        if not await worker_is_alive(pool):
-            logger.info(
-                "redis is up but no arq worker is consuming {}; running {} in-process. "
-                "Start one with: python -m arq engine.worker.WorkerSettings",
-                QUEUE_NAME,
-                job_id,
-            )
-            return False
-        await pool.enqueue_job("run_job_task", job_id, start_from)
-        return True
+        # The probe settings, not the worker's: this call is on the request path.
+        #
+        # Wrapped in a deadline because arq bounds only the connect. Everything
+        # after it — the health-key lookup, the enqueue — would otherwise wait on
+        # Redis forever, holding open the POST that triggered it. `wait_for`
+        # covers the whole sequence rather than each call, so a Redis that is
+        # merely slow cannot spend the budget three times over.
+        async def _hand_over() -> bool:
+            nonlocal pool
+            pool = await create_pool(probe_redis_settings())
+            if not await worker_is_alive(pool):
+                logger.info(
+                    "redis is up but no arq worker is consuming {}; running {} in-process. "
+                    "Start one with: python -m arq engine.worker.WorkerSettings",
+                    QUEUE_NAME,
+                    job_id,
+                )
+                return False
+            await pool.enqueue_job("run_job_task", job_id, start_from)
+            return True
+
+        return await asyncio.wait_for(_hand_over(), timeout=PROBE_BUDGET_S)
+    except TimeoutError:
+        # Distinct from the branch below on purpose: "Redis did not answer in
+        # time" and "Redis refused the connection" call for different fixes, and
+        # a bare exception message would not tell them apart.
+        logger.warning(
+            "redis did not answer within {}s; running {} in-process", PROBE_BUDGET_S, job_id
+        )
+        return False
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not enqueue {} ({}); running in-process", job_id, exc)
         return False

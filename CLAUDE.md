@@ -56,8 +56,9 @@ Rules for that code:
 ## Commands
 
 ```bash
+npm start                                   # both halves, one command — what users run
 docker compose up -d                        # postgres + redis
-npm run dev                                 # web on :3000
+npm run dev                                 # web on :3000 (one half only)
 apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
 apps/engine/.venv/bin/python -m alembic upgrade head       # schema

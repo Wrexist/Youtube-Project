@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -41,7 +42,13 @@ COSTS: dict[str, int] = {
 # Google's default grant. The effective ceiling is `ledger.limit`, which reads
 # STUDIO_YOUTUBE_DAILY_QUOTA — read that, not this, when comparing against spend.
 DAILY_LIMIT = 10_000
-PACIFIC = timezone(timedelta(hours=-8))  # PST; DST shifts this by an hour
+#: Google resets quota at midnight Pacific, which is a *place*, not an offset. A
+#: fixed `timezone(timedelta(hours=-8))` is only correct for the four months of PST;
+#: through PDT it puts the boundary an hour early, so spend in the 07:00-08:00 UTC
+#: hour is booked to the previous day. That is precisely the "ledger disagrees with
+#: Google" failure this module's docstring warns about, and it is live for two
+#: thirds of the year.
+PACIFIC = ZoneInfo("America/Los_Angeles")
 
 
 class QuotaExceeded(Exception):
@@ -59,6 +66,11 @@ class Entry:
     at: datetime
     channel_id: str = ""
     note: str = ""
+    #: False when the database write failed. `record()` keeps such an entry in
+    #: memory on purpose — the units were spent at Google whether or not we managed
+    #: to write the row — and `load()` has to carry it across, or re-reading the
+    #: ledger silently hands that budget back.
+    persisted: bool = True
 
 
 def quota_day(moment: datetime | None = None) -> date:
@@ -153,9 +165,32 @@ class QuotaLedger:
                 # The spend already happened at Google. Dropping the in-memory
                 # entry too would double-count the remaining budget, so keep it
                 # and make the persistence failure loud instead.
+                entry.persisted = False
                 logger.exception("failed to persist quota entry for {}", operation)
 
         return entry
+
+    async def check_fresh(self, operation: str) -> None:
+        """Re-read the day's spend from the database, then check.
+
+        `check()` reads an in-process cache hydrated at startup, which was correct
+        while one process did everything. The render worker is a separate process
+        and it is the one that uploads, so the API and the worker each accumulate
+        spend the other never sees: both can believe there is room for a
+        1,600-unit upload when between them there is not, and Google's ceiling is
+        breached silently — the exact failure this module exists to prevent.
+
+        Only the paths that are about to spend need this. Display reads can be a
+        few seconds stale without hurting anyone; an upload cannot.
+        """
+        if self.persist:
+            try:
+                await self.load()
+            except Exception:  # noqa: BLE001
+                # Refusing to upload because the ledger could not be re-read would
+                # be worse than proceeding on a cache that is at worst incomplete.
+                logger.warning("could not refresh the quota ledger; checking against the cache")
+        self.check(operation)
 
     async def load(self, days: int = 35) -> int:
         """Hydrate the cache from the database. Call once at startup.
@@ -167,6 +202,13 @@ class QuotaLedger:
 
         from engine.db import session
         from engine.tables import QuotaEntry
+
+        # Carried across the reload. These are units already spent at Google whose
+        # row never made it to the database, so the query below cannot see them —
+        # and `check_fresh` calls `load()` immediately before an upload decides
+        # whether there is budget. Dropping them here would hand that budget back
+        # and wave through exactly the overrun this ledger exists to prevent.
+        unpersisted = [e for e in self.entries if not e.persisted]
 
         since = datetime.now(UTC) - timedelta(days=days)
         async with session() as s:
@@ -181,6 +223,14 @@ class QuotaLedger:
                 )
                 for r in rows
             ]
+        self.entries.extend(unpersisted)
+
+        if unpersisted:
+            logger.warning(
+                "{} quota entr{} never reached the database and are being counted from memory only",
+                len(unpersisted),
+                "y is" if len(unpersisted) == 1 else "ies are",
+            )
 
         logger.info(
             "quota ledger restored: {} entries, {} units spent today",

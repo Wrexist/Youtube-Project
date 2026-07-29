@@ -9,8 +9,14 @@ Two bugs these exist for, both found by watching a real stream:
    between them — each event went to whichever generator called `get()` first — so
    both rendered an incomplete pipeline.
 
+3. **The stream never said it was finished.** `stream_job` just returned, and a
+   server-closed SSE stream is a *reconnect* signal to EventSource — so a completed
+   job replayed its entire log every few seconds, re-dispatching workflow.started
+   and flipping the Publish button's state on a loop. A terminal `stream.closed`
+   frame is now the last thing every stream sends, and the client closes on it.
+
 The fix makes the log the single source of truth and gives each subscriber its own
-cursor. These tests cover both failures and the wake-up race between them.
+cursor. These tests cover all three failures and the wake-up race between them.
 """
 
 from __future__ import annotations
@@ -43,6 +49,18 @@ async def _emit(job: dict, kind: str) -> None:
     _wake(job)
 
 
+async def _events(job_id: str) -> list[str]:
+    """Everything before the terminator, with the terminator asserted.
+
+    Every finished stream ends with exactly one `stream.closed`; asserting that here
+    keeps it out of every individual expectation while still pinning it.
+    """
+    seen = await _drain(job_id)
+    assert seen and seen[-1] == "stream.closed", f"stream did not terminate: {seen}"
+    assert seen.count("stream.closed") == 1
+    return seen[:-1]
+
+
 async def _drain(job_id: str, *, stop_after: int | None = None) -> list[str]:
     """Read the SSE generator the way the endpoint does."""
     response = await main_mod.stream_job(job_id)
@@ -63,7 +81,7 @@ async def test_pre_subscribe_events_arrive_exactly_once(job):
         await _emit(job, kind)
     job["status"] = "completed"
 
-    assert await _drain("j1") == ["workflow.started", "stage.started", "stage.progress"]
+    assert await _events("j1") == ["workflow.started", "stage.started", "stage.progress"]
 
 
 async def test_a_finished_job_replays_its_whole_log_and_closes(job):
@@ -71,13 +89,13 @@ async def test_a_finished_job_replays_its_whole_log_and_closes(job):
         await _emit(job, f"stage.{i}")
     job["status"] = "failed"
 
-    seen = await _drain("j1")
+    seen = await _events("j1")
     assert seen == [f"stage.{i}" for i in range(5)]
 
 
 async def test_an_empty_finished_job_closes_immediately(job):
     job["status"] = "completed"
-    assert await _drain("j1") == []
+    assert await _events("j1") == []
 
 
 # ── multiple subscribers ────────────────────────────────────────────────────
@@ -89,7 +107,7 @@ async def test_two_subscribers_each_see_every_event(job):
         await _emit(job, kind)
     job["status"] = "completed"
 
-    first, second = await asyncio.gather(_drain("j1"), _drain("j1"))
+    first, second = await asyncio.gather(_events("j1"), _events("j1"))
     assert first == ["a", "b", "c"]
     assert second == ["a", "b", "c"]
 
@@ -140,7 +158,9 @@ async def test_completion_wakes_a_waiting_subscriber(job):
     job["status"] = "completed"
     _wake(job)
 
-    assert await asyncio.wait_for(reader, timeout=2) == []
+    # The terminator is the whole point here: a parked subscriber has to be told the
+    # job is over, or EventSource reconnects and the log replays forever.
+    assert await asyncio.wait_for(reader, timeout=2) == ["stream.closed"]
 
 
 async def test_wake_arms_a_fresh_event_each_time(job):
@@ -157,3 +177,25 @@ async def test_unknown_job_raises_before_streaming():
     with pytest.raises(HTTPException) as exc:
         await main_mod.stream_job("nope")
     assert exc.value.status_code == 404
+
+
+async def test_the_terminator_carries_the_final_status(job):
+    """The client needs to know how it ended, not just that it did."""
+    import json
+
+    await _emit(job, "stage.0")
+    job["status"] = "failed"
+
+    response = await main_mod.stream_job("j1")
+    frames = [chunk async for chunk in response.body_iterator]
+    last = frames[-1]
+    payload = json.loads(last["data"] if isinstance(last, dict) else last.split("data: ")[-1])
+    assert payload["type"] == "stream.closed"
+    assert payload["status"] == "failed"
+
+
+async def test_a_still_running_job_does_not_get_a_terminator(job):
+    """Sending it early would make the client close mid-render."""
+    await _emit(job, "stage.0")
+    seen = await _drain("j1", stop_after=1)
+    assert "stream.closed" not in seen

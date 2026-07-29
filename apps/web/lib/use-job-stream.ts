@@ -93,12 +93,38 @@ function reduce(state: JobStream, action: Action): JobStream {
       return { ...state, status: "completed", cost_usd: event.cost_usd ?? state.cost_usd, stages };
     case "workflow.failed":
       return { ...state, status: "failed", stages };
+    case "stream.closed":
+      // The terminal frame carries the job's final status, and it is the only
+      // event that does so for a job that ended any way other than completing or
+      // failing. A cancelled or interrupted job emits no `workflow.*` terminal
+      // event at all, so without this the pipeline sat at "running" — spinner and
+      // all — for a job that had already stopped.
+      //
+      // Guarded: a job that *did* complete or fail has already set its status from
+      // the richer event, which also carried the final cost. Don't overwrite it.
+      if (state.status === "running" || state.status === "connecting") {
+        return { ...state, status: event.status ?? state.status, stages };
+      }
+      break;
   }
 
   return { ...state, stages };
 }
 
-export function useJobStream(jobId: string | null, initial: Stage[] = []): JobStream {
+/**
+ * `attempt` exists so a dead stream can be reopened.
+ *
+ * The effect below depends on `[jobId]` alone, so once EventSource gave up there
+ * was no way back short of a full reload — the pipeline froze on its skeleton with
+ * Publish permanently disabled. Bumping this re-runs the effect and rebuilds the
+ * connection; the engine replays the whole event log on connect, so nothing is
+ * lost by doing so.
+ */
+export function useJobStream(
+  jobId: string | null,
+  initial: Stage[] = [],
+  attempt = 0,
+): JobStream {
   const [state, dispatch] = useReducer(reduce, {
     stages: initial,
     status: "connecting",
@@ -147,6 +173,15 @@ export function useJobStream(jobId: string | null, initial: Stage[] = []): JobSt
       ];
       for (const type of types) source.addEventListener(type, handle);
 
+      // The engine's terminal frame. Without closing here, EventSource treats the
+      // server ending the stream as a dropped connection, reconnects a few seconds
+      // later, and replays the entire log — re-dispatching workflow.started and
+      // flipping the Publish button's state on a loop that never stops.
+      source.addEventListener("stream.closed", (e: MessageEvent) => {
+        handle(e);
+        source?.close();
+      });
+
       source.onerror = () => {
         // EventSource reconnects on its own; only say something if it gave up.
         if (source?.readyState === EventSource.CLOSED) {
@@ -159,7 +194,7 @@ export function useJobStream(jobId: string | null, initial: Stage[] = []): JobSt
       cancelled = true;
       source?.close();
     };
-  }, [jobId]);
+  }, [jobId, attempt]);
 
   return state;
 }

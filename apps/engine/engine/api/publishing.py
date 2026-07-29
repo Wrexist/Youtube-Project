@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import time
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query
@@ -32,7 +33,32 @@ SCHEDULE: dict[str, datetime] = {}  # video_id -> publish time
 
 # Deliberately *not* persisted: an in-flight OAuth state is meaningless after a
 # restart, and keeping it would widen the window for a replayed callback.
-_STATES: set[str] = set()
+#
+# Bounded and expiring, because it used to be a plain set that only ever grew:
+# `GET /v1/auth/google` needs no credentials, so anything that could reach the
+# engine could add entries until the process ran out of memory. An OAuth round trip
+# is a browser redirect, so ten minutes is generous.
+_STATES: dict[str, float] = {}
+_STATE_TTL_S = 600.0
+_MAX_STATES = 64
+
+
+def _remember_state(state: str) -> None:
+    now = time.monotonic()
+    for key, born in list(_STATES.items()):
+        if now - born > _STATE_TTL_S:
+            del _STATES[key]
+    # Still full of live entries: drop the oldest rather than refuse to start an
+    # auth the user is standing in front of.
+    while len(_STATES) >= _MAX_STATES:
+        del _STATES[min(_STATES, key=_STATES.get)]  # type: ignore[arg-type]
+    _STATES[state] = now
+
+
+def _claim_state(state: str) -> bool:
+    """Single-use, and only if it has not expired."""
+    born = _STATES.pop(state, None)
+    return born is not None and time.monotonic() - born <= _STATE_TTL_S
 
 
 class QuotaResponse(BaseModel):
@@ -100,7 +126,7 @@ async def begin_auth() -> dict:
         )
 
     state = secrets.token_urlsafe(24)
-    _STATES.add(state)
+    _remember_state(state)
     return {"url": youtube.authorize_url(state)}
 
 
@@ -108,9 +134,8 @@ async def begin_auth() -> dict:
 async def finish_auth(code: str = Query(...), state: str = Query(...)):
     # Reject a callback we did not initiate — without this the endpoint accepts a
     # code from anywhere and binds someone else's channel to this install.
-    if state not in _STATES:
-        raise HTTPException(400, "unrecognised or reused state")
-    _STATES.discard(state)
+    if not _claim_state(state):
+        raise HTTPException(400, "unrecognised, expired or reused state")
 
     try:
         creds = await youtube.exchange_code(code)
@@ -119,7 +144,15 @@ async def finish_auth(code: str = Query(...), state: str = Query(...)):
 
     CHANNELS["default"] = creds
     await repository.save_channel("default", creds)
-    return RedirectResponse("http://localhost:3000/calendar?connected=1")
+    # Back to the screen that sent them, not to the calendar. Connecting a channel
+    # is the last step of setup, and landing on an unrelated screen left someone
+    # with no confirmation that the thing they just did had worked.
+    #
+    # The origin is configurable because the hardcoded localhost:3000 was wrong for
+    # every install that is not the developer's laptop: behind docker compose, on a
+    # LAN address, or on any port but 3000, Google returned the operator to a page
+    # that does not exist and the connection looked like it had failed.
+    return RedirectResponse(f"{get_settings().web_url.rstrip('/')}/setup?connected=1")
 
 
 @router.get("/channels")

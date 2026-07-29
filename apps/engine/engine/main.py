@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -24,9 +26,11 @@ from engine.api.channels import router as channels_router
 from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
+from engine.api.setup import router as setup_router
 from engine.providers import youtube
 from engine.quota import ledger
 from engine.settings import get_settings
+from engine.storage import store
 from engine.workflows import video
 from engine.workflows.base import StageStatus, WorkflowError
 
@@ -67,6 +71,7 @@ app.include_router(publishing_router)
 app.include_router(insights_router)
 app.include_router(channels_router)
 app.include_router(models_router)
+app.include_router(setup_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -123,7 +128,7 @@ async def health() -> dict:
             "draft": routing.spec_for("draft").model,
             "tags": routing.spec_for("tags").model,
         },
-        "workflows": sorted(video.WORKFLOWS),
+        "workflows": sorted(video.STARTABLE),
     }
 
 
@@ -151,6 +156,15 @@ async def describe_workflow(name: str) -> dict:
 
 @app.post("/v1/jobs", status_code=202)
 async def create_job(body: JobRequest) -> dict:
+    if body.workflow not in video.STARTABLE:
+        # Refused here rather than after the render: "publish" needs a live YouTube
+        # client that only the publish endpoint supplies, so starting it directly
+        # burned a full generation before failing on a KeyError.
+        raise HTTPException(
+            400,
+            f"workflow must be one of {sorted(video.STARTABLE)}; "
+            "publishing goes through POST /v1/jobs/{job_id}/publish",
+        )
     try:
         wf = video.get(body.workflow)
     except KeyError as exc:
@@ -166,6 +180,10 @@ async def create_job(body: JobRequest) -> dict:
         "wake": wake,
         "events": [],
         "status": "running",
+        # Carried on the mirror as well as the row: `GET /v1/jobs` sorts on it, and
+        # reading it back from the database on every list would make a screen that
+        # polls hit Postgres for something the process already knows.
+        "created_at": datetime.now(UTC),
     }
 
     await _persist(JOBS[job_id])
@@ -183,6 +201,7 @@ async def _dispatch(job_id: str, start_from: str | None = None) -> None:
     if await worker.enqueue(job_id, start_from):
         # The work happens elsewhere; this process only relays the worker's events
         # to any browser watching.
+        JOBS[job_id]["enqueued"] = True
         JOBS[job_id]["task"] = asyncio.create_task(_relay(job_id))
     else:
         # Deliberately not tied to the request: closing the tab must not cancel a render.
@@ -298,13 +317,111 @@ async def _persist(job: dict) -> None:
         logger.exception("failed to persist job {}", job["id"])
 
 
+class JobSummary(BaseModel):
+    """One job, as the Queue and Library list them.
+
+    A response model rather than a bare dict because both screens do arithmetic and
+    filtering on these fields; without it the generated TypeScript types every one
+    as `unknown` and the UI has to cast, which is what `packages/contracts` exists
+    to prevent.
+    """
+
+    id: str
+    status: str
+    topic: str
+    workflow: str
+    cost_usd: float
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    #: Where the pipeline actually is — "4/17 · Voiceover" is the useful summary,
+    #: and computing it here keeps both screens from re-deriving it differently.
+    stages_done: int
+    stages_total: int
+    current_stage: str | None = None
+    error: str | None = None
+    #: Storage keys, so the Library can show a thumbnail and play the render.
+    render_key: str | None = None
+    thumbnail_keys: list[str] = Field(default_factory=list)
+
+
+@app.get("/v1/jobs")
+async def list_jobs(
+    status: str | None = None,
+    # Declared, not just clamped. The clamp below still guards the slice, but a
+    # bound that only exists in the body is invisible to the OpenAPI document —
+    # so `?limit=-1` was a 200 returning one row rather than a 422 saying why.
+    limit: int = Query(100, ge=1, le=500),
+) -> list[JobSummary]:
+    """Every job, newest first.
+
+    This did not exist, so the Queue and Library had nothing to read and rendered
+    demo data permanently — generate a video and neither screen would ever change.
+    They are the two screens someone looks at immediately after pressing Generate.
+
+    `status` filters to one state; the Library asks for `completed` and the Queue
+    takes everything.
+    """
+    out: list[JobSummary] = []
+    for job_id, job in JOBS.items():
+        if status and job.get("status") != status:
+            continue
+
+        states = job.get("states", {})
+        done = sum(1 for s in states.values() if s.status is StageStatus.DONE)
+        running = next(
+            (name for name, s in states.items() if s.status is StageStatus.RUNNING), None
+        )
+        artifacts = {}
+        for state in states.values():
+            if state.output:
+                artifacts.update(state.output.artifacts or {})
+
+        out.append(
+            JobSummary(
+                id=job_id,
+                status=job.get("status", "unknown"),
+                topic=str(job.get("inputs", {}).get("topic", "")),
+                workflow=job["workflow"].name,
+                cost_usd=round(sum(s.output.cost_usd for s in states.values() if s.output), 4),
+                created_at=job.get("created_at"),
+                updated_at=job.get("updated_at"),
+                stages_done=done,
+                stages_total=len(states),
+                current_stage=running,
+                error=job.get("error") or None,
+                render_key=artifacts.get("render"),
+                thumbnail_keys=[
+                    v for k, v in sorted(artifacts.items()) if k.startswith("thumbnail")
+                ],
+            )
+        )
+
+    # Newest first, sorted on a plain number rather than on the datetimes
+    # themselves. Comparing a naive datetime with an aware one raises TypeError,
+    # and both reach here — SQLite has no timezone type, so a restored job is naive
+    # while one created in this process is aware. Missing timestamps sort last.
+    def _age(job: JobSummary) -> float:
+        if job.created_at is None:
+            return float("-inf")
+        moment = job.created_at
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment.timestamp()
+
+    out.sort(key=_age, reverse=True)
+    return out[: max(1, min(limit, 500))]
+
+
 @app.get("/v1/jobs/{job_id}")
 async def get_job(job_id: str) -> dict:
     job = _require(job_id)
     return {
         "id": job_id,
         "status": job["status"],
-        "inputs": job["inputs"],
+        # Through the serialiser, not verbatim: a publish job's inputs carry a live
+        # YouTube client holding an access token, so returning them raw both 500s on
+        # serialisation and is one annotation away from putting a token in a response.
+        "inputs": repository.jsonable(job["inputs"]),
         "stages": _serialize_stages(job),
         "cost_usd": round(sum(s.output.cost_usd for s in job["states"].values() if s.output), 4),
     }
@@ -341,6 +458,14 @@ async def stream_job(job_id: str) -> EventSourceResponse:
                 yield {"event": event["type"], "data": _json(event)}
 
             if job["status"] != "running":
+                # A terminal frame, then stop. Closing the stream without one is a
+                # *reconnect* signal to EventSource, so a finished job replayed its
+                # entire log every few seconds — re-dispatching workflow.started and
+                # flipping the Publish button's state on a loop, forever.
+                yield {
+                    "event": "stream.closed",
+                    "data": _json({"type": "stream.closed", "status": job["status"]}),
+                }
                 return
 
             await waiting.wait()
@@ -349,7 +474,7 @@ async def stream_job(job_id: str) -> EventSourceResponse:
 
 
 @app.post("/v1/jobs/{job_id}/publish", status_code=202)
-async def publish_job(job_id: str, body: PublishRequest) -> dict:
+async def publish_job(job_id: str, body: PublishRequest, force: bool = False) -> dict:
     """Publish a finished video. **This is the approval gate.**
 
     `CLAUDE.md` non-negotiable #3: nothing publishes without an explicit approval
@@ -367,6 +492,19 @@ async def publish_job(job_id: str, body: PublishRequest) -> dict:
         raise HTTPException(409, f"job is {source['status']}; only a completed job can publish")
     if source["workflow"].name != "video":
         raise HTTPException(409, f"job ran the '{source['workflow'].name}' workflow, not 'video'")
+
+    # Idempotent unless explicitly overridden. Nothing checked for an existing
+    # publish job, and the source stays `completed` while the web Publish button
+    # re-enables — so a second click uploaded the same video to YouTube twice, at
+    # 1,600 quota units and one duplicate public video each.
+    existing = _existing_publish(job_id)
+    if existing and not force:
+        publish_id, state = existing
+        raise HTTPException(
+            409,
+            f"already published as job {publish_id} ({state}); "
+            "pass ?force=true to publish it again",
+        )
 
     creds = channels.CHANNELS.get("default")
     if creds is None:
@@ -414,11 +552,54 @@ async def publish_job(job_id: str, body: PublishRequest) -> dict:
         "wake": wake,
         "events": [],
         "status": "running",
+        # Same reason as `create_job`: `GET /v1/jobs` sorts on this. Without it a
+        # publish job sorted to the very bottom of the Queue — the one job someone
+        # is actively watching, filed underneath everything they finished last week.
+        "created_at": datetime.now(UTC),
     }
     JOBS[publish_id]["task"] = asyncio.create_task(_run_job(publish_id))
 
     logger.info("publishing job {} as {}", job_id, publish_id)
     return {"job_id": publish_id, "status": "running", "source_job_id": job_id}
+
+
+def _severity_of(critique: Any) -> int:
+    """The critique's severity, however the stage happened to store it.
+
+    This was `getattr(critique, "severity", 0)`. CritiqueStage returns the parsed
+    JSON verbatim and `decode_value` hands back a plain dict, and `getattr` on a
+    dict always returns the default — so it read 0 every time and the weak-script
+    blocker could not fire once in the whole history of the code. The tests that
+    covered that blocker construct `VideoState` directly, which is why they never
+    saw it.
+
+    Written for a dict but not assuming one: a stage output that has been edited
+    through `POST /v1/jobs/{id}/edit` can be any JSON value, and a blocker that
+    raises AttributeError is worse than one that reads zero.
+    """
+    if isinstance(critique, Mapping):
+        raw = critique.get("severity", 0)
+    else:
+        raw = getattr(critique, "severity", 0)
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _existing_publish(source_job_id: str) -> tuple[str, str] | None:
+    """A publish job for this source that is running or has succeeded.
+
+    A *failed* publish is not a reason to refuse a retry — that is the case
+    `force` exists for, and refusing it would strand a video whose upload died
+    halfway.
+    """
+    for publish_id, job in JOBS.items():
+        if job.get("inputs", {}).get("source_job_id") != source_job_id:
+            continue
+        if job.get("status") in ("running", "completed"):
+            return publish_id, job["status"]
+    return None
 
 
 def _video_state(job_id: str, job: dict) -> automation.VideoState:
@@ -445,7 +626,7 @@ def _video_state(job_id: str, job: dict) -> automation.VideoState:
         keyword_grounded=bool(grounding and getattr(grounding, "is_grounded", False)),
         render_ok=bool(value("render")),
         title=titles[0].text if titles else "",
-        critique_severity=getattr(critique, "severity", 0) or 0,
+        critique_severity=_severity_of(critique),
     )
 
 
@@ -478,15 +659,86 @@ async def edit_stage(job_id: str, body: EditRequest) -> dict:
     return {"invalidated": invalidated, "status": "running"}
 
 
+class RerunRequest(BaseModel):
+    stage: str
+
+
+@app.post("/v1/jobs/{job_id}/rerun")
+async def rerun_stage(job_id: str, body: RerunRequest) -> dict:
+    """Re-run one stage and everything downstream of it.
+
+    Distinct from `/edit`, which *replaces* a stage's value and keeps it DONE. This
+    discards the value and regenerates — which is what the Create screen's "Re-run
+    from here" means, and what its own caption promises: "Everything below this
+    stage regenerates. Nothing above it is touched."
+
+    That control existed and called `console.log`. It could not call `/edit`,
+    because doing so needs the stage's current value and the API never gives the
+    client one — `GET /v1/jobs/{id}` returns a `summary` string, not the object.
+    """
+    job = _require(job_id)
+    if job["status"] == "running":
+        raise HTTPException(409, "job is still running; wait or cancel first")
+
+    states = job["states"]
+    if body.stage not in states:
+        raise HTTPException(404, f"unknown stage '{body.stage}'")
+    if states[body.stage].status is StageStatus.PENDING:
+        raise HTTPException(409, f"stage '{body.stage}' has not run yet")
+
+    invalidated = [body.stage, *job["workflow"].dependents_of(body.stage)]
+    for name in invalidated:
+        states[name].status = StageStatus.STALE
+        states[name].output = None
+        states[name].error = None
+
+    job["status"] = "running"
+    job["error"] = None
+    await _persist(job)
+    await _dispatch(job_id, start_from=body.stage)
+    return {"invalidated": invalidated, "status": "running"}
+
+
 @app.post("/v1/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str) -> dict:
+    """Stop a job and tell everyone watching.
+
+    The status change alone was not enough. `stream_job` parks on
+    `await waiting.wait()` and only re-checks the status when that Event fires, so
+    without the `_wake` below every open SSE connection hung forever — the browser
+    tab sat on a spinner for a job that had already stopped. And the row was never
+    written, so the cancellation survived only until the next restart, where it came
+    back as `interrupted`.
+    """
     job = _require(job_id)
+
+    if job["status"] not in ("running", "interrupted"):
+        # Cancelling a finished job would rewrite a real outcome with a false one.
+        return {"status": job["status"], "note": "already finished"}
+
     task = job.get("task")
     if task and not task.done():
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
     job["status"] = "cancelled"
+    job["events"].append({"type": "workflow.cancelled", "job_id": job_id})
+    # Load-bearing: this is what lets the SSE generator notice and close.
+    _wake(job)
+    await _persist(job)
+
+    if job.get("enqueued"):
+        # A job running in the worker process is not reachable by cancelling a local
+        # task — that only stops the relay. The render continues and its `finally`
+        # will overwrite this status. Say so rather than implying it stopped.
+        logger.warning(
+            "job {} is running in a worker; the local relay stopped but the render "
+            "continues until it finishes",
+            job_id,
+        )
+        return {"status": "cancelled", "note": "worker render continues; see KNOWN-ISSUES"}
+
     return {"status": "cancelled"}
 
 
@@ -522,3 +774,70 @@ def _json(event: dict) -> str:
     import json
 
     return json.dumps(event, default=str)
+
+
+# ── artifacts ───────────────────────────────────────────────────────────────
+
+#: Only what this app actually produces. An allowlist rather than `mimetypes.guess`
+#: because the storage root also holds the database, the encryption key and
+#: downloaded footage — none of which is a thing to hand out over HTTP.
+_SERVABLE = {
+    ".mp4": "video/mp4",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".srt": "application/x-subrip",
+    ".vtt": "text/vtt",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+}
+
+#: Directories a client may read from — every prefix this app actually writes,
+#: and no others. `store` already refuses a key that escapes the storage root, but
+#: "inside the root" also covers studio.db, .secret_key and `materials/`, which
+#: holds third-party stock footage that is not ours to re-serve.
+#:
+#: Kept honest by `test_every_written_prefix_is_either_servable_or_deliberately_not`:
+#: guessing these ("subtitles/", "audio/") silently 404'd the real `captions/` and
+#: `voiceover/` output, which is a dead link rather than an error anyone would see.
+_SERVABLE_ROOTS = ("thumbnails/", "renders/", "captions/", "voiceover/")
+
+
+@app.get("/v1/files/{key:path}")
+async def get_file(key: str):
+    """Serve a generated artifact.
+
+    `ObjectStore.url()` has always pointed here and this route did not exist, so
+    nothing could show a thumbnail or play a render — the Library and the variant
+    picker had URLs that 404'd.
+
+    Three separate checks, because this is the one endpoint that turns a string from
+    a client into a filesystem read: the prefix must be one we publish, the suffix
+    must be a media type we produce, and `store` must agree the resolved path is
+    still inside the storage root.
+    """
+    from fastapi.responses import FileResponse
+
+    if not key.startswith(_SERVABLE_ROOTS):
+        raise HTTPException(404, "not found")
+
+    suffix = Path(key).suffix.lower()
+    if suffix not in _SERVABLE:
+        raise HTTPException(404, "not found")
+
+    try:
+        path = await store.local_path(key)
+    except ValueError:  # escaped the storage root
+        raise HTTPException(404, "not found") from None
+
+    if not path.is_file():
+        raise HTTPException(404, "not found")
+
+    return FileResponse(
+        path,
+        media_type=_SERVABLE[suffix],
+        # Renders are large and the player needs to seek; without this the browser
+        # downloads the whole file before it can start.
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"},
+    )
