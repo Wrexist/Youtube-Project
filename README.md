@@ -53,6 +53,11 @@ it lands on a short setup flow that asks for your keys — it says what each one
 unlocks, links to where to get it, and turns green when you have enough to make a
 video. No file to edit, nothing to restart.
 
+If something else on your machine already holds port 3000 or 8080 — another dev
+server, usually — Studio moves to the next free pair and prints where it went. It
+does not stop and ask you to fix it. Double-clicking the launcher while Studio is
+already running just brings the browser back to it.
+
 Setup does the whole install: venv, both toolchains, `.env`, database schema,
 tests, and the desktop launcher. **No Docker needed** — the engine defaults to
 SQLite and runs renders in-process.

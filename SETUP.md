@@ -102,9 +102,13 @@ action. Exit code is non-zero only if something genuinely blocking is wrong.
 These two are the only things standing between a fresh clone and a rendered
 video.
 
-**The easy way:** `npm start`, then <http://localhost:3000/setup>. Paste them in
-and press Save. The screen writes `.env` for you, keeps your comments, and shows
+**The easy way:** double-click the launcher (or `npm start`) — your browser opens on
+the setup screen by itself, normally at <http://localhost:3000/setup>. Paste the keys
+in and press Save. The screen writes `.env` for you, keeps your comments, and shows
 which keys are already set without ever displaying one back.
+
+If port 3000 or 8080 is already taken, Studio moves to the next free pair rather than
+refusing to start, and prints the address it chose — so use whatever it printed.
 
 **By hand:** put both in `.env` at the repository root. The names below are the
 ones the engine reads.

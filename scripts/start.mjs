@@ -40,8 +40,12 @@ const PYTHON = join(
   WINDOWS ? "Scripts/python.exe" : "bin/python",
 );
 
-const ENGINE_PORT = process.env.STUDIO_ENGINE_PORT ?? "8080";
-const WEB_PORT = process.env.PORT ?? "3000";
+// A port the user asked for is an instruction; a default is only our preference.
+// The difference decides what happens when one is taken — see the block below.
+const ENGINE_PORT_ASKED = process.env.STUDIO_ENGINE_PORT;
+const WEB_PORT_ASKED = process.env.PORT;
+let ENGINE_PORT = ENGINE_PORT_ASKED ?? "8080";
+let WEB_PORT = WEB_PORT_ASKED ?? "3000";
 
 /**
  * Launcher mode: `npm start -- --open`, which is what the desktop shortcut runs.
@@ -153,12 +157,13 @@ function openBrowser(url) {
     process.platform === "darwin"
       ? ["open", [url]]
       : WINDOWS
-        // `start` is a cmd builtin, not an executable, and its first quoted
-        // argument is taken as the window title — hence the empty "".
-        ? ["cmd", ["/c", "start", "", url]]
+        ? // `start` is a cmd builtin, not an executable, and its first quoted
+          // argument is taken as the window title — hence the empty "".
+          ["cmd", ["/c", "start", "", url]]
         : ["xdg-open", [url]];
 
-  const fallback = () => console.log(`  Could not open a browser. Go to ${url}\n`);
+  const fallback = () =>
+    console.log(`  Could not open a browser. Go to ${url}\n`);
 
   try {
     const child = spawn(command, args, { stdio: "ignore", detached: true });
@@ -169,15 +174,26 @@ function openBrowser(url) {
   }
 }
 
-const busy = [];
-for (const [name, port] of [
-  ["engine", ENGINE_PORT],
-  ["web", WEB_PORT],
-]) {
-  if (await portInUse(port)) busy.push(`${name} (port ${port})`);
+/**
+ * The first free port at or after `from`, or null if there is no room.
+ *
+ * `taken` covers ports this run has already claimed but not yet bound: the two
+ * halves are assigned before either is spawned, so without it a machine with 3000
+ * busy could hand the same replacement to both.
+ */
+async function firstFreePort(from, taken = []) {
+  const start = Number(from);
+  for (let port = start; port < start + 20; port += 1) {
+    if (taken.includes(String(port))) continue;
+    if (!(await portInUse(port))) return String(port);
+  }
+  return null;
 }
 
-if (busy.length > 0) {
+const engineBusy = await portInUse(ENGINE_PORT);
+const webBusy = await portInUse(WEB_PORT);
+
+if (engineBusy || webBusy) {
   if (OPEN && (await studioIsUp())) {
     // Double-clicked while already running. Show it and get out of the way.
     //
@@ -194,18 +210,71 @@ if (busy.length > 0) {
     // browser spawn to reach the OS before this process goes away.
     await new Promise((resolve) => setTimeout(resolve, 250));
     process.exit(0);
-  } else {
-    console.error(
-      `\nSomething is already listening on ${busy.join(" and ")}.\n\n` +
-        `If Studio is already running in another window, use that one.\n\n` +
-        `Otherwise, stop whatever is holding the port, or pick different ones:\n\n` +
-        (WINDOWS
-          ? `  $env:PORT=3001; $env:STUDIO_ENGINE_PORT=8081; npm start\n\n`
-          : `  PORT=3001 STUDIO_ENGINE_PORT=8081 npm start\n\n`),
-    );
-    await pause();
-    process.exit(1);
   }
+
+  // Not Studio, then — something unrelated owns the port. This used to be fatal,
+  // and the error told the reader to re-run with `PORT=3001 npm start`. For anyone
+  // who got here by double-clicking a desktop shortcut that is a dead end: the
+  // whole point of the shortcut is that they never open a terminal, and 3000 and
+  // 8080 are two of the most commonly occupied ports on any machine that has ever
+  // run another dev server. So move, and say so.
+  //
+  // A port the user named explicitly is different — that is an instruction, and
+  // quietly using a different one would break whatever they pointed at it. Those
+  // still fail, loudly, with the command to change them.
+  const moves = [];
+  const claimed = [];
+
+  for (const half of [
+    {
+      name: "engine",
+      busy: engineBusy,
+      asked: ENGINE_PORT_ASKED,
+      port: ENGINE_PORT,
+      env: "STUDIO_ENGINE_PORT",
+    },
+    {
+      name: "web",
+      busy: webBusy,
+      asked: WEB_PORT_ASKED,
+      port: WEB_PORT,
+      env: "PORT",
+    },
+  ]) {
+    if (!half.busy) {
+      claimed.push(half.port);
+      continue;
+    }
+    if (half.asked !== undefined) {
+      console.error(
+        `\nPort ${half.port} is taken, and you asked for it explicitly ` +
+          `(${half.env}=${half.port}).\n\n` +
+          `Stop whatever is holding it, or name a free one:\n\n` +
+          (WINDOWS
+            ? `  $env:${half.env}=${Number(half.port) + 1}; npm start\n\n`
+            : `  ${half.env}=${Number(half.port) + 1} npm start\n\n`),
+      );
+      await pause();
+      process.exit(1);
+    }
+    const moved = await firstFreePort(Number(half.port) + 1, claimed);
+    if (moved === null) {
+      console.error(
+        `\nPort ${half.port} is taken, and so is every port up to ` +
+          `${Number(half.port) + 20}.\n\n` +
+          `Something is very wrong, or a previous Studio did not shut down. ` +
+          `Restarting the machine will clear it.\n\n`,
+      );
+      await pause();
+      process.exit(1);
+    }
+    claimed.push(moved);
+    moves.push(`${half.name} ${half.port} → ${moved}`);
+    if (half.name === "engine") ENGINE_PORT = moved;
+    else WEB_PORT = moved;
+  }
+
+  console.log(`\n  Default port in use, moved: ${moves.join(", ")}\n`);
 }
 
 /** ANSI colour, unless the output is being piped or NO_COLOR is set. */
@@ -351,7 +420,9 @@ if (OPEN) {
 
     if (Date.now() - started > deadline) {
       clearInterval(poll);
-      console.log(`\n  Still starting. Open ${url} yourself once it is ready.\n`);
+      console.log(
+        `\n  Still starting. Open ${url} yourself once it is ready.\n`,
+      );
       return;
     }
     // Any answer means the server is listening — a 404, a 500 or the 307 to
