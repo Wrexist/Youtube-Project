@@ -546,6 +546,11 @@ const PLAN_SCHEMA = {
     summary: { type: "string" },
     tasks: {
       type: "array",
+      // Round 3's planner returned one task titled "t" with the summary "test",
+      // the fixer had nothing to do, and the gate went green because nothing had
+      // changed — a silent no-op round that looked like a clean one. A floor of
+      // one task per finding makes that shape unrepresentable.
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
@@ -587,6 +592,17 @@ Rules for the plan:
 
 const tasks = (plan && plan.tasks) || [];
 log(`plan: ${tasks.length} tasks — ${plan.summary}`);
+
+// A plan with fewer tasks than findings has dropped work on the floor. Round 3
+// produced exactly this and it was invisible until the tree turned out to be
+// unchanged — so fail loudly here rather than let the Fix and Gate phases run
+// green over nothing.
+if (tasks.length < confirmed.length) {
+  log(
+    `PLAN INCOMPLETE: ${confirmed.length} verified findings but only ${tasks.length} ` +
+      `task(s). The unplanned findings are returned for remediation rather than fixed here.`,
+  );
+}
 
 // Directory-disjoint fixers. One agent owns each tree, so two agents can never edit
 // the same file; within a tree the agent works sequentially and can see its own edits.
