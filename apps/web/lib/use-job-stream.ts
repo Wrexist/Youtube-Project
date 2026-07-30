@@ -116,11 +116,16 @@ export function reduceJobStream(state: JobStream, action: Action): JobStream {
       // and were both being dropped, so a finished row showed a blank line and no
       // duration — the one-line collapse the Create screen is built around never
       // had anything in it for a live job.
+      //
+      // Spread rather than `?? 0`: both fields are optional on `JobEvent`, and a
+      // frame that omits one would otherwise reset whatever an earlier frame — a
+      // retry, say — had already recorded, so a stage that cost something would
+      // finish reading $0.00. Patch what the frame actually carries.
       patch({
         status: "done",
         summary: event.summary ?? null,
-        cost_usd: event.cost_usd ?? 0,
-        elapsed_ms: event.elapsed_ms ?? 0,
+        ...(event.cost_usd !== undefined ? { cost_usd: event.cost_usd } : {}),
+        ...(event.elapsed_ms !== undefined ? { elapsed_ms: event.elapsed_ms } : {}),
       });
       break;
     case "stage.replayed":

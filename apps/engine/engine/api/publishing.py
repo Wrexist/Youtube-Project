@@ -10,7 +10,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 from engine import repository
 from engine.providers import youtube
@@ -85,8 +85,13 @@ async def credentials_for(key: str = "default") -> youtube.Credentials | None:
     except Exception:  # noqa: BLE001 — an unreadable channel is "not connected"
         logger.exception("could not load channel {!r}", key)
         return None
-    CHANNELS.update(loaded)
-    return loaded.get(key)
+    # `setdefault`, not `update`. The rows carry `access_token=""` by design — it is
+    # not persisted — so a blanket update would replace a *different* channel's live,
+    # refreshed credentials with a blank-token copy and force a needless `refresh()`
+    # on its next publish. Only fill in what the mirror is missing.
+    for name, value in loaded.items():
+        CHANNELS.setdefault(name, value)
+    return CHANNELS.get(key)
 
 
 async def attach_youtube_client(job: dict) -> None:
@@ -151,7 +156,8 @@ class CalendarResponse(BaseModel):
 
 class ScheduleRequest(BaseModel):
     video_id: str
-    at: datetime
+    #: Aware — this reaches the same `validate_move` comparison as `Assignment.at`.
+    at: AwareDatetime
 
 
 class PendingVideo(BaseModel):
@@ -165,7 +171,7 @@ class PendingVideo(BaseModel):
     id: str = Field(min_length=1)
     title: str = ""
     format: Literal["short", "long"] = "short"
-    ready_at: datetime | None = None
+    ready_at: AwareDatetime | None = None
 
 
 class AutoScheduleRequest(BaseModel):
@@ -177,7 +183,18 @@ class AutoScheduleRequest(BaseModel):
 
 class Assignment(BaseModel):
     video_id: str = Field(min_length=1)
-    at: datetime
+    #: Aware, and rejected outright if not.
+    #:
+    #: `scheduling.validate_move` compares `at` against an aware `now` and calls
+    #: `astimezone` on it, so a payload without an offset — `"2026-08-01T10:00:00"` —
+    #: raised `TypeError: can't compare offset-naive and offset-aware datetimes` and
+    #: came back as a 500 on a request that looked perfectly valid.
+    #:
+    #: Rejecting rather than assuming UTC, deliberately. This field decides the minute
+    #: a video goes public; a silent assumption puts it hours out on the operator's
+    #: calendar with nothing to indicate why. A 422 naming the field is the honest
+    #: answer, and no real client sends naive — `Date.toISOString()` always carries `Z`.
+    at: AwareDatetime
 
 
 class ApplyRequest(BaseModel):

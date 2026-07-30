@@ -194,21 +194,34 @@ const engineBusy = await portInUse(ENGINE_PORT);
 const webBusy = await portInUse(WEB_PORT);
 
 if (engineBusy || webBusy) {
-  if (OPEN && (await studioIsUp())) {
-    // Double-clicked while already running. Show it and get out of the way.
-    //
-    // The URL is printed rather than only opened: this branch exits immediately,
-    // so `openBrowser`'s error handler — which is asynchronous — never gets to
-    // report a failure. Naming the address means the window is useful even when
-    // no browser could be launched.
+  // Ask whether it is *Studio* on those ports before deciding anything, and ask it
+  // regardless of `--open`. This used to be `OPEN && studioIsUp()`, which was fine
+  // while a busy port was fatal — the error told you Studio might already be
+  // running either way. It stopped being fine the moment the port fell back to the
+  // next free pair: plain `npm start` with Studio already up would decide the ports
+  // belonged to something unrelated, move aside, and bring up a *second* engine and
+  // web app. Both then write the same SQLite file, which is the cross-process
+  // hazard the quota work exists to prevent, arrived at by the launcher.
+  if (await studioIsUp()) {
     const url = `http://localhost:${WEB_PORT}`;
-    console.log(`\n  Studio is already running.\n  Opening ${url}\n`);
-    openBrowser(url);
-    // Awaited, not a bare setTimeout: a timer would schedule the exit and let
-    // execution fall straight through to the spawn calls below, which would then
-    // fight the very instance this branch just found. The pause itself is for the
-    // browser spawn to reach the OS before this process goes away.
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (OPEN) {
+      // Double-clicked while already running: show it and get out of the way.
+      //
+      // The URL is printed rather than only opened: this branch exits immediately,
+      // so `openBrowser`'s error handler — which is asynchronous — never gets to
+      // report a failure. Naming the address means the window is useful even when
+      // no browser could be launched.
+      console.log(`\n  Studio is already running.\n  Opening ${url}\n`);
+      openBrowser(url);
+      // Awaited, not a bare setTimeout: a timer would schedule the exit and let
+      // execution fall straight through to the spawn calls below, which would then
+      // fight the very instance this branch just found. The pause itself is for the
+      // browser spawn to reach the OS before this process goes away.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    } else {
+      // From a terminal, opening a browser unasked is rude. Say where it is.
+      console.log(`\n  Studio is already running at ${url}\n`);
+    }
     process.exit(0);
   }
 

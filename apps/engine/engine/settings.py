@@ -159,9 +159,48 @@ _CREDENTIAL_ENV_NAME = re.compile(r"\A[A-Z][A-Z0-9_]{0,63}\Z")
 CREDENTIAL_ENV_SUFFIXES = ("_API_KEY", "_TOKEN")
 
 
+@lru_cache(maxsize=1)
+def _own_credential_names() -> frozenset[str]:
+    """Every environment variable name this process reads into `Settings`.
+
+    Both spellings, because a field can be reached either way: `ANTHROPIC_API_KEY`
+    through its `validation_alias`, and `STUDIO_PERSIST` through the `env_prefix`.
+    """
+    prefix = str(Settings.model_config.get("env_prefix") or "")
+    names = set()
+    for field_name, field in Settings.model_fields.items():
+        alias = getattr(field, "validation_alias", None)
+        if isinstance(alias, str):
+            names.add(alias.upper())
+        names.add(f"{prefix}{field_name}".upper())
+    return frozenset(names)
+
+
 def is_credential_env_name(name: str) -> bool:
-    """May an API caller name this variable as a model's key? See `_CREDENTIAL_ENV_NAME`."""
-    return bool(_CREDENTIAL_ENV_NAME.fullmatch(name)) and name.endswith(CREDENTIAL_ENV_SUFFIXES)
+    """May an API caller name this variable as a model's key?
+
+    Two conditions, and the second one is not obvious.
+
+    The suffix allowlist makes the reachable set "things shaped like a provider API
+    credential" — see `_CREDENTIAL_ENV_NAME` — which is what puts `STUDIO_SECRET_KEY`
+    and `GOOGLE_CLIENT_SECRET` out of reach.
+
+    But that alone still admitted `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and
+    `PEXELS_API_KEY`: this app's *own* provider keys, which end in `_API_KEY` like any
+    other. Registering a model with `api_key_env: "ANTHROPIC_API_KEY"` and a perfectly
+    public `base_url` therefore passed every check and handed the operator's real
+    Anthropic key to that endpoint — the same two-field exfiltration `api/models.py`
+    exists to close, one hop shorter.
+
+    A key this process already owns is never something a caller needs to *name*:
+    leaving `api_key_env` empty is how a spec asks for the provider's own key. Naming
+    one is only ever a way to route it somewhere else, so it is refused.
+    """
+    if not _CREDENTIAL_ENV_NAME.fullmatch(name):
+        return False
+    if not name.endswith(CREDENTIAL_ENV_SUFFIXES):
+        return False
+    return name.upper() not in _own_credential_names()
 
 
 def named_credential(name: str) -> str:

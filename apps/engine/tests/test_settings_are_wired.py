@@ -259,10 +259,16 @@ _CREDENTIAL = re.compile(r"api_key|secret|token", re.IGNORECASE)
 #: would otherwise look straight past it.
 _FSTRING_INTERPOLATION = re.compile(r"\{[^}]*(api_key|secret|token)[^}]*\}", re.IGNORECASE)
 
-#: Describing a credential in the message text is fine and useful — "no api_key
-#: configured" is a good log line. These are the words that read as prose, so a bare
-#: string containing them is not evidence of anything.
-_LOGGER_CALL = re.compile(r"logger\.[a-z]+$")
+#: The tail of a `logger.<level>` call, matched against the tokens just before an
+#: opening paren to decide whether the scan below has entered a logging call. Matches
+#: `log` as well as `logger`, and underscores in the method name, so an aliased import
+#: (`from loguru import logger as log`) or `logger.opt_info` is not a blind spot.
+#:
+#: Only the *call* is located here — deciding what inside it is a leak is the job of
+#: `_CREDENTIAL` and `_FSTRING_INTERPOLATION` above. Describing a credential in the
+#: message text stays fine: "no api_key configured" is a good log line, and it is a
+#: STRING token, which the walk ignores.
+_LOGGER_CALL = re.compile(r"(?:logger|log)\.[a-z_]+$")
 
 
 def _logged_credentials(path) -> list[str]:

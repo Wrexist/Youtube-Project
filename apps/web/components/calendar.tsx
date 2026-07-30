@@ -9,6 +9,7 @@ import {
   bestHourOn,
   dayKey,
   fmtTime,
+  quotaKey,
   slotReason,
   slotScore,
   uploadsPerDay,
@@ -289,7 +290,12 @@ export function Calendar({
 
         <div className="grid gap-3">
           {weeks.map((week, wi) => {
-            const weekQuota = week.reduce((sum, d) => sum + (quotaByDay[dayKey(d)] ?? 0), 0);
+            // `quotaKey`, not `dayKey`: the engine keys `quota_by_day` by its Pacific
+            // quota day, and `validateMove`/`autoSchedule` look it up that way. Keyed
+            // locally here, the cell's "N left" and the drop validation disagreed for
+            // part of every day outside Pacific — a day drawn with room that refuses
+            // the drop, or the reverse. `dayKey` stays for cell identity and grouping.
+            const weekQuota = week.reduce((sum, d) => sum + (quotaByDay[quotaKey(d)] ?? 0), 0);
             return (
               <div key={wi}>
                 <div className="grid grid-cols-7 gap-px overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-line)]">
@@ -297,7 +303,7 @@ export function Calendar({
                     const key = dayKey(day);
                     const items = scheduled.filter((s) => dayKey(s.at) === key);
                     const proposed = proposedByDay.get(key) ?? [];
-                    const used = quotaByDay[key] ?? 0;
+                    const used = quotaByDay[quotaKey(day)] ?? 0;
                     const budget = Math.floor((dailyLimit - used) / PUBLISH_COST);
                     const full = items.length >= Math.min(budget, uploadsPerDay(dailyLimit));
                     const past = day < startOfToday;

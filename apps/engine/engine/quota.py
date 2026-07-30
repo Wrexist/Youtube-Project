@@ -125,7 +125,10 @@ async def _lock_day(s, day: date) -> None:
 
     Failure to acquire is not fatal: the asyncio lock still serialises this
     process, and refusing an upload because the lock statement was not understood
-    would be a worse outcome than the race it prevents.
+    would be a worse outcome than the race it prevents. But it is not silent
+    either — losing this lock loses the cross-process guarantee `_reserve_locked`
+    documents, and a degraded ceiling that nobody is told about is how the overrun
+    happens twice. Every path out of here that did not take a lock says so.
     """
     from sqlalchemy import text
 
@@ -138,9 +141,25 @@ async def _lock_day(s, day: date) -> None:
             # bigint the one-argument form takes.
             await s.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": day.toordinal()})
         elif dialect == "sqlite":
+            # This runs before SQLAlchemy has emitted anything on the connection, so
+            # the transaction has not actually begun and the statement is accepted.
+            # If that ever stops being true it fails loudly below rather than
+            # quietly, because `with_for_update()` is a no-op on SQLite — losing
+            # this statement would leave the day with no lock at all.
             await s.execute(text("BEGIN IMMEDIATE"))
+        else:
+            logger.warning(
+                "no quota day lock on dialect {!r}: two processes can both book the "
+                "last upload of the day. Only postgresql and sqlite are guarded.",
+                dialect,
+            )
     except Exception as exc:  # noqa: BLE001 — see the docstring
-        logger.warning("could not take the quota day lock on {}: {}", dialect, exc)
+        logger.warning(
+            "could not take the quota day lock on {} ({}); the daily ceiling is now "
+            "guarded only within this process",
+            dialect,
+            exc,
+        )
 
 
 @dataclass

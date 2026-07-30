@@ -48,9 +48,6 @@ def check_base_url(url: str, *, provider: str = "") -> str:
     if not host:
         raise ValueError("base_url has no host")
 
-    if provider == "ollama":
-        return url
-
     try:
         resolved = {info[4][0] for info in socket.getaddrinfo(host, None)}
     except OSError as exc:
@@ -58,6 +55,18 @@ def check_base_url(url: str, *, provider: str = "") -> str:
 
     for address in resolved:
         ip = ipaddress.ip_address(address)
+        if provider == "ollama":
+            # Ollama needs an exemption — it is a local daemon, so its address is
+            # private by definition. But the exemption used to skip resolution
+            # entirely, which made `provider: "ollama"` a way to say "send my
+            # credential to any host on the internal network you like". A local model
+            # lives on loopback; anything else is somebody else's box.
+            if not ip.is_loopback:
+                raise ValueError(
+                    f"base_url host {host!r} resolves to {ip}; a local Ollama endpoint "
+                    "must be loopback"
+                )
+            continue
         if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved:
             raise ValueError(
                 f"base_url host {host!r} resolves to {ip}, which is inside this network; "

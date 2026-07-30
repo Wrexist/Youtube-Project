@@ -132,18 +132,22 @@ async def run_job_task(ctx: dict, job_id: str, start_from: str | None = None) ->
 
     redis = ctx["redis"]
 
-    # Per job, not just at startup. An arq worker is long-lived — days, on a box
-    # that is left running — and everything the *API* process spends in between is
-    # invisible to this cache. `check()` before a publish would then be answering
-    # from whatever the ledger looked like when the worker booted.
-    await ledger.refresh()
-
-    # Everything is inside this try, including the job lookup. `__done__` is the
-    # only thing that closes the API's relay, and the unknown-job branch used to
-    # `return` from *above* the try — so a worker started against a different
-    # database (or with STUDIO_PERSIST=false, where there are no rows at all) left
-    # every SSE connection for that job open until the browser gave up.
+    # Everything is inside this try, including the job lookup and the ledger
+    # refresh. `__done__` is the only thing that closes the API's relay, and the
+    # unknown-job branch used to `return` from *above* the try — so a worker started
+    # against a different database (or with STUDIO_PERSIST=false, where there are no
+    # rows at all) left every SSE connection for that job open until the browser gave
+    # up. The refresh below was outside it for the same reason and would have caused
+    # the same hang: it is a database round-trip, so a transient failure there — the
+    # exact thing the reconnect loops elsewhere exist for — skipped the `finally` and
+    # stranded the stream.
     try:
+        # Per job, not just at startup. An arq worker is long-lived — days, on a box
+        # that is left running — and everything the *API* process spends in between is
+        # invisible to this cache. `check()` before a publish would then be answering
+        # from whatever the ledger looked like when the worker booted.
+        await ledger.refresh()
+
         jobs = await repository.load_jobs(video.get)
         job = jobs.get(job_id)
         if job is None:

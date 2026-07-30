@@ -150,7 +150,12 @@ class LLM:
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(
                 f"{base}/models/{self.spec.model}:generateContent",
-                params={"key": self._credential(self.settings.gemini_api_key)},
+                # Header, not `?key=`. Google accepts both, but a query string is the
+                # one part of an HTTPS request that leaks by default — into proxy
+                # logs, into `httpx`'s own INFO line, into any traceback that quotes
+                # `request.url`. The header form is documented for generateContent and
+                # keeps the key out of every one of those.
+                headers={"x-goog-api-key": self._credential(self.settings.gemini_api_key)},
                 json=body,
             )
         if resp.status_code >= 400:

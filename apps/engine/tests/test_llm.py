@@ -230,9 +230,12 @@ class TestGemini:
         assert (completion.input_tokens, completion.output_tokens) == (3, 2)
 
         sent = route.calls.last.request
-        # The key goes in the query string, not a header — get this wrong and every
-        # call 403s.
-        assert sent.url.params["key"] == "test-gemini"
+        # Header, not `?key=`. Both authenticate, so a regression here would not fail
+        # any call — it would silently put the key back in the URL, where proxy logs
+        # and tracebacks pick it up. Assert the absence too, or the leak comes back
+        # alongside a passing header assertion.
+        assert sent.headers["x-goog-api-key"] == "test-gemini"
+        assert "key" not in sent.url.params
         body = _json(sent)
         assert body["contents"] == [{"parts": [{"text": "say hi"}]}]
         assert body["systemInstruction"] == {"parts": [{"text": "be brief"}]}
