@@ -146,6 +146,11 @@ class CatalogueEntry(BaseModel):
     context: int
     input_per_m: float
     output_per_m: float
+    #: Whether this model can run the research search itself, server-side. Sent
+    #: rather than inferred client-side: the Models screen already learned once that
+    #: re-implementing a rule from `models.py` in TypeScript means two copies that
+    #: drift, and this one decides whether the research stage scrapes or searches.
+    supports_web_search: bool = False
 
 
 class RoutingProblem(BaseModel):
@@ -203,6 +208,7 @@ async def list_models() -> ModelsResponse:
                     "context": spec.context,
                     "input_per_m": spec.input_per_m,
                     "output_per_m": spec.output_per_m,
+                    "supports_web_search": spec.supports_web_search,
                 }
                 for key, spec in routing.catalogue.items()
             ],

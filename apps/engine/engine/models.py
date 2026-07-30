@@ -43,11 +43,20 @@ _DEFAULT_SAMPLING_ONLY = ("claude-sonnet-5",)
 #: adds head-room rather than handing the caller's number straight to the API.
 _THINKS_BY_DEFAULT = _NO_SAMPLING + _DEFAULT_SAMPLING_ONLY
 
+#: Models that can run the search themselves, server-side. The ones in
+#: `_WEB_SEARCH_FILTERS` also filter results before they reach the context window and
+#: take the current tool version; the rest take the previous one.
+_WEB_SEARCH_FILTERS = _THINKS_BY_DEFAULT + ("claude-opus-4-6", "claude-sonnet-4-6")
+_WEB_SEARCH = _WEB_SEARCH_FILTERS + ("claude-haiku-4-5",)
+
 # Every routable task, with what it actually demands. `quality` is the honest
 # guidance shown next to the picker — some of these genuinely do not need a big model.
 TASKS: dict[str, dict] = {
     # Script chain
-    "research": {"group": "Script", "needs": "long context, JSON", "quality": "high"},
+    # Critical because this model does the searching, not just the summarising: on a
+    # provider that supports it the research stage is a live web search run by the
+    # routed model, and everything downstream is only as good as what it found.
+    "research": {"group": "Script", "needs": "web search, long context", "quality": "critical"},
     "angle": {"group": "Script", "needs": "judgement", "quality": "high"},
     "hook": {"group": "Script", "needs": "judgement", "quality": "critical"},
     "beats": {"group": "Script", "needs": "structure, JSON", "quality": "high"},
@@ -128,6 +137,21 @@ class ModelSpec:
     def thinks_by_default(self) -> bool:
         """Whether this model reasons before answering with no prompting to do so."""
         return self.provider == "anthropic" and self.model.startswith(_THINKS_BY_DEFAULT)
+
+    @property
+    def supports_web_search(self) -> bool:
+        """Whether this model can do its own searching, server-side.
+
+        This is what makes the research stage worth routing rather than fixed: a model
+        that searches produces grounded sources without scraping anything, and one
+        that cannot falls back to the keyless scrape chain in `research/web.py`.
+        """
+        return self.provider == "anthropic" and self.model.startswith(_WEB_SEARCH)
+
+    @property
+    def web_search_filters(self) -> bool:
+        """Whether the current search tool version applies, with result filtering."""
+        return self.provider == "anthropic" and self.model.startswith(_WEB_SEARCH_FILTERS)
 
     @property
     def is_free(self) -> bool:
@@ -302,6 +326,20 @@ class Routing:
                             f"{task} is one of the three stages that decide whether a "
                             f"video works. A small local model here saves pennies and "
                             f"costs views."
+                        ),
+                    }
+                )
+
+            if task == "research" and not spec.supports_web_search:
+                out.append(
+                    {
+                        "task": task,
+                        "severity": "warn",
+                        "message": (
+                            f"{spec.label or spec.model} cannot search the web, so "
+                            f"research falls back to scraping keyless search engines. "
+                            f"Those refuse automated requests often, and that is the "
+                            f"usual reason a render dies at Research."
                         ),
                     }
                 )

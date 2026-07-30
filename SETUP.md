@@ -126,9 +126,18 @@ ANTHROPIC_API_KEY=sk-ant-...
 From <https://console.anthropic.com> → API Keys. Requires a payment method; a
 short video costs a few cents.
 
+This key also does the **research**. The model routed to the research task on the
+**Models** screen searches the web itself and cites what it read — no scraping, and
+nothing else to sign up for. That is why research is routed to the best model by
+default: everything downstream is only as good as what it found.
+
 *Alternative with no account and no cost:* install [Ollama](https://ollama.com),
 run `ollama pull qwen2.5:14b`, and route every task to it on the **Models**
-screen. Slower and noticeably weaker at the critique pass, but it works.
+screen. Slower and noticeably weaker at the critique pass, but it works — with one
+real caveat: local models cannot search, so research falls back to scraping keyless
+search engines. Those refuse automated requests often, and that is the usual reason
+a render dies at Research with *no usable sources found*. The Models screen says so
+next to the research picker.
 
 ### 2. A stock footage key — 2 minutes
 

@@ -190,6 +190,11 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "supports_web_search": {
+            "default": false,
+            "title": "Supports Web Search",
+            "type": "boolean"
           }
         },
         "required": [

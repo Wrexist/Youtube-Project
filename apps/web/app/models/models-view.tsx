@@ -14,6 +14,8 @@ export interface ModelSpec {
   context: number;
   inputPerM: number;
   outputPerM: number;
+  /** Can run the research search itself, server-side. From the engine, not inferred. */
+  searchesWeb?: boolean;
 }
 
 export interface TaskRoute {
@@ -143,6 +145,17 @@ export function ModelsView({
                       {t.needs}
                       {t.quality === "critical" && " · high leverage"}
                     </p>
+                    {/* Research is the one task whose behaviour changes with the model
+                        rather than only its quality: a model that can search does the
+                        searching, and one that cannot falls back to scraping keyless
+                        search endpoints. Worth saying next to the control. */}
+                    {t.task === "research" && (
+                      <p className="mt-1 text-[11px] text-[var(--color-muted)]">
+                        {spec?.searchesWeb
+                          ? "Searches the web itself and cites what it read."
+                          : "Cannot search — falls back to scraped results, often blocked."}
+                      </p>
+                    )}
                   </div>
 
                   <select

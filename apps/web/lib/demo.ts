@@ -508,11 +508,11 @@ export const CHANNEL_LAUNCH = {
 export type ModelKey = string;
 
 export const MODEL_CATALOGUE = [
-  { key: "anthropic:claude-opus-5", label: "Claude Opus 5", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 5, outputPerM: 25 },
-  { key: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 3, outputPerM: 15 },
-  { key: "anthropic:claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", isLocal: false, isFree: false, jsonMode: true, context: 200000, inputPerM: 1, outputPerM: 5 },
-  { key: "anthropic:claude-fable-5", label: "Claude Fable 5", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 10, outputPerM: 50 },
-  { key: "anthropic:claude-opus-4-8", label: "Claude Opus 4.8", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 5, outputPerM: 25 },
+  { searchesWeb: true, key: "anthropic:claude-opus-5", label: "Claude Opus 5", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 5, outputPerM: 25 },
+  { searchesWeb: true, key: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 3, outputPerM: 15 },
+  { searchesWeb: true, key: "anthropic:claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", isLocal: false, isFree: false, jsonMode: true, context: 200000, inputPerM: 1, outputPerM: 5 },
+  { searchesWeb: true, key: "anthropic:claude-fable-5", label: "Claude Fable 5", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 10, outputPerM: 50 },
+  { searchesWeb: true, key: "anthropic:claude-opus-4-8", label: "Claude Opus 4.8", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 5, outputPerM: 25 },
   { key: "openai:gpt-4o", label: "GPT-4o", isLocal: false, isFree: false, jsonMode: true, context: 128000, inputPerM: 2.5, outputPerM: 10 },
   { key: "openai:gpt-4o-mini", label: "GPT-4o mini", isLocal: false, isFree: false, jsonMode: true, context: 128000, inputPerM: 0.15, outputPerM: 0.6 },
   { key: "gemini:gemini-2.0-flash", label: "Gemini 2.0 Flash", isLocal: false, isFree: false, jsonMode: true, context: 1000000, inputPerM: 0.1, outputPerM: 0.4 },
@@ -524,7 +524,7 @@ export const MODEL_CATALOGUE = [
 ];
 
 export const MODEL_TASKS = [
-  { task: "research", group: "Script", needs: "long context, JSON", quality: "high", model: "anthropic:claude-sonnet-5" },
+  { task: "research", group: "Script", needs: "web search, long context", quality: "critical", model: "anthropic:claude-opus-5" },
   { task: "angle", group: "Script", needs: "judgement", quality: "high", model: "anthropic:claude-sonnet-5" },
   { task: "hook", group: "Script", needs: "judgement", quality: "critical", model: "anthropic:claude-opus-5" },
   { task: "beats", group: "Script", needs: "structure, JSON", quality: "high", model: "anthropic:claude-sonnet-5" },

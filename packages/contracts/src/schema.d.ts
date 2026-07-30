@@ -989,6 +989,11 @@ export interface components {
             output_per_m: number;
             /** Provider */
             provider: string;
+            /**
+             * Supports Web Search
+             * @default false
+             */
+            supports_web_search: boolean;
         };
         /**
          * CredentialStatus

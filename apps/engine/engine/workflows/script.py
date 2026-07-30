@@ -18,7 +18,7 @@ from typing import Any
 
 from engine import feedback
 from engine.providers import llm
-from engine.research import web
+from engine.research import gather
 from engine.workflows.base import Provenance, Stage, StageOutput, WorkflowContext
 
 # Phrases that are pure retention leak. Every one of them is standard LLM output,
@@ -77,8 +77,11 @@ class ResearchStage(Stage[dict]):
         topic = ctx.inputs["topic"]
         await ctx.progress("searching")
 
-        findings = await web.research(topic, max_sources=8)
-        if not findings["sources"]:
+        # The routed model searches for itself when it can; scraping is the floor
+        # under that. `gather` decides, because the choice is the operator's route.
+        model = llm.for_task("research")
+        findings = await gather.find_sources(topic, model.spec, max_sources=8)
+        if not findings.sources:
             # A script with no sources is exactly the "inauthentic content" YouTube
             # demonetises. Failing here is the correct behaviour, not a nuisance.
             #
@@ -86,19 +89,18 @@ class ResearchStage(Stage[dict]):
             # found" reads as a judgement on the topic, and the operator rewrites a
             # perfectly researchable one while the actual answer is that a scraped
             # search endpoint refused the request or changed its markup.
-            problem = findings.get("problem") or "no reason reported"
+            problem = findings.problem or "no reason reported"
             raise RuntimeError(
                 f"no usable sources found — refusing to generate an ungrounded "
                 f"script. Search: {problem}"
             )
 
         await ctx.progress("extracting facts", 0.6)
-        model = llm.for_task("research")
         facts, completion = await model.json(
             f"""Topic: {topic}
 
 Source material:
-{findings["digest"]}
+{findings.digest}
 
 Extract the specific, checkable facts a video on this topic should be built from.
 Prefer numbers, dates, names, studies, and direct quotes over general statements.
@@ -109,14 +111,18 @@ Return: {{"facts": [{{"claim": str, "detail": str, "source_url": str}}],
             max_tokens=3000,
         )
 
-        value = {**facts, "sources": findings["sources"]}
+        value = {**facts, "sources": findings.sources}
         return StageOutput(
             value=value,
-            cost_usd=completion.cost_usd,
+            # The searching is billed too, and it is the larger half when the model
+            # does its own: a stage that only recorded the extraction call would
+            # under-report the run and the per-video ceiling would guard the wrong
+            # number.
+            cost_usd=completion.cost_usd + findings.cost_usd(model.spec),
             provenance=Provenance(
                 model=completion.model,
                 prompt=completion.prompt,
-                sources=findings["sources"],
+                sources=findings.sources,
             ),
         )
 

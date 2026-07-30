@@ -67,6 +67,21 @@ def test_temperature_is_withheld_from_the_models_that_reject_it():
     assert not local().thinks_by_default
 
 
+def test_research_defaults_to_a_model_that_can_do_its_own_searching():
+    """The stage is a live web search now, not a summariser over scraped HTML."""
+    spec = Routing().spec_for("research")
+    assert spec.supports_web_search
+    assert spec.web_search_filters
+    assert DEFAULT_ROUTES["research"] == "anthropic:claude-opus-5"
+
+
+def test_routing_research_to_a_model_that_cannot_search_warns():
+    r = Routing()
+    r.set_route("research", "ollama:qwen2.5:14b")
+    messages = [p["message"] for p in r.problems() if p["task"] == "research"]
+    assert any("cannot search the web" in m for m in messages)
+
+
 def test_a_persisted_route_to_a_no_sampling_model_is_fixed_by_upgrading():
     """The capability is derived, not stored — old `routing.json` files predate it."""
     restored = Routing.from_dict(

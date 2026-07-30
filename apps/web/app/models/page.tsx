@@ -50,6 +50,7 @@ export default async function ModelsPage() {
         context: m.context,
         inputPerM: m.input_per_m,
         outputPerM: m.output_per_m,
+        searchesWeb: m.supports_web_search ?? false,
       }))
     : MODEL_CATALOGUE.map((m) => ({ ...m }));
 
