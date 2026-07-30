@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -88,6 +88,61 @@ def quota_day(moment: datetime | None = None) -> date:
     return moment.astimezone(PACIFIC).date()
 
 
+def day_bounds(day: date) -> tuple[datetime, datetime]:
+    """The UTC half-open interval `[start, end)` covering one Pacific quota day.
+
+    The database stores instants, not days, so every day-scoped query has to be a
+    range scan on `at` — which is what `quota_entries.at` is indexed for. Built by
+    zone-aware arithmetic rather than a fixed eight-hour offset for the reason
+    `PACIFIC` exists at all: through PDT the boundary moves, and a fixed offset
+    books the 07:00-08:00 UTC hour to the wrong day.
+    """
+    start = datetime.combine(day, time.min, tzinfo=PACIFIC)
+    # Wall-clock arithmetic on a zoned datetime, so a DST transition inside the day
+    # yields a 23- or 25-hour span rather than a 24-hour one that clips or overlaps.
+    end = start + timedelta(days=1)
+    return start.astimezone(UTC), end.astimezone(UTC)
+
+
+async def _lock_day(s, day: date) -> None:
+    """Take a write lock scoped to one quota day, inside the caller's transaction.
+
+    Dialect-specific because the two engines offer different primitives, and the
+    difference matters:
+
+    * **Postgres** gets a transaction-scoped advisory lock keyed on the day.
+      `SELECT ... FOR UPDATE` alone is not enough here — it locks the rows that
+      exist, and the thing being guarded against is two transactions each
+      *inserting* a row the other cannot see. The `FOR UPDATE` in the caller stays
+      as well, so a concurrent `refund()` deleting a row cannot slip between the
+      sum and the insert.
+    * **SQLite** has one writer, but its default `BEGIN` is deferred: the write
+      lock is only taken at the INSERT, by which point both transactions have
+      already read the same total and one of them is about to be told "database is
+      locked" *after* deciding it had room. `BEGIN IMMEDIATE` takes the lock up
+      front, so the second reserver blocks on it (for `sqlite3`'s five-second
+      busy timeout) and then reads the first one's booking.
+
+    Failure to acquire is not fatal: the asyncio lock still serialises this
+    process, and refusing an upload because the lock statement was not understood
+    would be a worse outcome than the race it prevents.
+    """
+    from sqlalchemy import text
+
+    from engine.db import engine
+
+    dialect = engine().dialect.name
+    try:
+        if dialect == "postgresql":
+            # toordinal() is a stable, collision-free key per day and fits the
+            # bigint the one-argument form takes.
+            await s.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": day.toordinal()})
+        elif dialect == "sqlite":
+            await s.execute(text("BEGIN IMMEDIATE"))
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        logger.warning("could not take the quota day lock on {}: {}", dialect, exc)
+
+
 @dataclass
 class QuotaLedger:
     """Postgres-backed, with the day's entries cached in memory.
@@ -107,8 +162,13 @@ class QuotaLedger:
     # configured — the 10,000 ceiling was hardcoded here.
     limit: int = field(default_factory=lambda: get_settings().youtube_daily_quota)
     entries: list[Entry] = field(default_factory=list)
-    # Tests construct bare ledgers and must not need a database.
-    persist: bool = True
+    #: Whether writes touch the database. `None` means "follow STUDIO_PERSIST",
+    #: which is what the module singleton wants: the app's lifespan used to *pin*
+    #: this to False on a scratch instance, and because the ledger is a
+    #: process-wide singleton that pin outlived whatever set it — a later caller
+    #: with persistence genuinely on then read and wrote nothing but its own cache.
+    #: Tests that construct a bare ledger still pass `persist=False` explicitly.
+    persist: bool | None = None
 
     # Serialises every read-modify-write of `entries`. `record()` appends and then
     # awaits a database write; `load()` queries and then replaces the list. With
@@ -133,6 +193,11 @@ class QuotaLedger:
         if self._lock is None or self._lock_loop is not loop:
             self._lock, self._lock_loop = asyncio.Lock(), loop
         return self._lock
+
+    @property
+    def _persisting(self) -> bool:
+        """`persist`, resolved. See the field's comment for why it can be unset."""
+        return get_settings().persist if self.persist is None else self.persist
 
     def cost_of(self, operation: str) -> int:
         return COSTS.get(operation, 1)
@@ -189,7 +254,7 @@ class QuotaLedger:
         )
         self.entries.append(entry)
 
-        if self.persist:
+        if self._persisting:
             from engine.db import session
             from engine.tables import QuotaEntry
 
@@ -224,26 +289,139 @@ class QuotaLedger:
         channel_id: str = "",
         note: str = "",
     ) -> Entry:
-        """Re-read, check and book, without letting go in between.
+        """Re-read, check and book inside one database transaction.
 
         The upload path used to do this as two awaits — `check_fresh()` and then,
         after opening the resumable session, `record()`. Two publishes starting
         together therefore both read the same "8,400 of 10,000 spent", both passed
         the check, and both booked 1,600: 11,600 units against a 10,000 ceiling,
-        discovered only when Google refused the second one. Nothing between the read
-        and the write can be allowed to yield, which is what this exists to
-        guarantee.
+        discovered only when Google refused the second one.
+
+        The asyncio lock below is the *intra-process* fast path and nothing more.
+        It cannot serialise the API process against the render worker, which is a
+        separate process and the one that actually uploads — so an earlier version
+        that held only this lock across a read-then-write still lost the race it
+        was written to close, just between two processes instead of two tasks.
+
+        The guarantee therefore lives at the database: `_reserve_locked` takes a
+        day-scoped write lock, re-sums the day inside that transaction, and inserts
+        only if the new spend fits. Whoever gets the lock second sees the first
+        booking and is refused.
 
         Raises `QuotaExceeded` without booking anything when there is no room.
         """
         async with self._serialised():
-            if self.persist:
-                try:
-                    await self._load()
-                except Exception:  # noqa: BLE001 — see check_fresh
-                    logger.warning("could not refresh the quota ledger; checking against the cache")
+            if not self._persisting:
+                # Tests and scratch instances have no rows to lock; the in-process
+                # lock is the whole of the guarantee, which is all they need.
+                self.check(operation)
+                return await self._record(operation, channel_id=channel_id, note=note)
+            return await self._reserve_locked(operation, channel_id=channel_id, note=note)
+
+    async def _reserve_locked(
+        self,
+        operation: str,
+        *,
+        channel_id: str = "",
+        note: str = "",
+    ) -> Entry:
+        """One transaction: lock the day, sum it, insert only if it fits.
+
+        Read, check and book were three separate sessions inside `reserve()`, which
+        put two commit boundaries in the middle of the sequence this is supposed to
+        make indivisible. They are one session here. The read-only forms
+        (`_load`, `check`, `_record`) stay as they are — plenty of callers only ever
+        display the number.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from engine.db import session
+        from engine.tables import QuotaEntry
+
+        cost = self.cost_of(operation)
+        at = datetime.now(UTC)
+        day = quota_day(at)
+        start, end = day_bounds(day)
+
+        try:
+            async with session() as s:
+                await _lock_day(s, day)
+
+                rows = (
+                    (
+                        await s.execute(
+                            select(QuotaEntry)
+                            .where(QuotaEntry.at >= start, QuotaEntry.at < end)
+                            .with_for_update()
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+                # Entries this process is holding that the query above cannot see:
+                # a write that failed. The units were spent at Google regardless, so
+                # counting only the rows would hand that budget back — the same
+                # merge `_load` does, for the same reason.
+                carried = [e for e in self.entries if e.row_id is None and quota_day(e.at) == day]
+                spent = sum(r.cost for r in rows) + sum(e.cost for e in carried)
+
+                if spent + cost > self.limit:
+                    # Raised inside the transaction, before any INSERT, so the
+                    # rollback has nothing to undo.
+                    raise QuotaExceeded(operation, cost, max(0, self.limit - spent))
+
+                row = QuotaEntry(
+                    operation=operation,
+                    cost=cost,
+                    at=at,
+                    channel_id=channel_id,
+                    note=note,
+                )
+                s.add(row)
+                await s.flush()
+
+                entry = Entry(
+                    operation=operation,
+                    cost=cost,
+                    at=at,
+                    channel_id=channel_id,
+                    note=note,
+                    row_id=row.id,
+                )
+                booked = [
+                    Entry(
+                        operation=r.operation,
+                        cost=r.cost,
+                        at=r.at if r.at.tzinfo else r.at.replace(tzinfo=UTC),
+                        channel_id=r.channel_id,
+                        note=r.note,
+                        row_id=r.id,
+                    )
+                    for r in rows
+                ]
+        except QuotaExceeded:
+            raise
+        except SQLAlchemyError:
+            # The booking never happened, so nothing is double-counted — but the
+            # caller is about to spend real units and refusing on a database blip
+            # would be worse than checking against the cache, which is the same
+            # trade `check_fresh` makes.
+            logger.exception(
+                "could not reserve {} atomically; falling back to the cache", operation
+            )
             self.check(operation)
-            return await self._record(operation, channel_id=channel_id, note=note)
+            return await self._record(operation, at=at, channel_id=channel_id, note=note)
+
+        # Refresh the cache from exactly what the transaction saw. Only this day is
+        # replaced — the rest of the 35-day window the calendar charts is untouched,
+        # since nothing outside the locked range was read.
+        self.entries = [e for e in self.entries if quota_day(e.at) != day]
+        self.entries.extend(booked)
+        self.entries.extend(carried)
+        self.entries.append(entry)
+        return entry
 
     async def refund(self, entry: Entry) -> None:
         """Un-book a reservation that was never spent.
@@ -270,7 +448,7 @@ class QuotaLedger:
                     return
                 self.entries.remove(match)
 
-            if self.persist and entry.row_id is not None:
+            if self._persisting and entry.row_id is not None:
                 from sqlalchemy import delete
 
                 from engine.db import session
@@ -305,7 +483,7 @@ class QuotaLedger:
         concurrent publishes both fit through the last 1,600 units.
         """
         async with self._serialised():
-            if self.persist:
+            if self._persisting:
                 try:
                     await self._load()
                 except Exception:  # noqa: BLE001
@@ -313,6 +491,25 @@ class QuotaLedger:
                     # be worse than proceeding on a cache that is at worst incomplete.
                     logger.warning("could not refresh the quota ledger; checking against the cache")
             self.check(operation)
+
+    async def refresh(self) -> None:
+        """Re-read before a display read. Best effort, never raises.
+
+        The cache is per-process and hydrated once at startup, which was correct
+        while one process did everything. The render worker uploads, so it is the
+        one accumulating spend, and the API's copy only moved when the API itself
+        spent something — so `GET /v1/quota` reported yesterday's number
+        indefinitely and the calendar planned around budget that was already gone.
+
+        One indexed range query on a cold path. Every endpoint here is a page load
+        or a planning call; none is in a render's inner loop.
+        """
+        if not self._persisting:
+            return
+        try:
+            await self.load()
+        except Exception:  # noqa: BLE001 — a stale number beats a 500 on a page load
+            logger.warning("could not refresh the quota ledger; serving the cache")
 
     async def load(self, days: int = 35) -> int:
         """Hydrate the cache from the database. Call once at startup.

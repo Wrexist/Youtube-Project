@@ -137,21 +137,41 @@ exec npm start -- --open
   return app;
 }
 
+/** Quote a path for a .desktop `Exec=` value.
+ *
+ *  Exec is tokenised by the launcher, not handed to a shell, so an unquoted
+ *  path under e.g. `~/My Projects/Studio` arrives as two arguments and the
+ *  entry fails to start with no useful error. Two layers of escaping stack up:
+ *  the Desktop Entry spec reserves `"`, backtick, `$` and `\` inside a quoted
+ *  argument (each escaped with a backslash), and a backslash is *also* an
+ *  escape character in a .desktop value — so every backslash the first layer
+ *  produces has to be doubled again on the way to the file.
+ *
+ *  Only Exec needs this. Path= and Icon= take the whole line verbatim, and
+ *  quoting them would make the quotes part of the value. */
+function execQuote(path) {
+  const escaped = path
+    .replace(/\\/g, "\\\\\\\\") // literal \ → \\ (exec) → \\\\ (file)
+    .replace(/(["`$])/g, "\\\\$1"); // literal " → \" (exec) → \\" (file)
+  return `"${escaped}"`;
+}
+
 function linux() {
+  const launcherPath = join(ROOT, "scripts", "studio-launch.sh");
   const entry = `[Desktop Entry]
 Type=Application
 Name=Studio
 Comment=Idea to published video
-Exec=${join(ROOT, "scripts", "studio-launch.sh")}
+Exec=${execQuote(launcherPath)}
 Path=${ROOT}
 Icon=${join(ROOT, "assets", "studio.png")}
 Terminal=true
 Categories=AudioVideo;Development;
 `;
 
-  // The launcher is its own file rather than an inline Exec= because a .desktop
-  // Exec line has its own quoting rules that break on paths with spaces.
-  const launcher = join(ROOT, "scripts", "studio-launch.sh");
+  // The launcher is its own file rather than an inline Exec= because the Exec
+  // quoting rules above only get harder once there are arguments in the line.
+  const launcher = launcherPath;
   writeFileSync(
     launcher,
     `#!/bin/bash

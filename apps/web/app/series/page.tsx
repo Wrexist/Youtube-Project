@@ -8,13 +8,24 @@ import { SERIES, BACKLOG } from "@/lib/demo";
  *  is derived. The budget bar is the important element, because a series that has
  *  spent its month stops on its own and should say so before you wonder why it went
  *  quiet.
+ *
+ *  Read-only until the engine has a series table. The Pause/Resume and Edit buttons
+ *  that were on each card are gone rather than left inert, following the same rule
+ *  as the queue screen: a button that does nothing is worse than no button, because
+ *  it claims the system can do something it cannot. "New series" survives as a
+ *  disabled control with a reason on it — it is what says what this screen is for,
+ *  and disabled-and-explained is not the same lie as live-and-inert.
  */
 export default function SeriesPage() {
   return (
     <>
       <Header
         title="Series"
-        action={<Button>New series</Button>}
+        action={
+          <Button disabled title="Creating a series needs the series endpoint, which does not exist yet.">
+            New series
+          </Button>
+        }
         meta={
           <span className="flex items-center gap-2">
             {SERIES.filter((s) => !s.paused).length} active
@@ -73,11 +84,6 @@ export default function SeriesPage() {
                         topic.
                       </p>
                     )}
-                  </div>
-
-                  <div className="flex shrink-0 gap-2">
-                    <Button variant="ghost">{s.paused ? "Resume" : "Pause"}</Button>
-                    <Button variant="ghost">Edit</Button>
                   </div>
                 </div>
               </Card>

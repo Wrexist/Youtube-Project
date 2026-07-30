@@ -533,6 +533,13 @@ export interface paths {
          *     subscriber connected arrived twice; and because a queue hands each item to
          *     exactly one consumer, two open tabs split the stream between them and both
          *     rendered an incomplete pipeline.
+         *
+         *     A stream opened against a stale mirror converges on the row rather than
+         *     trusting the signal. `waiting.wait()` alone assumed something in *this* process
+         *     would eventually fire it, which is true for an in-process job and not for a
+         *     worker-run one: if the relay died, nothing ever wakes the stream and the tab
+         *     spins on a job that finished ten minutes ago. For worker-owned jobs the wait is
+         *     bounded and the row is re-read on each timeout.
          */
         get: operations["stream_job_v1_jobs__job_id__events_get"];
         put?: never;

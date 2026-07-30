@@ -127,9 +127,16 @@ async def run_job_task(ctx: dict, job_id: str, start_from: str | None = None) ->
     safe to run on a different machine.
     """
     from engine import repository
+    from engine.quota import ledger
     from engine.workflows import video
 
     redis = ctx["redis"]
+
+    # Per job, not just at startup. An arq worker is long-lived — days, on a box
+    # that is left running — and everything the *API* process spends in between is
+    # invisible to this cache. `check()` before a publish would then be answering
+    # from whatever the ledger looked like when the worker booted.
+    await ledger.refresh()
 
     # Everything is inside this try, including the job lookup. `__done__` is the
     # only thing that closes the API's relay, and the unknown-job branch used to
@@ -290,10 +297,22 @@ async def startup(_ctx: dict) -> None:
     `DEFAULT_ROUTES` while the API reported the operator's real choice on the
     Models screen. Same task, two models, depending on whether Redis happened to
     be up.
+
+    The quota ledger is the other one, and it is the more expensive omission. The
+    worker is the process that *uploads*, and `QuotaLedger` starts empty — so a
+    fresh worker believed nothing had been spent today and happily started a
+    1,600-unit upload on a day the API knew was full. `reserve()` re-reads inside
+    its own transaction and would catch it at the last moment, but only after the
+    stage had done all its work; hydrating here is what makes the pre-flight
+    `check()` mean anything.
     """
     from engine.models import hydrate_routing
+    from engine.quota import ledger
 
     hydrate_routing()
+
+    if get_settings().persist:
+        await ledger.load()
 
 
 class WorkerSettings:

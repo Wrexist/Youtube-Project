@@ -714,3 +714,71 @@ async def test_a_refund_falls_back_to_the_row_id_when_the_reloaded_entry_differs
 
     await led.refund(entry)
     assert led.spent() == 0
+
+
+# ── what a connected channel leaves on disk ─────────────────────────────────
+#
+# The row above is the one place a token could sit at rest. Non-negotiable #4 says
+# refresh tokens are encrypted there; it says nothing about access tokens because
+# there was never a reason to keep one. `save_channel` kept them anyway — an hour
+# of full upload access to someone's channel, in plaintext, in a column, surviving
+# every restart, and readable by anything that can open the database file.
+#
+# Dropping it costs one refresh on the first publish after a restart, which is a
+# path that has to work regardless: an access token that outlives the process is
+# an expired access token far more often than it is a useful one.
+
+
+async def test_an_access_token_is_never_written_to_the_database(database):
+    """Encrypted refresh token in, no plaintext access token out."""
+    from engine import repository
+    from engine.db import session
+    from engine.providers.youtube import Credentials
+    from engine.tables import Channel
+
+    await repository.save_channel(
+        "default",
+        Credentials(
+            refresh_token_encrypted="ENCRYPTED-REFRESH",
+            access_token="ya29.SECRET",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            channel_id="UC123",
+        ),
+    )
+
+    async with session() as s:
+        row = await s.get(Channel, "default")
+
+    assert row is not None, "the channel was not saved at all"
+    assert row.refresh_token_encrypted == "ENCRYPTED-REFRESH", "the durable half must persist"
+    assert row.channel_id == "UC123"
+    assert not row.access_token, f"an access token was stored: {row.access_token!r}"
+    assert "ya29" not in (row.access_token or "")
+
+
+async def test_a_restored_channel_must_refresh_before_it_can_publish(database):
+    """The consequence, and the thing that makes dropping the token safe.
+
+    `is_fresh` is what the client checks before every call; a restored credential
+    has to answer False, or the publish path skips the refresh and sends a header
+    with nothing behind it. Asserted on the *behaviour* rather than on the column,
+    because that is what the upload actually consults.
+    """
+    from engine import repository
+    from engine.providers.youtube import Credentials
+
+    await repository.save_channel(
+        "default",
+        Credentials(
+            refresh_token_encrypted="ENCRYPTED-REFRESH",
+            access_token="ya29.SECRET",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            channel_id="UC123",
+        ),
+    )
+
+    restored = (await repository.load_channels())["default"]
+
+    assert restored.refresh_token_encrypted == "ENCRYPTED-REFRESH"
+    assert restored.access_token == "", "the plaintext token came back out of the row"
+    assert restored.is_fresh is False, "a restored credential must be refreshed before use"

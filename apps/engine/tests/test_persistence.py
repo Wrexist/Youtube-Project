@@ -226,14 +226,21 @@ async def test_a_channel_round_trips_without_a_plaintext_token(database):
     assert not hasattr(restored["default"], "refresh_token")
 
 
-async def test_a_channel_with_an_expiry_comes_back_usable(database):
-    """The test above never set `expires_at`, which is exactly why the bug survived.
+async def test_a_channel_with_an_expiry_comes_back_needing_a_refresh(database):
+    """A restored credential is deliberately *not* fresh.
 
-    SQLite has no timezone type, so a stored expiry came back naive while
-    `Credentials.is_fresh` compares it with `datetime.now(UTC)` — TypeError, not
-    "stale", so the refresh that would have healed it never ran and every publish
-    after a restart died on the comparison. Both ends are pinned: the loader
-    normalises, and `is_fresh` coerces anyway.
+    This used to assert the opposite, and pinned a real fix while it did: SQLite has
+    no timezone type, so a stored expiry came back naive while `is_fresh` compares
+    it with `datetime.now(UTC)` — TypeError, not "stale", so the refresh that would
+    have healed it never ran and every publish after a restart died on the
+    comparison.
+
+    The access token is no longer stored at all (it was plaintext OAuth in a
+    column), so there is nothing left for the expiry to date and the loader returns
+    neither. That makes `is_fresh` answer False, which is the same self-healing path
+    the timezone fix was reaching for — the first publish refreshes from the
+    encrypted refresh token. `test_a_naive_expiry_is_judged_rather_than_raised_on`
+    below keeps the coercion itself pinned, independently of any store.
     """
     from engine.providers.youtube import Credentials
 
@@ -249,9 +256,9 @@ async def test_a_channel_with_an_expiry_comes_back_usable(database):
     )
 
     loaded = (await repository.load_channels())["default"]
-    assert loaded.expires_at is not None
-    assert loaded.expires_at.tzinfo is not None, "a naive expiry cannot be compared with now(UTC)"
-    assert loaded.is_fresh is True
+    assert loaded.refresh_token_encrypted == "ENCRYPTED", "the durable half must survive"
+    assert loaded.access_token == "", "a plaintext OAuth token came back out of the row"
+    assert loaded.is_fresh is False, "a restored credential must be refreshed before use"
 
 
 def test_a_naive_expiry_is_judged_rather_than_raised_on():

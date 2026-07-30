@@ -6,11 +6,13 @@ MoneyPrinterTurbo pattern and it is a bug here. Add a field below instead.
 """
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
 from dotenv import dotenv_values
+from loguru import logger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -144,6 +146,24 @@ def get_settings() -> Settings:
     return Settings()
 
 
+#: Shape of an environment variable name that may be *named by an API caller*.
+#: `ModelSpec.api_key_env` is operator-supplied and reaches `named_credential`
+#: below, which reads it out of the process environment and `.env` — so without a
+#: constraint, registering a model with `api_key_env: "GOOGLE_CLIENT_SECRET"` and
+#: `base_url` pointing anywhere sends that secret to the operator's own endpoint.
+#: The suffix allowlist is what makes the reachable set "things that are an API
+#: credential for a model provider" rather than "every variable in `.env`":
+#: `STUDIO_SECRET_KEY` (which encrypts refresh tokens), `GOOGLE_CLIENT_SECRET` and
+#: `AWS_SECRET_ACCESS_KEY` are all unreachable by name.
+_CREDENTIAL_ENV_NAME = re.compile(r"\A[A-Z][A-Z0-9_]{0,63}\Z")
+CREDENTIAL_ENV_SUFFIXES = ("_API_KEY", "_TOKEN")
+
+
+def is_credential_env_name(name: str) -> bool:
+    """May an API caller name this variable as a model's key? See `_CREDENTIAL_ENV_NAME`."""
+    return bool(_CREDENTIAL_ENV_NAME.fullmatch(name)) and name.endswith(CREDENTIAL_ENV_SUFFIXES)
+
+
 def named_credential(name: str) -> str:
     """The value of a credential whose *variable name* is configuration.
 
@@ -158,7 +178,18 @@ def named_credential(name: str) -> str:
     environment wins, then `.env`. Reading only the former would miss a key that
     `scripts/setup.sh` wrote to `.env` and nobody exported, which is the normal
     way keys arrive here.
+
+    The name is re-checked here and not only at the endpoint that accepts it.
+    `routing.json` is a file on disk that survives restarts and is editable by
+    anything with write access, so a name that never passed validation can still
+    arrive at this function; the API check is the gate, this one is the wall.
     """
+    if not is_credential_env_name(name):
+        logger.warning(
+            "refusing to read {!r} as a model credential; see is_credential_env_name", name
+        )
+        return ""
+
     value = os.environ.get(name)
     if value:
         return value

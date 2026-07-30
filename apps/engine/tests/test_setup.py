@@ -14,6 +14,8 @@ knows what every key is and it must report only that they exist.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -314,3 +316,75 @@ def test_not_ready_when_there_is_no_footage_source(monkeypatch):
         assert "PEXELS_API_KEY" in body["missing_required"]
     finally:
         get_settings.cache_clear()
+
+
+# ── where `.env` is ─────────────────────────────────────────────────────────
+#
+# `env_path()` used to end in `Path(__file__).resolve().parents[4]`, which is a
+# fixed depth: it assumes this module sits five levels below the repository root.
+# True for a checkout (`<root>/apps/engine/engine/api/setup.py`), false in the
+# Docker image, where the engine is copied to `/app` and there are four parents in
+# total — so the index raised IndexError and took `GET /v1/setup` and
+# `PUT /v1/setup/keys` down with a 500 on every `--profile full` container. The
+# Setup screen is the first thing a new install opens, so the first thing that
+# install saw was a broken one.
+
+
+def _at_depth(monkeypatch, path):
+    """Run `env_path()` as if this module lived at `path`."""
+    monkeypatch.setattr(setup_api, "__file__", str(path))
+
+
+def test_env_path_survives_a_shallow_container_layout(monkeypatch, tmp_path):
+    """The regression: `/app/engine/api/setup.py`, four parents, no marker above it.
+
+    The assertion is only that a Path comes back. Which path is a judgement call
+    that depends on what the image looks like; *raising* is not a judgement call,
+    it is a 500 on the screen someone is using to enter their first API key.
+    """
+    _at_depth(monkeypatch, "/app/engine/api/setup.py")
+    monkeypatch.chdir(tmp_path)  # no .env here, so the walk is actually taken
+
+    result = setup_api.env_path()
+
+    assert isinstance(result, Path)
+    assert result.name == ".env"
+
+
+def test_env_path_puts_a_new_file_at_the_repository_root(monkeypatch, tmp_path):
+    """The checkout case, found by marker rather than by counting directories.
+
+    The root is where the engine's *second* env_file candidate (`../../.env`)
+    points, and therefore the only location both documented start-up directories
+    agree on — writing anywhere else is a save that reports success and changes
+    nothing.
+    """
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    module = root / "apps" / "engine" / "engine" / "api" / "setup.py"
+    module.parent.mkdir(parents=True)
+    _at_depth(monkeypatch, module)
+
+    elsewhere = tmp_path / "cwd"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    assert setup_api.env_path() == root / ".env"
+
+
+def test_env_path_still_prefers_an_existing_dotenv_in_the_working_directory(monkeypatch, tmp_path):
+    """The walk is the fallback, never the first answer.
+
+    `Settings.model_config` reads `./.env` before anything else, so a file that is
+    already there is the one the engine loads — and Save has to write to the file
+    the engine reads, whatever a marker higher up would suggest.
+    """
+    (tmp_path / ".git").mkdir()  # a marker that must not be preferred
+    (tmp_path / "sub").mkdir()
+    existing = tmp_path / "sub" / ".env"
+    existing.write_text("PEXELS_API_KEY=px\n", encoding="utf-8")
+
+    _at_depth(monkeypatch, tmp_path / "engine" / "api" / "setup.py")
+    monkeypatch.chdir(tmp_path / "sub")
+
+    assert setup_api.env_path() == existing.resolve()

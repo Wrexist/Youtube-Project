@@ -269,6 +269,16 @@ right. Per screen, as of today:
 | Calendar | mixed even when live: quota and bookings come from the engine, the draggable video tray is always `PENDING_VIDEOS` |
 | Analytics, Series, New channel | demo only, **no network call at all** — there is no series table, the Analytics API is unwired, and the channel-launch endpoint has no caller |
 
+Series and New channel used to ship five buttons wired to nothing, including both
+screens' single primary action: pressing the one prominent control did nothing at
+all — no navigation, no request, no message. That contradicted this codebase's own
+rule, written down in `queue/page.tsx`, that a button doing nothing is worse than no
+button. Pause, Resume and Edit are now deleted; "New series" and "Create series"
+remain as `disabled` controls carrying the reason ("Creating a series needs the
+series endpoint, which does not exist yet"), because they are what tells you what the
+screen is for. Disabled-and-explained is not the same lie as live-and-inert. When the
+series endpoint lands, these are the controls to re-enable.
+
 The fallback is not a flag or an env var: `get<T>()` in `apps/web/lib/engine.ts`
 returns `null` on any failure including a non-2xx, and each page does
 `const live = x !== null`. Consequences worth knowing: it also swallows a genuine

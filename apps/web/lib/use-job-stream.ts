@@ -17,7 +17,7 @@
  * event would be pure waste.
  */
 
-import { useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import type { JobEvent, JobStatus } from "@studio/contracts";
 
@@ -31,7 +31,29 @@ export interface JobStream {
   cost_usd: number;
 }
 
-type Action = { type: "event"; event: JobEvent } | { type: "error"; message: string };
+export interface JobStreamHandle extends JobStream {
+  /**
+   * Say "this job is running again" before the stream can.
+   *
+   * Only the caller knows a re-run was just accepted; the rebuilt EventSource
+   * takes a round-trip to say so, and everything gated on a terminal status —
+   * Publish, "Re-run from here" — must go back to its running state for that
+   * whole window, not just after the first frame lands.
+   */
+  markRunning: () => void;
+}
+
+type Action =
+  | { type: "event"; event: JobEvent }
+  | { type: "error"; message: string }
+  /**
+   * The job is running again for a reason the stream has not reported yet — a
+   * re-run the client just asked for. Without it the hook keeps the terminal
+   * status from the *previous* run until the rebuilt EventSource delivers its
+   * first frame, and for that window Publish stays enabled over a job whose
+   * stages are being regenerated underneath it (CLAUDE.md #3).
+   */
+  | { type: "running" };
 
 /**
  * The whole of this hook's behaviour, as a pure function.
@@ -42,6 +64,7 @@ type Action = { type: "event"; event: JobEvent } | { type: "error"; message: str
  */
 export function reduceJobStream(state: JobStream, action: Action): JobStream {
   if (action.type === "error") return { ...state, error: action.message };
+  if (action.type === "running") return { ...state, status: "running", error: null };
 
   const event = action.event;
   const stages = [...state.stages];
@@ -158,7 +181,7 @@ export function useJobStream(
   jobId: string | null,
   initial: Stage[] = [],
   attempt = 0,
-): JobStream {
+): JobStreamHandle {
   const [state, dispatch] = useReducer(reduceJobStream, {
     stages: initial,
     status: "connecting",
@@ -230,5 +253,7 @@ export function useJobStream(
     };
   }, [jobId, attempt]);
 
-  return state;
+  const markRunning = useCallback(() => dispatch({ type: "running" }), []);
+
+  return { ...state, markRunning };
 }

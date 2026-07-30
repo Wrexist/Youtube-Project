@@ -897,6 +897,41 @@ async def test_an_interrupted_publish_that_never_uploaded_says_so(asgi):
     publishing.CHANNELS.clear()
 
 
+async def test_a_failed_publish_that_uploaded_blocks_republishing(asgi):
+    """The status that was an unconditional exemption, and should never have been.
+
+    `UploadStage` completes, then `thumbnail_set`, `captions` or `playlist` fails —
+    a 50-unit call failing after a 1,600-unit one has succeeded — and the workflow
+    marks the whole job `failed`. The video is live. `failed` waved the next Publish
+    click straight through to a second upload of the same file.
+
+    Both halves are asserted here because only the pair is the behaviour: refuse by
+    default, and let `?force=true` through, or a publish whose upload genuinely died
+    halfway has no way to ship.
+    """
+    http, built = asgi
+    _finished_video_job()
+    _connect_channel()
+    dead, _fake = _published_job("pub")
+    dead["status"] = "failed"
+
+    async with http as client:
+        refused = await client.post("/v1/jobs/src/publish", json={})
+        assert refused.status_code == 409, refused.text
+        detail = refused.json()["detail"]
+        assert "yt-original" in detail, "the refusal should name the video that is already live"
+        assert built == [], "the video was uploaded a second time"
+
+        forced = await client.post("/v1/jobs/src/publish?force=true", json={})
+        assert forced.status_code == 202, forced.text
+        await _settle(forced.json()["job_id"])
+
+    assert [len(f.uploads) for f in built] == [1], "force did not reach the upload"
+
+    JOBS.clear()
+    publishing.CHANNELS.clear()
+
+
 async def test_force_is_what_admits_the_duplicate(asgi):
     """The escape hatch has to work, or a publish that died halfway strands a
     finished render with no way to ship it."""

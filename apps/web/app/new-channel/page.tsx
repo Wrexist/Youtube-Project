@@ -74,7 +74,15 @@ export default function NewChannelPage() {
             <Button variant="ghost" onClick={() => setResult(null)}>
               Start over
             </Button>
-            <Button>Create series</Button>
+            {/* Disabled rather than removed: it is the honest next step out of this
+                screen, and it lands with the series endpoint (KNOWN-ISSUES §5.5).
+                Live-and-inert would claim the series above had been created. */}
+            <Button
+              disabled
+              title="Creating these series needs the series endpoint, which does not exist yet."
+            >
+              Create series
+            </Button>
           </div>
         }
       />

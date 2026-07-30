@@ -10,12 +10,15 @@ from __future__ import annotations
 import asyncio
 import io
 import math
+import threading
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from proglog import ProgressBarLogger
 
 from engine.providers import images
 from engine.render import templates
@@ -27,6 +30,20 @@ ProgressFn = Callable[[float, str], Awaitable[None]]
 
 RESOLUTIONS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
 
+
+class RenderAborted(Exception):
+    """Raised inside the render thread when its abort event is set.
+
+    Cancelling a job cancelled the *coroutine*, which does nothing whatsoever to a
+    thread already inside `write_videofile` — MoviePy hands off to ffmpeg and does
+    not come back for minutes. So a cancelled render kept a CPU saturated and, worse,
+    kept holding its slot in `_render_slots`: `STUDIO_MAX_CONCURRENT_RENDERS` stopped
+    bounding anything the moment anyone pressed Cancel. Cooperative because there is
+    no other kind — the thread has to be asked, and it checks between beats and
+    before each encode.
+    """
+
+
 #: How many source clips may have an open reader at once before beats start being
 #: baked to intermediate files.
 #:
@@ -37,6 +54,10 @@ RESOLUTIONS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
 #: in every OOM. Below this many sources the whole thing fits comfortably and the
 #: extra encode below is not worth paying for.
 MAX_OPEN_SOURCES = 8
+
+#: The frame rate every encode in this module writes at. Named because `bake()`
+#: has to snap window boundaries onto it — see there.
+FPS = 30
 
 #: Cached rendered cues. Two, not one: a composite asks for the colour frame and the
 #: mask frame separately, and a cue on a boundary is asked for either side of it.
@@ -52,11 +73,15 @@ async def compose_video(
     aspect: str,
     job_id: str,
     on_progress: ProgressFn,
+    abort: threading.Event | None = None,
 ) -> Path:
     from engine.services.stock import download_all
 
+    abort = abort or threading.Event()
+
     await on_progress(0.05, "downloading footage")
     await download_all(clips)
+    _abort_check(abort)
 
     await on_progress(0.25, "composing")
     output = Path(get_settings().storage_root) / "tmp" / f"{job_id}.mp4"
@@ -65,12 +90,88 @@ async def compose_video(
     loop = asyncio.get_running_loop()
 
     def report(fraction: float, message: str) -> None:
-        """Bridge from the render thread back to the async event stream."""
-        asyncio.run_coroutine_threadsafe(on_progress(fraction, message), loop)
+        """Bridge from the render thread back to the async event stream.
 
-    await asyncio.to_thread(_render_sync, clips, beats, audio_path, cues, aspect, output, report)
+        Dropped once the render is aborting. The thread keeps running until its next
+        check point, and the updates it emits in that window are for a job the API
+        has already recorded as cancelled — appending them re-woke every SSE stream
+        with progress for a stopped render. `run_coroutine_threadsafe` is also
+        guarded, because the loop may be shutting down by the time this fires and
+        the resulting `RuntimeError` would surface as a render failure.
+        """
+        if abort.is_set():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(on_progress(fraction, message), loop)
+        except RuntimeError:  # loop closed or closing
+            logger.debug("dropped a render progress update for a closing loop")
+
+    # Held in its own task so the thread can be waited for even when the caller is
+    # cancelled: `to_thread` awaited directly would let cancellation unwind past a
+    # thread that is still inside ffmpeg, and whatever `finally` the caller uses to
+    # release its render slot would run while the encode was still going.
+    work = asyncio.create_task(
+        asyncio.to_thread(
+            _render_sync, clips, beats, audio_path, cues, aspect, output, report, abort
+        )
+    )
+    try:
+        await asyncio.shield(work)
+    except asyncio.CancelledError:
+        abort.set()
+        # Not `wait_for`: the point is to *not* return until the thread is gone.
+        # It checks between beats and before each encode, so this is bounded by one
+        # window encode at worst.
+        with suppress(Exception):
+            await work
+        raise
+    except BaseException:
+        # A failure inside the thread still leaves nothing else running, but an
+        # abort raised elsewhere must not orphan it.
+        abort.set()
+        raise
+
     await on_progress(1.0, "done")
     return output
+
+
+def _abort_check(abort: threading.Event | None) -> None:
+    """Raise if this render has been asked to stop. Called from both threads."""
+    if abort is not None and abort.is_set():
+        raise RenderAborted("render cancelled")
+
+
+class _AbortLogger(ProgressBarLogger):
+    """A proglog logger whose only job is to interrupt an encode in progress.
+
+    Checking the abort flag between beats is not enough on its own: one
+    `write_videofile` is most of a render's wall clock, and a cancel that lands
+    just after it starts would otherwise wait out the whole encode — measured at
+    26 seconds on a short test render, and minutes on a real one. MoviePy calls
+    into its logger once per written frame, which is the only interruption point
+    ffmpeg gives us from this side, so raising there stops it within a frame.
+
+    MoviePy's writer holds its subprocess in a context manager, so the exception
+    closes ffmpeg on the way out rather than orphaning it.
+    """
+
+    def __init__(self, abort: threading.Event) -> None:
+        super().__init__()
+        self._abort = abort
+
+    def bars_callback(self, bar, attr, value, old_value=None) -> None:  # noqa: ANN001
+        if self._abort.is_set():
+            raise RenderAborted("render cancelled")
+
+    @classmethod
+    def for_(cls, abort: threading.Event | None):
+        """The logger, or `None` — MoviePy's "no progress output" value.
+
+        `None` rather than an always-false logger so that a render with no abort
+        signal (a direct `_render_sync` call, most of the tests) behaves exactly as
+        it did before this existed.
+        """
+        return cls(abort) if abort is not None else None
 
 
 def _render_sync(
@@ -81,6 +182,7 @@ def _render_sync(
     aspect: str,
     output: Path,
     report: Callable[[float, str], None],
+    abort: threading.Event | None = None,
 ) -> None:
     # MoviePy 2.x. The 1.x `moviepy.editor` namespace is gone, and the mutator
     # methods were renamed (`subclip`→`subclipped`, `set_*`→`with_*`, and the
@@ -115,172 +217,218 @@ def _render_sync(
     scratch: list[Path] = []
     baked_upto = 0
 
-    def bake() -> None:
-        """Flatten the beats built since the last bake into one intermediate file.
-
-        The point is the `close()` at the end: an open `VideoFileClip` is an ffmpeg
-        subprocess that stays resident for as long as the final composite might read
-        from it, which used to be "until the encode finished". Writing the window out
-        and reopening it as one clip trades a second encode of that span for giving
-        every one of those subprocesses back.
-        """
-        nonlocal baked_upto
-        fresh = groups[baked_upto:]
-        if not fresh or not segments:
-            return
-
-        window_start = fresh[0][0]
-        window_end = max(start + clip.duration for start, clip in fresh)
-        composite = CompositeVideoClip(
-            [
-                ColorClip((width, height), color=(0, 0, 0), duration=window_end - window_start),
-                *[clip.with_start(start - window_start) for start, clip in fresh],
-            ],
-            size=(width, height),
-        ).with_duration(window_end - window_start)
-
-        path = output.parent / f"{output.stem}-w{len(scratch)}.mp4"
-        # Said out loud: a window encode is tens of seconds on a long-form render,
-        # and a progress view that sits on "beat 12" through all of it looks stuck.
-        report(
-            0.25 + 0.45 * len(groups) / max(len(beat_spans), 1),
-            f"consolidating beats {baked_upto + 1}-{len(groups)}",
-        )
-        # Fast and near-lossless: this file is read once by the final pass and then
-        # deleted, so encode time matters and a visually invisible generation loss
-        # does not. `medium`/default CRF here would roughly double the render.
-        composite.write_videofile(
-            str(path),
-            fps=30,
-            codec="libx264",
-            audio=False,
-            preset="ultrafast",
-            ffmpeg_params=["-crf", "18"],
-            threads=4,
-            logger=None,
-        )
-        composite.close()
-        for source in segments:
-            source.close()
-        segments.clear()
-        scratch.append(path)
-
-        groups[baked_upto:] = [(window_start, VideoFileClip(str(path)))]
-        baked_upto = len(groups)
-
-    for index, (start, end) in enumerate(beat_spans):
-        span = end - start
-        beat_clips = [c for c in clips if c["beat_index"] == index and c.get("path")]
-
-        built = []
-        per_clip = span / len(beat_clips) if beat_clips else span
-        for clip in beat_clips:
-            try:
-                source = VideoFileClip(clip["path"])
-            except Exception as exc:  # noqa: BLE001 — a bad download must not kill the render
-                logger.warning("skipping unreadable clip {}: {}", clip["path"], exc)
-                continue
-            # Dissolves overlap the timeline, so each clip has to carry the extra
-            # `fade_s` that the overlap eats. Without it the video finishes short
-            # of the narration and freezes on the last frame.
-            take = min(per_clip + fade_s, source.duration)
-            built.append(_fit(source.subclipped(0, take), width, height))
-
-        if not built:
-            # A beat with no usable footage used to be `continue`d, which silently
-            # shortened the timeline and dragged every later beat earlier. Beats are
-            # positioned absolutely now, so a `continue` no longer shifts anything —
-            # but it leaves the black base clip showing through for the whole span,
-            # which is what the log line here used to claim it was avoiding.
-            #
-            # So actually hold the previous shot: stretch the last group to run
-            # through this beat's end. `_cover_span` loops, so it reads as b-roll
-            # rather than as a freeze.
-            if groups:
-                prev_start, prev_group = groups[-1]
-                groups[-1] = (prev_start, _cover_span(prev_group, end - prev_start))
-                logger.warning(
-                    "beat {} has no usable footage; holding beat {}'s shot across it",
-                    index + 1,
-                    index,
-                )
-            else:
-                # Nothing to hold — this is the first beat. Black is the only honest
-                # option, and saying so beats claiming a shot that does not exist.
-                logger.warning(
-                    "beat {} has no usable footage and nothing precedes it; it will render black",
-                    index + 1,
-                )
-            continue
-
-        segments.extend(built)
-        styled = [
-            effects.style_segment(
-                segment, index=i, count=len(built), ken_burns=settings.ken_burns, fade_s=fade_s
-            )
-            for i, segment in enumerate(built)
-        ]
-        group = (
-            styled[0]
-            if len(styled) == 1
-            else concatenate_videoclips(
-                styled, method="compose", padding=effects.concat_padding(len(styled), fade_s)
-            )
-        )
-        groups.append((start, _cover_span(group, span)))
-        report(0.25 + 0.45 * (index + 1) / max(len(beat_spans), 1), f"beat {index + 1}")
-
-        # At a beat boundary, never inside one: a beat's clips are concatenated with
-        # negative padding for the dissolve, and splitting that across two files
-        # would put a hard cut in the middle of a transition.
-        if window and len(segments) >= window:
-            bake()
-
-    # Whatever is left over after the last bake stays open, deliberately: it is
-    # fewer than `window` sources by construction, so it is already inside the
-    # budget, and baking it would pay for an encode that saves nothing.
-
-    if not groups:
-        raise RuntimeError("no usable clips after download")
-
-    report(0.72, "placing beats")
-    # Each beat is *positioned* at its own start rather than butted onto the end of
-    # the previous one. Concatenation assumed every beat's footage exactly filled its
-    # span; when a source was shorter than its slot — routine, since stock clips can
-    # be as short as 3s while a slot can be 5s or more — the timeline came up short,
-    # every later beat played early against the narration, and `.with_duration(total)`
-    # padded the difference with transparent frames that render as black. Measured on
-    # a 10s narration with 2s sources: 5 seconds of black and beat 2 playing under
-    # beat 1's audio.
-    video = CompositeVideoClip(
-        [ColorClip((width, height), color=(0, 0, 0), duration=total)]
-        + [group.with_start(start) for start, group in groups],
-        size=(width, height),
-    ).with_duration(total)
-
-    track = bgm.resolve() if bgm.should_mix(settings.bgm_volume) else None
-    video = video.with_audio(
-        bgm.mix(narration, duration=total, track=track, volume=settings.bgm_volume)
-    )
-
-    report(0.75, "burning subtitles")
-    # MoviePy 2 requires an explicit font path for TextClip — it no longer falls back
-    # to an ImageMagick-resolved family name, and omitting it raises at construction.
-    font = fonts.cached_resolve(settings.subtitle_font)
-    overlay = _subtitle_overlay(cues, width=width, height=height, font=font, duration=total)
-
-    final = CompositeVideoClip([video, overlay], size=(width, height)) if overlay else video
-
-    report(0.85, "encoding")
+    # Everything from here is inside the try, so the cleanup below runs on *any*
+    # exit — including `RenderAborted`. It used to guard only the final encode, so a
+    # cancel during the beat loop escaped with every source reader still open and
+    # every baked window still on disk: a handful of orphaned ffmpeg processes and
+    # half a gigabyte in `storage/tmp` per cancelled render.
+    final = None
     try:
+
+        def bake() -> None:
+            """Flatten the beats built since the last bake into one intermediate file.
+
+            The point is the `close()` at the end: an open `VideoFileClip` is an ffmpeg
+            subprocess that stays resident for as long as the final composite might read
+            from it, which used to be "until the encode finished". Writing the window out
+            and reopening it as one clip trades a second encode of that span for giving
+            every one of those subprocesses back.
+            """
+            nonlocal baked_upto
+            fresh = groups[baked_upto:]
+            if not fresh or not segments:
+                return
+
+            window_start = fresh[0][0]
+            window_end = max(start + clip.duration for start, clip in fresh)
+
+            # Snap the window's length up to a whole frame before compositing.
+            #
+            # A window is written out at 30fps, so ffmpeg can only encode a whole number
+            # of frames: a span of 3.0433s is 91.3 frames, becomes 91, and the reopened
+            # clip is 10ms short of the beat boundary where the *next* window starts.
+            # Nothing covers those 10ms, so the black `ColorClip` base of the final
+            # composite shows through — a hard black flash at every window seam, roughly
+            # one every seven beats on a long render, which reads as corrupt footage
+            # rather than as an arithmetic error.
+            #
+            # Up rather than to-nearest, so the snapped window always reaches *past* the
+            # next window's start and the two overlap by under a frame instead of
+            # risking a gap. The next window is later in the final composite's list and
+            # therefore painted over the overlap; a gap has nothing to paint at all.
+            span = max(math.ceil((window_end - window_start) * FPS), 1) / FPS
+            window_end = window_start + span
+
+            composite = CompositeVideoClip(
+                [
+                    ColorClip((width, height), color=(0, 0, 0), duration=span),
+                    *[clip.with_start(start - window_start) for start, clip in fresh],
+                ],
+                size=(width, height),
+            ).with_duration(span)
+
+            path = output.parent / f"{output.stem}-w{len(scratch)}.mp4"
+            # Said out loud: a window encode is tens of seconds on a long-form render,
+            # and a progress view that sits on "beat 12" through all of it looks stuck.
+            report(
+                0.25 + 0.45 * len(groups) / max(len(beat_spans), 1),
+                f"consolidating beats {baked_upto + 1}-{len(groups)}",
+            )
+            # The last cheap moment to stop: a window encode is tens of seconds and
+            # nothing interrupts ffmpeg once it has started.
+            _abort_check(abort)
+            # Registered for cleanup *before* it is written, not after: an encode
+            # interrupted by a cancel leaves a partial file behind, and one recorded
+            # only on success is one the `finally` never hears about — so every
+            # cancelled render left a window in `storage/tmp` forever.
+            scratch.append(path)
+            # Fast and near-lossless: this file is read once by the final pass and then
+            # deleted, so encode time matters and a visually invisible generation loss
+            # does not. `medium`/default CRF here would roughly double the render.
+            composite.write_videofile(
+                str(path),
+                fps=FPS,
+                codec="libx264",
+                audio=False,
+                preset="ultrafast",
+                ffmpeg_params=["-crf", "18"],
+                threads=4,
+                logger=_AbortLogger.for_(abort),
+            )
+            composite.close()
+            for source in segments:
+                source.close()
+            segments.clear()
+
+            # Forced back to the intended span rather than trusting the file. Snapping
+            # above makes the *request* a whole number of frames; this makes the result
+            # one, because an encoder that drops a trailing frame — routine with
+            # `ultrafast` and a fractional frame count — reopens as a clip 33ms short,
+            # which is the same black seam by another route.
+            groups[baked_upto:] = [(window_start, _cover_file_span(VideoFileClip(str(path)), span))]
+            baked_upto = len(groups)
+
+        for index, (start, end) in enumerate(beat_spans):
+            # Between beats, which is the only granularity available: within one beat
+            # the work is a download-free `subclipped` and a couple of effects, and the
+            # long waits are the encodes, which have their own check.
+            _abort_check(abort)
+            span = end - start
+            beat_clips = [c for c in clips if c["beat_index"] == index and c.get("path")]
+
+            built = []
+            per_clip = span / len(beat_clips) if beat_clips else span
+            for clip in beat_clips:
+                try:
+                    source = VideoFileClip(clip["path"])
+                except Exception as exc:  # noqa: BLE001 — a bad download must not kill the render
+                    logger.warning("skipping unreadable clip {}: {}", clip["path"], exc)
+                    continue
+                # Dissolves overlap the timeline, so each clip has to carry the extra
+                # `fade_s` that the overlap eats. Without it the video finishes short
+                # of the narration and freezes on the last frame.
+                take = min(per_clip + fade_s, source.duration)
+                built.append(_fit(source.subclipped(0, take), width, height))
+
+            if not built:
+                # A beat with no usable footage used to be `continue`d, which silently
+                # shortened the timeline and dragged every later beat earlier. Beats are
+                # positioned absolutely now, so a `continue` no longer shifts anything —
+                # but it leaves the black base clip showing through for the whole span,
+                # which is what the log line here used to claim it was avoiding.
+                #
+                # So actually hold the previous shot: stretch the last group to run
+                # through this beat's end. `_cover_span` loops, so it reads as b-roll
+                # rather than as a freeze.
+                if groups:
+                    prev_start, prev_group = groups[-1]
+                    groups[-1] = (prev_start, _cover_span(prev_group, end - prev_start))
+                    logger.warning(
+                        "beat {} has no usable footage; holding beat {}'s shot across it",
+                        index + 1,
+                        index,
+                    )
+                else:
+                    # Nothing to hold — this is the first beat. Black is the only honest
+                    # option, and saying so beats claiming a shot that does not exist.
+                    logger.warning(
+                        "beat {} has no usable footage and nothing precedes it; "
+                        "it will render black",
+                        index + 1,
+                    )
+                continue
+
+            segments.extend(built)
+            styled = [
+                effects.style_segment(
+                    segment, index=i, count=len(built), ken_burns=settings.ken_burns, fade_s=fade_s
+                )
+                for i, segment in enumerate(built)
+            ]
+            group = (
+                styled[0]
+                if len(styled) == 1
+                else concatenate_videoclips(
+                    styled, method="compose", padding=effects.concat_padding(len(styled), fade_s)
+                )
+            )
+            groups.append((start, _cover_span(group, span)))
+            report(0.25 + 0.45 * (index + 1) / max(len(beat_spans), 1), f"beat {index + 1}")
+
+            # At a beat boundary, never inside one: a beat's clips are concatenated with
+            # negative padding for the dissolve, and splitting that across two files
+            # would put a hard cut in the middle of a transition.
+            if window and len(segments) >= window:
+                bake()
+
+        # Whatever is left over after the last bake stays open, deliberately: it is
+        # fewer than `window` sources by construction, so it is already inside the
+        # budget, and baking it would pay for an encode that saves nothing.
+
+        if not groups:
+            raise RuntimeError("no usable clips after download")
+
+        report(0.72, "placing beats")
+        # Each beat is *positioned* at its own start rather than butted onto the end of
+        # the previous one. Concatenation assumed every beat's footage exactly filled its
+        # span; when a source was shorter than its slot — routine, since stock clips can
+        # be as short as 3s while a slot can be 5s or more — the timeline came up short,
+        # every later beat played early against the narration, and `.with_duration(total)`
+        # padded the difference with transparent frames that render as black. Measured on
+        # a 10s narration with 2s sources: 5 seconds of black and beat 2 playing under
+        # beat 1's audio.
+        video = CompositeVideoClip(
+            [ColorClip((width, height), color=(0, 0, 0), duration=total)]
+            + [group.with_start(start) for start, group in groups],
+            size=(width, height),
+        ).with_duration(total)
+
+        track = bgm.resolve() if bgm.should_mix(settings.bgm_volume) else None
+        video = video.with_audio(
+            bgm.mix(narration, duration=total, track=track, volume=settings.bgm_volume)
+        )
+
+        report(0.75, "burning subtitles")
+        # MoviePy 2 requires an explicit font path for TextClip — it no longer falls back
+        # to an ImageMagick-resolved family name, and omitting it raises at construction.
+        font = fonts.cached_resolve(settings.subtitle_font)
+        overlay = _subtitle_overlay(cues, width=width, height=height, font=font, duration=total)
+
+        final = CompositeVideoClip([video, overlay], size=(width, height)) if overlay else video
+
+        report(0.85, "encoding")
+        # The final encode is the long one. Checked here so a cancel that arrived
+        # during subtitle burn-in is honoured before ffmpeg starts, and interrupted
+        # by `_AbortLogger` once it has.
+        _abort_check(abort)
         final.write_videofile(
             str(output),
-            fps=30,
+            fps=FPS,
             codec="libx264",
             audio_codec="aac",
             threads=4,
             preset="medium",
-            logger=None,
+            logger=_AbortLogger.for_(abort),
         )
     finally:
         # `overlay` is deliberately absent: `Clip.close()` is a documented no-op for
@@ -292,8 +440,14 @@ def _render_sync(
         # because their files have to go either way: a failed encode that leaves half
         # a gigabyte of intermediates behind in `storage/tmp` is a slow disk leak
         # nobody would connect back to this.
-        for clip in (*segments, *(g for _, g in groups[:baked_upto]), narration, final):
-            clip.close()
+        #
+        # `final` is None when the run stopped before the composite was built — an
+        # abort during the beat loop — and the ungrouped tail of `groups` is closed
+        # here too, since an abort can leave beats that were never baked.
+        for clip in (*segments, *(g for _, g in groups), narration, final):
+            if clip is not None:
+                with suppress(Exception):
+                    clip.close()
         for path in scratch:
             path.unlink(missing_ok=True)
 
@@ -418,6 +572,27 @@ def _cover_span(group, span: float):
     if group.duration >= span - 0.02:
         return group.with_duration(span)
     return group.with_effects([Loop(duration=span)]).with_duration(span)
+
+
+def _cover_file_span(clip, span: float):
+    """`_cover_span` for a clip backed by a *file*, with no tolerance.
+
+    Separate from `_cover_span` because of the one thing that differs: reading a
+    file-backed clip past its last frame does not hold the last frame, it returns
+    black. `_cover_span` treats a shortfall under 20ms as "close enough" and simply
+    calls `with_duration(span)`, which is right for the in-memory composites it is
+    used on and is precisely wrong here — a window file that reports 3.03s asked for
+    3.0333s yields one black frame at the seam, the exact defect this is meant to
+    remove.
+
+    So: truncate when long, loop when short, never extend. The worst case is one
+    repeated frame at a window boundary instead of one black one.
+    """
+    from moviepy.video.fx import Loop
+
+    if clip.duration >= span:
+        return clip.with_duration(span)
+    return clip.with_effects([Loop(duration=span)]).with_duration(span)
 
 
 def _beat_spans(beats: list, total: float) -> list[tuple[float, float]]:

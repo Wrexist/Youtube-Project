@@ -66,7 +66,9 @@ async def lifespan(_: FastAPI):
             raise
     else:
         logger.warning("STUDIO_PERSIST=false — state is in-process only and dies with it")
-        ledger.persist = False
+        # The ledger reads STUDIO_PERSIST itself. Pinning it here was a leak: it is
+        # a process-wide singleton, so a scratch instance's False survived into
+        # anything that ran afterwards with persistence genuinely on.
 
     yield
 
@@ -328,11 +330,53 @@ def _project(job: dict, event: dict) -> None:
         entry["summary"] = event["summary"]
 
 
+#: How many consecutive failed re-subscriptions before the relay gives up. At the
+#: capped backoff below that is a little over four minutes of trying, which
+#: comfortably covers a Redis restart without leaving a task spinning for the
+#: lifetime of the process.
+_RELAY_MAX_ATTEMPTS = 10
+_RELAY_MAX_BACKOFF_S = 30
+
+#: How long an SSE subscriber waits on the in-process wake signal before re-reading
+#: the row. Only for worker-owned jobs, where the signal can stop arriving without
+#: the job having stopped — see `stream_job`.
+_ROW_POLL_S = 2.0
+
+#: Statuses that mean the row will not change again.
+_TERMINAL = ("completed", "failed", "cancelled")
+
+
+async def _row_finished(job_id: str) -> bool:
+    """Does the job's row already hold a terminal status?
+
+    The relay's answer to "is there any point reconnecting". Failure to read is
+    reported as "not finished", because retrying a subscription is the cheaper
+    mistake than abandoning a live render's progress.
+    """
+    if not get_settings().persist:
+        return False
+    try:
+        fresh = (await repository.reload_jobs([job_id], video.get)).get(job_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("could not read job {}'s row while reconnecting its relay", job_id)
+        return False
+    return fresh is not None and fresh.get("status") in _TERMINAL
+
+
 async def _relay(job_id: str) -> None:
     """Mirror a worker's events into this process's log so SSE works unchanged.
 
     Subscribers read `job["events"]` by cursor and know nothing about where the
     work runs. Appending here keeps that true for both execution paths.
+
+    Reconnecting, because the subscription is the only thing carrying a running
+    render's progress into this process and it is not durable: Redis restarting, a
+    dropped socket or an idle timeout ended `listen()` without a `__done__`, and
+    the relay simply returned. The render carried on for another ten minutes with
+    nothing watching, every open SSE stream parked on `waiting.wait()`, and the
+    mirror answered `running` until the API was restarted. Between attempts the row
+    is consulted — if the job has already finished there is nothing left to
+    subscribe to, and reconnecting forever against a dead job would be its own leak.
     """
     import json
 
@@ -340,25 +384,61 @@ async def _relay(job_id: str) -> None:
 
     job = JOBS[job_id]
     pool = None
+    finished = False
+    attempt = 0
     try:
-        pool = await create_pool(worker.redis_settings())
-        pubsub = pool.pubsub()
-        await pubsub.subscribe(worker.CHANNEL.format(job_id))
+        while not finished:
+            try:
+                if pool is None:
+                    pool = await create_pool(worker.redis_settings())
+                pubsub = pool.pubsub()
+                await pubsub.subscribe(worker.CHANNEL.format(job_id))
+                # Reset only once a subscription is actually established, so the
+                # backoff measures consecutive *failures* rather than reconnections.
+                attempt = 0
 
-        async for message in pubsub.listen():
-            if message.get("type") != "message":
-                continue  # the subscribe confirmation, not an event
-            event = json.loads(message["data"])
-            if event.get("type") == "__done__":
+                async for message in pubsub.listen():
+                    if message.get("type") != "message":
+                        continue  # the subscribe confirmation, not an event
+                    event = json.loads(message["data"])
+                    if event.get("type") == "__done__":
+                        finished = True
+                        break
+                    job["events"].append(event)
+                    _project(job, event)
+                    _wake(job)
+
+                with suppress(Exception):
+                    await pubsub.unsubscribe()
+                    await pubsub.aclose()
+            except asyncio.CancelledError:
+                # `cancel_job` cancels this task on purpose; retrying would fight it.
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("relay for job {} lost its subscription ({})", job_id, exc)
+                if pool is not None:
+                    with suppress(Exception):
+                        await pool.aclose()
+                    pool = None
+
+            if finished:
                 break
-            job["events"].append(event)
-            _project(job, event)
-            _wake(job)
+            if await _row_finished(job_id):
+                # The worker published `__done__` while this was reconnecting, or
+                # died after writing a terminal status. Either way there is nothing
+                # more to hear; the `finally` below reads the row for the outcome.
+                break
 
-        await pubsub.unsubscribe()
-        await pubsub.aclose()
-    except Exception:  # noqa: BLE001
-        logger.exception("relay for job {} stopped", job_id)
+            attempt += 1
+            if attempt > _RELAY_MAX_ATTEMPTS:
+                logger.error(
+                    "giving up on the event relay for job {} after {} attempts; "
+                    "its status will be read from the row",
+                    job_id,
+                    _RELAY_MAX_ATTEMPTS,
+                )
+                break
+            await asyncio.sleep(min(2**attempt, _RELAY_MAX_BACKOFF_S))
     finally:
         if pool is not None:
             with suppress(Exception):
@@ -405,8 +485,19 @@ def _needs_resync(job: dict) -> bool:
     after a restart that status is the one thing standing between a re-run and a
     second worker on the same job. The worker overwrites it at its next stage
     boundary; re-reading is how this process finds out.
+
+    A *finished* follower is no follower. `task is None` alone missed the case that
+    matters most: the relay dies — Redis restarts, the worker is killed, the
+    subscription drops — and leaves a task object that is `done()`. Nothing was
+    following the job any more, but this said otherwise, so the read endpoints kept
+    serving a mirror frozen at whatever the last event said. A render that finished
+    perfectly well answered `running` forever and `POST /publish` refused it with
+    409 until the API was restarted.
     """
-    return job.get("status") in ("running", "interrupted", "cancelled") and job.get("task") is None
+    if job.get("status") not in ("running", "interrupted", "cancelled"):
+        return False
+    task = job.get("task")
+    return task is None or task.done()
 
 
 def _worker_owned(job: dict) -> bool:
@@ -475,6 +566,12 @@ async def _run_job(job_id: str, start_from: str | None = None) -> None:
     job["error"] = None
 
     async def emit(event: dict) -> None:
+        if job.get("status") in _TERMINAL and event["type"] == "stage.progress":
+            # The render thread keeps reporting until its next check point, and a
+            # cancelled job's stream had already emitted `stream.closed`. Appending
+            # progress after that re-woke every subscriber with news about a job the
+            # UI has finished with.
+            return
         # The event log is the single source of truth. Subscribers read it by
         # cursor, so one append serves every viewer exactly once — see stream_job.
         job["events"].append(event)
@@ -697,8 +794,17 @@ async def stream_job(job_id: str) -> EventSourceResponse:
     subscriber connected arrived twice; and because a queue hands each item to
     exactly one consumer, two open tabs split the stream between them and both
     rendered an incomplete pipeline.
+
+    A stream opened against a stale mirror converges on the row rather than
+    trusting the signal. `waiting.wait()` alone assumed something in *this* process
+    would eventually fire it, which is true for an in-process job and not for a
+    worker-run one: if the relay died, nothing ever wakes the stream and the tab
+    spins on a job that finished ten minutes ago. For worker-owned jobs the wait is
+    bounded and the row is re-read on each timeout.
     """
     job = _require(job_id)
+    if _needs_resync(job):
+        await _resync([job_id])
 
     async def generator():
         cursor = 0
@@ -724,7 +830,15 @@ async def stream_job(job_id: str) -> EventSourceResponse:
                 }
                 return
 
-            await waiting.wait()
+            if _worker_owned(job):
+                # Bounded, then re-read. The row is the only thing that can tell
+                # this process a worker-run job has ended once the relay is gone.
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(waiting.wait(), _ROW_POLL_S)
+                if _needs_resync(job):
+                    await _resync([job_id])
+            else:
+                await waiting.wait()
 
     return EventSourceResponse(generator())
 
@@ -802,6 +916,13 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
         )
 
     # Refuse before the spend, not after. An upload is 1,600 of 10,000 daily units.
+    #
+    # Re-read first: the worker process does the uploading, so this process's cache
+    # is exactly the one that does not see the spend. `UploadStage` reserves
+    # atomically further down and is the real ceiling; this is the early, honest
+    # refusal, and refusing on a stale cache would either wave through an upload
+    # there is no room for or block one there is.
+    await ledger.refresh()
     if not ledger.can_afford("videos.insert"):
         raise HTTPException(
             429,
@@ -889,27 +1010,30 @@ def _uploaded_video_id(job: dict) -> str:
 def _existing_publish(source_job_id: str) -> tuple[str, str] | None:
     """A publish job for this source that must block another publish.
 
-    Blocking is the default and `failed` is the only unconditional exemption —
-    that is the case `force` exists for, and refusing it would strand a video
-    whose upload died halfway.
+    Blocking is the default. `failed` and `cancelled` are exempt only while the
+    upload has *not* landed — that is the case `force` exists for, and refusing it
+    would strand a video whose upload died halfway.
 
     This used to test for `("running", "completed")`, which is not the complement
     of "failed": a publish job that was mid-upload when the process died comes back
     from `load_jobs` as **`interrupted`**, and a publish job cancelled after its
     upload landed is **`cancelled`** — `cancel_job` explicitly accepts an
-    interrupted job, so cancel-then-republish is an ordinary operator move. Both
-    walked straight through the gate and uploaded the same video again: 1,600 more
-    quota units and a duplicate public video, which is exactly what this exists to
-    stop. A cancelled publish that never got as far as uploading is the one case
-    where re-publishing is the right answer, so that one still passes.
+    interrupted job, so cancel-then-republish is an ordinary operator move.
+
+    The third case is **failed-after-upload**, and it is the easiest one to hit:
+    `UploadStage` goes DONE and then a *later* stage of the publish workflow —
+    thumbnail, captions, playlist — fails, which fails the whole job. The video is
+    live on YouTube and the 1,600 units are spent, but `failed` waved the re-publish
+    straight through and uploaded it a second time. All three now fall through to
+    the `_upload_landed` 409, which says what happened and points at `?force=true`.
+    A publish that never got as far as uploading is the one case where re-publishing
+    is the right answer, so those still pass.
     """
     for publish_id, job in JOBS.items():
         if job.get("inputs", {}).get("source_job_id") != source_job_id:
             continue
         status = job.get("status")
-        if status == "failed":
-            continue
-        if status == "cancelled" and not _upload_landed(job):
+        if status in ("failed", "cancelled") and not _upload_landed(job):
             continue
         return publish_id, str(status)
     return None
@@ -1104,6 +1228,16 @@ async def cancel_job(job_id: str) -> dict:
         # Cancelling a finished job would rewrite a real outcome with a false one.
         return {"status": job["status"], "note": "already finished"}
 
+    if not job.get("enqueued"):
+        # Before the cancel below, not after: `task.cancel()` unwinds the coroutine
+        # but the render is in a thread that has to be *asked*, and `compose_video`
+        # will not return until that thread has gone. Setting the flag first is what
+        # makes the await below finish in seconds instead of at the end of the encode.
+        from engine.workflows.media import abort_render
+
+        if abort_render(job_id):
+            logger.info("asked job {}'s render thread to stop", job_id)
+
     task = job.get("task")
     if task and not task.done() and not job.get("enqueued"):
         # Only the in-process path has a task worth cancelling. For a worker-run
@@ -1118,10 +1252,24 @@ async def cancel_job(job_id: str) -> dict:
             await task
 
     job["status"] = "cancelled"
-    job["events"].append({"type": "workflow.cancelled", "job_id": job_id})
+    event = {"type": "workflow.cancelled", "job_id": job_id}
+    job["events"].append(event)
     # Load-bearing: this is what lets the SSE generator notice and close.
     _wake(job)
-    await _persist(job)
+
+    if _worker_owned(job) or job.get("enqueued"):
+        # A status-only write, because this process is not the one doing the work.
+        # `_persist` would push the mirror's *whole* state — all-PENDING stages and
+        # a zero cost, since the worker's stage outputs never leave the worker — over
+        # a row that holds real finished stages. Cancelling a render at stage twelve
+        # therefore erased eleven completed stages and the money they cost, and left
+        # a job nothing could resume.
+        try:
+            await repository.update_job_status(job_id, "cancelled", event)
+        except Exception:  # noqa: BLE001 — the in-memory cancel already stands
+            logger.exception("could not record the cancellation of job {}", job_id)
+    else:
+        await _persist(job)
 
     if job.get("enqueued"):
         # A job running in the worker process is not reachable by cancelling a local

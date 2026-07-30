@@ -272,12 +272,70 @@ async def save_job(job: dict) -> None:
         row.workflow = job["workflow"].name
         row.status = job["status"]
         row.inputs = _jsonable(job.get("inputs", {}))
-        row.states = dump_states(job.get("states", {}))
-        row.events = job.get("events", [])
-        row.cost_usd = _cost_of(job)
+
+        states = dump_states(job.get("states", {}))
+        if job.get("enqueued") and _is_pristine(states) and not _is_pristine(row.states or {}):
+            # Belt and braces for the API process's mirror of a *worker* job. It
+            # never executes the workflow, so its `states` stay all-PENDING while
+            # the worker writes the real ones — and a full save from this side
+            # replaced a row holding six finished stages with a blank one, which
+            # makes the job unresumable and zeroes its recorded cost. The caller
+            # that used to do this (`cancel_job`) now writes through
+            # `update_job_status`; this is what catches the next one.
+            logger.warning(
+                "refusing to blank job {}'s stages from a worker-job mirror; writing status only",
+                job["id"],
+            )
+        else:
+            row.states = states
+            row.cost_usd = _cost_of(job)
+
+        # Only ever forward, for the same reason `main._resync` only grows its log:
+        # the worker's row may already carry events this mirror never saw.
+        events = job.get("events", [])
+        if len(events) >= len(row.events or []):
+            row.events = events
+
         row.error = job.get("error", "") or ""
         row.source_job_id = job.get("inputs", {}).get("source_job_id")
         row.updated_at = datetime.now(UTC)
+
+
+def _is_pristine(states: dict) -> bool:
+    """True when no stage in this map has started. An empty map counts."""
+    return all(
+        str((state or {}).get("status", "pending")) == StageStatus.PENDING.value
+        for state in states.values()
+    )
+
+
+async def update_job_status(job_id: str, status: str, extra_event: dict | None = None) -> bool:
+    """Write a job's status, and optionally append one event. Nothing else.
+
+    For the case where this process knows the *outcome* but not the work:
+    cancelling a job the render worker is executing. A full `save_job` there wrote
+    the API's pristine mirror — no stage outputs, zero cost — straight over the
+    worker's row, so a cancel at stage twelve threw away eleven finished stages and
+    the money they cost. The narrow write leaves `states`, `cost_usd` and the
+    worker's own events exactly as they are.
+
+    Returns False when there is no row to update, so the caller can tell "wrote it"
+    from "there was nothing there".
+    """
+    if not _persistence_enabled():
+        return False
+    async with session() as s:
+        row = await s.get(Job, job_id)
+        if row is None:
+            return False
+        row.status = status
+        if extra_event is not None:
+            # Reassigned rather than appended in place: `events` is a JSON column
+            # and SQLAlchemy does not track mutation of the list it handed back, so
+            # an in-place append is simply not written.
+            row.events = [*(row.events or []), extra_event]
+        row.updated_at = datetime.now(UTC)
+        return True
 
 
 def _cost_of(job: dict) -> float:
@@ -495,8 +553,19 @@ async def save_channel(key: str, creds) -> None:
             s.add(row)
         row.channel_id = creds.channel_id
         row.refresh_token_encrypted = creds.refresh_token_encrypted
-        row.access_token = creds.access_token
-        row.expires_at = creds.expires_at
+        # The access token is deliberately *not* written. CLAUDE.md #4 keeps
+        # secrets out of anywhere they are not encrypted, and this column was
+        # plaintext OAuth — a live credential for the channel, sitting in a table
+        # next to the refresh token that is encrypted precisely because it is one.
+        #
+        # Nothing is lost by dropping it. `save_channel` is not called after
+        # `refresh()`, so the stored value was already stale inside the hour, and
+        # `load_channels` restoring a dead token is indistinguishable from restoring
+        # none: `is_fresh` says no and the provider refreshes on first use. The
+        # columns are left in place and cleared rather than migrated away, so a row
+        # written by an older build stops carrying a token the moment it is saved.
+        row.access_token = ""
+        row.expires_at = None
 
 
 async def load_channels() -> dict:
@@ -509,13 +578,15 @@ async def load_channels() -> dict:
     for row in rows:
         out[row.key] = Credentials(
             refresh_token_encrypted=row.refresh_token_encrypted,
-            access_token=row.access_token,
-            # Normalised like `load_jobs` and `load_schedule` do, and for the same
-            # reason: SQLite hands back a naive datetime, and `Credentials.is_fresh`
-            # compares it with `datetime.now(UTC)` — which raises TypeError, not
-            # "the token is stale", so the refresh that would have healed it never
-            # ran. Every publish after a restart died on the comparison.
-            expires_at=_aware(row.expires_at),
+            # Never read back, even when an old row still holds one — see
+            # `save_channel`. Restoring nothing makes `is_fresh` False, which sends
+            # the first publish through `refresh()` and heals the credential from
+            # the encrypted refresh token, the only thing worth persisting.
+            #
+            # (This also disposes of the reason `expires_at` needed normalising to
+            # an aware datetime here: with no token to date, nothing compares it.)
+            access_token="",
+            expires_at=None,
             channel_id=row.channel_id,
         )
     logger.info("restored {} channel(s)", len(out))

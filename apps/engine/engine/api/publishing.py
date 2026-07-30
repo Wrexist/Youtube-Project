@@ -254,6 +254,9 @@ async def list_channels() -> dict:
 
 @router.get("/quota")
 async def quota() -> QuotaResponse:
+    # The worker uploads, so it is the process that spends. Without this the screen
+    # shows whatever this process happened to book since it started.
+    await ledger.refresh()
     return QuotaResponse(
         day=quota_day().isoformat(),
         limit=ledger.limit,
@@ -270,6 +273,7 @@ async def quota() -> QuotaResponse:
 
 @router.get("/calendar")
 async def calendar() -> CalendarResponse:
+    await ledger.refresh()
     return CalendarResponse(
         scheduled=[ScheduledVideo(video_id=vid, at=at.isoformat()) for vid, at in SCHEDULE.items()],
         quota_by_day={d.isoformat(): v for d, v in ledger.usage_by_day().items()},
@@ -286,6 +290,9 @@ async def slots(
     days: int = Query(14, ge=1, le=90),
 ) -> dict:
     """Ranked publish times, so the calendar can show *why* a slot is good."""
+    # Slot ranking refuses days that are already over budget, so it needs the
+    # worker's spend as much as the quota screen does.
+    await ledger.refresh()
     profile = AudienceProfile()
     ranked = candidate_slots(datetime.now(UTC), days, profile)[:40]
     return {
@@ -331,6 +338,7 @@ async def auto(body: AutoScheduleRequest) -> dict:
     Returns a *plan*, and does not apply it. Scheduling a month of uploads is exactly
     the kind of thing that should be reviewed before it happens.
     """
+    await ledger.refresh()
     profile = AudienceProfile()
     plan = auto_schedule(
         # Straight through now that `videos` is typed: the hand-rolled `v["id"]`,
@@ -390,6 +398,8 @@ async def apply_plan(body: ApplyRequest) -> dict:
     request: a fourteen-video plan with one bad slot should book thirteen and say
     which one it did not.
     """
+    await ledger.refresh()
+
     planned: list[tuple[str, datetime]] = []
     skipped: list[dict] = []
     #: Permitted, but worth saying — two uploads close enough to split their own

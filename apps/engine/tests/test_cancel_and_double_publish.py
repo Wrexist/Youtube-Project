@@ -119,11 +119,60 @@ def test_a_completed_publish_also_blocks():
     assert main_mod._existing_publish("src") is not None
 
 
-def test_a_failed_publish_does_not_block_a_retry():
-    """Refusing here would strand a video whose upload died halfway."""
+def _publish_job(status: str, *, uploaded: bool) -> dict:
+    """A publish job for `src`, with the upload stage in a stated position.
+
+    Stated, because that is the whole distinction `_existing_publish` turns on and
+    the tests below used to leave it to `states` being absent — which reads as "the
+    upload has not landed" only by accident, and would keep reading that way if the
+    check moved onto the job status again.
+    """
+    from engine.workflows import video
+    from engine.workflows.base import Provenance, StageOutput, StageStatus
+
+    states = video.get("publish").initial_states()  # every stage PENDING
+    if uploaded:
+        states["upload"].status = StageStatus.DONE
+        states["upload"].output = StageOutput(value="yt-original", provenance=Provenance())
+
     JOBS.clear()
-    JOBS["pub"] = {"id": "pub", "status": "failed", "inputs": {"source_job_id": "src"}}
+    JOBS["pub"] = {
+        "id": "pub",
+        "status": status,
+        "inputs": {"source_job_id": "src"},
+        "states": states,
+    }
+    return JOBS["pub"]
+
+
+def test_a_failed_publish_that_never_uploaded_does_not_block_a_retry():
+    """Refusing here would strand a video whose publish died *before* the upload.
+
+    The upload stage is explicitly PENDING: nothing is live, no units were spent,
+    and a retry is the only way to ship the render.
+    """
+    _publish_job("failed", uploaded=False)
     assert main_mod._existing_publish("src") is None
+
+
+def test_a_failed_publish_after_the_upload_landed_still_blocks():
+    """The twin, and the expensive half.
+
+    `UploadStage` goes DONE and then a later stage of the same publish job —
+    thumbnail, captions, playlist — fails, which marks the whole job `failed`. The
+    video is live and the 1,600 units are gone, but `failed` was an unconditional
+    exemption, so the next Publish click uploaded it again.
+    """
+    _publish_job("failed", uploaded=True)
+    assert main_mod._existing_publish("src") == ("pub", "failed")
+
+
+def test_a_cancelled_publish_after_the_upload_landed_still_blocks():
+    """Same shape, and the reason the exemption is a pair rather than one status:
+    cancel-then-republish is an ordinary operator move, and cancelling does not
+    un-upload anything."""
+    _publish_job("cancelled", uploaded=True)
+    assert main_mod._existing_publish("src") == ("pub", "cancelled")
 
 
 def test_another_videos_publish_is_not_mistaken_for_this_ones():
