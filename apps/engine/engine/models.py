@@ -27,6 +27,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from loguru import logger
+
 Provider = Literal["anthropic", "openai", "gemini", "ollama", "openai_compatible"]
 
 # Every routable task, with what it actually demands. `quality` is the honest
@@ -73,6 +75,17 @@ class ModelSpec:
     json_mode: bool = True
     context: int = 128_000
     temperature: float = 1.0
+    #: Name of the environment variable holding *this* model's key, when it must
+    #: not be the provider's default one.
+    #:
+    #: `base_url` makes every OpenAI-compatible gateway routable — Groq, DeepSeek,
+    #: OpenRouter, Together, LM Studio, vLLM — and without this the bearer sent to
+    #: all of them was `OPENAI_API_KEY`. That is a single credential with two
+    #: incompatible jobs: point it at a gateway and thumbnail generation breaks
+    #: (`providers/images.py` always calls api.openai.com), leave it a real OpenAI
+    #: key and it is handed to a third party on every routed stage. Naming a
+    #: separate variable per model is the way out; empty keeps the old behaviour.
+    api_key_env: str = ""
 
     @property
     def is_local(self) -> bool:
@@ -262,5 +275,59 @@ class Routing:
             # A corrupt routing file must not brick the engine — defaults still work.
             return cls()
 
+    def reload_from(self, path: Path) -> bool:
+        """Re-read the file `save()` writes, **into this object**.
+
+        `load()` above returns a *new* Routing, which is useless to the only
+        consumer that matters: every module reaches routing through the singleton
+        below (`from engine.models import routing`, or `routing.spec_for(...)` via
+        `providers.llm.for_task`). Rebinding a name in one module leaves all of
+        them pointing at the old object, so nothing called `load()` and every
+        process started on `DEFAULT_ROUTES` — a route set on the Models screen
+        survived in the file and was ignored by the engine that wrote it, and the
+        API and the worker could route the same task to different models.
+
+        Mutating in place is what makes the hydration visible everywhere. A missing
+        or unreadable file leaves the defaults alone: routing that silently emptied
+        itself would be worse than routing that is merely not customised.
+
+        Returns whether anything was applied, so startup can say so in the log.
+        """
+        if not path.exists():
+            return False
+        try:
+            fresh = Routing.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            logger.warning("could not read routing from {} ({}); keeping defaults", path, exc)
+            return False
+        self.routes = fresh.routes
+        self.catalogue = fresh.catalogue
+        return True
+
 
 routing = Routing()
+
+
+def routing_path() -> Path:
+    from engine.settings import get_settings
+
+    return Path(get_settings().storage_root) / "routing.json"
+
+
+def hydrate_routing() -> bool:
+    """Load the persisted routing into the singleton. Called once per process.
+
+    Both the API's lifespan and the arq worker's startup hook call this, and both
+    have to: `routing` is module state, so hydrating in one process says nothing
+    about the other. A worker that skipped it ran every stage on `DEFAULT_ROUTES`
+    while the API reported the operator's real choice on the Models screen — the
+    same task on two different models depending on whether Redis was up.
+
+    Lives here rather than in `main` so the worker does not have to import the
+    FastAPI app to reach it.
+    """
+    path = routing_path()
+    if routing.reload_from(path):
+        logger.info("routing restored from {}", path)
+        return True
+    return False

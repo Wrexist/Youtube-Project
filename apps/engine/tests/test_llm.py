@@ -455,6 +455,46 @@ class TestJsonRetry:
         assert route.call_count == 2
 
     @respx.mock
+    async def test_every_attempt_is_billed_into_the_returned_completion(self):
+        """The provider charges for a response it could not parse just the same.
+
+        Only the last attempt is returned, and that object is the whole cost record
+        a stage keeps — so a call that succeeded on its third try used to record a
+        third of its own bill. `spent_usd` under-reported the run, and the per-video
+        budget ceiling guarded a number that was never the real one.
+        """
+        priced = spec("openai", input_per_m=1_000_000, output_per_m=1_000_000)  # $1 per token
+        _openai_billing(["nope", "still nope", '{"a": 1}'], input_tokens=100, output_tokens=11)
+
+        value, completion = await LLM(priced).json("give me json")
+
+        assert value == {"a": 1}
+        assert completion.input_tokens == 300, "two discarded attempts' input went unbilled"
+        assert completion.output_tokens == 33
+        assert completion.cost_usd == pytest.approx(333.0)
+        assert completion.discarded_attempts == 2
+
+    @respx.mock
+    async def test_a_first_attempt_success_bills_only_itself(self):
+        """The control: no retries means nothing to fold in, and no double count."""
+        priced = spec("openai", input_per_m=1_000_000, output_per_m=1_000_000)
+        _openai_billing(['{"a": 1}'], input_tokens=100, output_tokens=11)
+
+        _, completion = await LLM(priced).json("give me json")
+        assert (completion.input_tokens, completion.output_tokens) == (100, 11)
+        assert completion.discarded_attempts == 0
+
+    @respx.mock
+    async def test_the_spend_of_a_run_that_never_parsed_is_named_in_the_error(self):
+        """There is no Completion to hang it on — the stage raises — so the message
+        is the only record that four frontier-model calls were paid for."""
+        priced = spec("openai", input_per_m=1_000_000, output_per_m=1_000_000)
+        _openai_billing(["no"] * 4, input_tokens=100, output_tokens=11)
+
+        with pytest.raises(ValueError, match=r"\$333\."):
+            await LLM(priced).json("x", retries=2)
+
+    @respx.mock
     async def test_a_hosted_model_gets_retries_plus_one_attempts(self):
         """`retries=2` means three tries: the first is not a retry."""
         route = _openai_returning(["no"] * 6)
@@ -541,6 +581,25 @@ def _openai_returning(texts: list[str]):
     """One mocked route that returns each text in turn, then repeats the last."""
     replies = [
         httpx.Response(200, json={"choices": [{"message": {"content": t}}], "usage": {}})
+        for t in texts
+    ]
+    return respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=replies)
+
+
+def _openai_billing(texts: list[str], *, input_tokens: int, output_tokens: int):
+    """`_openai_returning` with a usage block, so each attempt costs something.
+
+    The plain helper reports no usage at all, which is why a retry loop that
+    dropped the earlier attempts' tokens read as correct against it.
+    """
+    replies = [
+        httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": t}}],
+                "usage": {"prompt_tokens": input_tokens, "completion_tokens": output_tokens},
+            },
+        )
         for t in texts
     ]
     return respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=replies)

@@ -298,8 +298,15 @@ def jsonable(inputs: dict) -> dict:
     """Inputs reduced to what can be stored and served.
 
     `youtube_client` is a live client instance that a publish job carries — it holds
-    an access token, so it must reach neither the database nor an HTTP response. It
-    is rebuilt from the channel row on resume.
+    an access token, so it must reach neither the database nor an HTTP response.
+
+    It is rebuilt at *dispatch* time, not on restore: `main._run_job` and
+    `worker.run_job_task` both call `api.publishing.attach_youtube_client` before
+    starting the workflow, so both execution paths get one and the restored mirror
+    — which is the dict this function serialises — never holds a live token. This
+    docstring used to claim the rebuild happened "on resume" when nothing rebuilt it
+    at all, and the missing key surfaced as a bare KeyError that `CaptionsStage`,
+    being optional, swallowed into SKIPPED on an already-live video.
     """
     out = {}
     for key, value in inputs.items():
@@ -356,6 +363,50 @@ def _aware(moment: datetime | None) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
+def _mirror_of(row: Job, workflow) -> dict:
+    """One row as a mirror entry, status taken verbatim.
+
+    Shared by the startup loader and the mid-life re-read below; the difference
+    between them is only what "running" is allowed to mean, and that is the
+    caller's decision, not this function's.
+    """
+    import asyncio
+
+    states, needs_rerun = load_states(row.states or {}, workflow.initial_states())
+
+    # A stage that has to re-run may produce a different value, so anything
+    # downstream of it is no longer trustworthy either. The framework already
+    # models this for user edits; the same rule applies here.
+    for name in needs_rerun:
+        for dependent in workflow.dependents_of(name):
+            states[dependent].status = StageStatus.STALE
+            states[dependent].output = None
+    if needs_rerun:
+        logger.warning(
+            "job {}: {} stage(s) will re-run ({})",
+            row.id,
+            len(needs_rerun),
+            ", ".join(needs_rerun),
+        )
+
+    return {
+        "id": row.id,
+        "workflow": workflow,
+        "inputs": _restore_inputs(row.inputs or {}),
+        "states": states,
+        "events": row.events or [],
+        "wake": asyncio.Event(),
+        "status": row.status,
+        "error": row.error,
+        # Normalised on the way out: SQLite has no timezone type and hands
+        # back naive datetimes, while a job created in this process carries an
+        # aware one. Sorting the two together raises TypeError, so `GET
+        # /v1/jobs` died the moment a restored job and a new job coexisted.
+        "created_at": _aware(row.created_at),
+        "updated_at": _aware(row.updated_at),
+    }
+
+
 async def load_jobs(get_workflow) -> dict[str, dict]:
     """Rebuild the in-process job mirror from rows. Called once at startup.
 
@@ -363,8 +414,6 @@ async def load_jobs(get_workflow) -> dict[str, dict]:
     started — so it is marked `interrupted`. That is honest, and it is what lets
     the Queue screen offer a resume instead of showing a spinner forever.
     """
-    import asyncio
-
     mirror: dict[str, dict] = {}
     async with session() as s:
         rows = (await s.execute(select(Job).order_by(Job.created_at))).scalars().all()
@@ -377,49 +426,47 @@ async def load_jobs(get_workflow) -> dict[str, dict]:
             logger.warning("job {} ran unknown workflow {!r}; skipping", row.id, row.workflow)
             continue
 
-        status = row.status
-        if status == "running":
-            status = "interrupted"
+        entry = _mirror_of(row, workflow)
+        if entry["status"] == "running":
+            entry["status"] = "interrupted"
             interrupted += 1
-
-        states, needs_rerun = load_states(row.states or {}, workflow.initial_states())
-
-        # A stage that has to re-run may produce a different value, so anything
-        # downstream of it is no longer trustworthy either. The framework already
-        # models this for user edits; the same rule applies here.
-        for name in needs_rerun:
-            for dependent in workflow.dependents_of(name):
-                states[dependent].status = StageStatus.STALE
-                states[dependent].output = None
-        if needs_rerun:
-            logger.warning(
-                "job {}: {} stage(s) will re-run ({})",
-                row.id,
-                len(needs_rerun),
-                ", ".join(needs_rerun),
-            )
-
-        mirror[row.id] = {
-            "id": row.id,
-            "workflow": workflow,
-            "inputs": _restore_inputs(row.inputs or {}),
-            "states": states,
-            "events": row.events or [],
-            "wake": asyncio.Event(),
-            "status": status,
-            "error": row.error,
-            # Normalised on the way out: SQLite has no timezone type and hands
-            # back naive datetimes, while a job created in this process carries an
-            # aware one. Sorting the two together raises TypeError, so `GET
-            # /v1/jobs` died the moment a restored job and a new job coexisted.
-            "created_at": _aware(row.created_at),
-            "updated_at": _aware(row.updated_at),
-        }
+        mirror[row.id] = entry
 
     if interrupted:
         logger.warning("{} job(s) were mid-run at shutdown; marked interrupted", interrupted)
     logger.info("restored {} job(s)", len(mirror))
     return mirror
+
+
+async def reload_jobs(job_ids: list[str], get_workflow) -> dict[str, dict]:
+    """Re-read specific rows **mid-life**, taking their status at face value.
+
+    Not `load_jobs`. That one is the startup loader and rewrites a "running" row
+    to "interrupted", which is the right reading exactly once — when the process
+    has just begun and therefore cannot be running anything. Every other time it
+    is a lie: the arq worker is running the job right now, in another process, and
+    it is the only writer of that row.
+
+    This exists because the API's mirror is written only by the process that
+    dispatched the job. Restart the API mid-render and every later answer came
+    from the frozen snapshot the lifespan restored — the job sat at `interrupted`,
+    0 stages done, forever, and the publish gate refused it for not being
+    `completed` until somebody restarted the API a *second* time.
+    """
+    if not job_ids:
+        return {}
+    async with session() as s:
+        rows = (await s.execute(select(Job).where(Job.id.in_(job_ids)))).scalars().all()
+
+    out: dict[str, dict] = {}
+    for row in rows:
+        try:
+            workflow = get_workflow(row.workflow)
+        except KeyError:
+            logger.warning("job {} ran unknown workflow {!r}; skipping", row.id, row.workflow)
+            continue
+        out[row.id] = _mirror_of(row, workflow)
+    return out
 
 
 # ── channels ────────────────────────────────────────────────────────────────
@@ -463,7 +510,12 @@ async def load_channels() -> dict:
         out[row.key] = Credentials(
             refresh_token_encrypted=row.refresh_token_encrypted,
             access_token=row.access_token,
-            expires_at=row.expires_at,
+            # Normalised like `load_jobs` and `load_schedule` do, and for the same
+            # reason: SQLite hands back a naive datetime, and `Credentials.is_fresh`
+            # compares it with `datetime.now(UTC)` — which raises TypeError, not
+            # "the token is stale", so the refresh that would have healed it never
+            # ran. Every publish after a restart died on the comparison.
+            expires_at=_aware(row.expires_at),
             channel_id=row.channel_id,
         )
     logger.info("restored {} channel(s)", len(out))

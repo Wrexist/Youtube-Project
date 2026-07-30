@@ -117,7 +117,15 @@ CREDENTIALS: tuple[Credential, ...] = (
     Credential(
         env="OPENAI_API_KEY",
         label="OpenAI",
-        unlocks="Generates thumbnail backgrounds with GPT Image.",
+        unlocks=(
+            "Generates thumbnail backgrounds with GPT Image. It is also the default "
+            "bearer token sent to every openai_compatible model in the routing "
+            "catalogue — including a Groq, DeepSeek or OpenRouter gateway you "
+            "register — so one value has two jobs: a gateway key here breaks "
+            "thumbnails, which always call api.openai.com, and a real OpenAI key "
+            "here is handed to the gateway. Give the gateway its own variable and "
+            "name it in the model's api_key_env."
+        ),
         without_it="Thumbnails still compose, over a flat colour instead of generated art.",
         url="https://platform.openai.com/api-keys",
         effort="2 minutes",

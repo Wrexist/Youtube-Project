@@ -21,7 +21,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from engine import automation, db, repository, worker
+from engine import automation, db, models, repository, worker
 from engine.api import publishing as channels
 from engine.api.channels import router as channels_router
 from engine.api.insights import router as insights_router
@@ -45,6 +45,13 @@ async def lifespan(_: FastAPI):
     overran Google's ceiling on the next upload. `STUDIO_PERSIST=false` skips it
     for tests and for anyone who genuinely wants a scratch instance.
     """
+    # Before anything else, and outside the `persist` branch: `routing.save()` is
+    # written by the Models screen whether or not the database is on, so the read
+    # has to be unconditional too. Without this the singleton every stage resolves
+    # its model through started on DEFAULT_ROUTES in every process, so a route the
+    # operator set was persisted and then ignored by the engine that persisted it.
+    models.hydrate_routing()
+
     if get_settings().persist:
         try:
             logger.info("database: {}", await db.ensure_schema())
@@ -256,10 +263,69 @@ async def _dispatch(job_id: str, start_from: str | None = None) -> None:
         # The work happens elsewhere; this process only relays the worker's events
         # to any browser watching.
         JOBS[job_id]["enqueued"] = True
+        JOBS[job_id]["relayed"] = {}
+        _WORKER_OWNED.add(job_id)
         JOBS[job_id]["task"] = asyncio.create_task(_relay(job_id))
     else:
         # Deliberately not tied to the request: closing the tab must not cancel a render.
+        _WORKER_OWNED.discard(job_id)
         JOBS[job_id]["task"] = asyncio.create_task(_run_job(job_id, start_from))
+
+
+#: Job ids this process has handed to a worker and not yet seen finish.
+#:
+#: The guard on `/rerun` and `/edit` is `status == "running"`, and that is not the
+#: same question once a worker is involved. `cancel_job` sets a worker-run job to
+#: `cancelled` while explicitly logging that the render *continues* — so the guard
+#: waved the re-run through, a second arq job was enqueued for the same id, and two
+#: workers rendered the same video into the same storage keys at once. Membership
+#: here says "somebody else is executing this", which is the question that actually
+#: gates a re-run.
+#:
+#: Process-local, and that is not a gap: after a restart the mirror is re-synced
+#: from the row (`_resync`), which reports the worker's own `running` status and
+#: trips the ordinary guard instead.
+_WORKER_OWNED: set[str] = set()
+
+#: Event types the relay projects onto a per-stage view. `stage.progress` is
+#: deliberately absent — it fires hundreds of times per render and moves nothing
+#: the Queue and Library read.
+_RELAYED_STATUS = {
+    "stage.started": StageStatus.RUNNING,
+    "stage.completed": StageStatus.DONE,
+    "stage.replayed": StageStatus.DONE,
+    "stage.failed": StageStatus.FAILED,
+    "stage.skipped": StageStatus.SKIPPED,
+}
+
+
+def _project(job: dict, event: dict) -> None:
+    """Fold one worker event into this process's view of the job's stages.
+
+    Without this, a worker-run job was `0/17` in the Queue and the Library from
+    the moment it started until the moment it finished: the mirror's `states` are
+    written only by whichever process runs the workflow, and for a worker job that
+    is not this one. Every stage row sat pending behind an SSE stream that was
+    reporting each of them completing.
+
+    Kept *beside* `states` rather than written into it, deliberately. The events
+    carry a summary and a cost but not the stage's value, so a `StageState` built
+    from one is DONE with no output — and `cancel_job` persists whatever is in
+    `states`, which would write that valueless "done" over the worker's real row
+    and strand every downstream stage as unresumable on the next restart. The
+    projection is display-only and the row stays the single source of truth.
+    """
+    status = _RELAYED_STATUS.get(str(event.get("type")))
+    stage = event.get("stage")
+    if status is None or not stage:
+        return
+    view = job.setdefault("relayed", {})
+    entry = view.setdefault(stage, {"status": status, "cost_usd": 0.0})
+    entry["status"] = status
+    if event.get("cost_usd") is not None:
+        entry["cost_usd"] = float(event["cost_usd"])
+    if event.get("summary") is not None:
+        entry["summary"] = event["summary"]
 
 
 async def _relay(job_id: str) -> None:
@@ -286,6 +352,7 @@ async def _relay(job_id: str) -> None:
             if event.get("type") == "__done__":
                 break
             job["events"].append(event)
+            _project(job, event)
             _wake(job)
 
         await pubsub.unsubscribe()
@@ -296,21 +363,94 @@ async def _relay(job_id: str) -> None:
         if pool is not None:
             with suppress(Exception):
                 await pool.aclose()
+        _WORKER_OWNED.discard(job_id)
         # The worker owns the row, so re-read it for the final status rather than
-        # inferring one from the last event seen.
+        # inferring one from the last event seen. `reload_jobs`, not `load_jobs`:
+        # the latter would rewrite a still-"running" row to "interrupted".
         with suppress(Exception):
-            fresh = await repository.load_jobs(video.get)
-            if job_id in fresh:
-                job["status"] = fresh[job_id]["status"]
-                job["states"] = fresh[job_id]["states"]
+            fresh = (await repository.reload_jobs([job_id], video.get)).get(job_id)
+            if fresh is not None:
+                job["status"] = fresh["status"]
+                job["states"] = fresh["states"]
                 # `error` too. Copying only the status meant every worker-run
                 # failure was served by `GET /v1/jobs` as
                 # `{status: "failed", error: null}` — the Queue showed a bare
                 # "failed" with no reason anywhere in the UI, while the reason sat
                 # in the row the whole time. `updated_at` comes with it so the list
                 # does not sort a finished job by when it started.
-                job["error"] = fresh[job_id].get("error")
-                job["updated_at"] = fresh[job_id].get("updated_at")
+                job["error"] = fresh.get("error")
+                job["updated_at"] = fresh.get("updated_at")
+                # The row is authoritative again, so the projection would only add
+                # a second, staler answer to the same question.
+                job["relayed"] = {}
+        _wake(job)
+
+
+def _needs_resync(job: dict) -> bool:
+    """Might this mirror entry be behind its row?
+
+    Only when nothing *here* is following the job. `task` is set by `_dispatch` for
+    both execution paths — the relay for a worker job, the coroutine for an
+    in-process one — so its absence on a job that still claims to be running means
+    the row is being written by somebody else: the worker, or this API before it
+    restarted.
+
+    Deliberately false while the relay is running, even though the worker is the
+    writer there too. The relay's live projection is *ahead* of the row, which is
+    only saved on stage boundaries, so re-reading would replace fresher data with
+    staler.
+
+    `cancelled` is in the list with the other two, and it has to be: cancelling a
+    worker-run job writes `cancelled` to the row while the render carries on, so
+    after a restart that status is the one thing standing between a re-run and a
+    second worker on the same job. The worker overwrites it at its next stage
+    boundary; re-reading is how this process finds out.
+    """
+    return job.get("status") in ("running", "interrupted", "cancelled") and job.get("task") is None
+
+
+def _worker_owned(job: dict) -> bool:
+    """Is somebody other than this process executing this job right now?
+
+    Two ways to be true, and both are needed. `_WORKER_OWNED` covers this process's
+    own lifetime, including the case where `cancel_job` has already overwritten the
+    status to `cancelled` while the render carried on. `_needs_resync` covers the
+    other one: a mirror restored from a row this process never dispatched.
+    """
+    return job["id"] in _WORKER_OWNED or _needs_resync(job)
+
+
+async def _resync(job_ids: list[str]) -> None:
+    """Refresh worker-owned mirror entries from their rows.
+
+    The mirror is written only by the process that dispatched the job, so an API
+    restarted mid-render answered from the snapshot its lifespan restored and never
+    moved again: the render finished, the row said `completed`, and `GET
+    /v1/jobs/{id}` still said `interrupted` at 0 stages while `POST .../publish`
+    refused it for not being completed. A second, well-timed restart was the only
+    cure. Called from the read endpoints and from the gates that gate on status.
+    """
+    if not job_ids or not get_settings().persist:
+        return
+    try:
+        fresh = await repository.reload_jobs(job_ids, video.get)
+    except Exception:  # noqa: BLE001 — a stale answer is better than a 500
+        logger.exception("could not re-sync job(s) {}", job_ids)
+        return
+
+    for job_id, row in fresh.items():
+        job = JOBS.get(job_id)
+        if job is None:
+            continue
+        job["status"] = row["status"]
+        job["states"] = row["states"]
+        job["error"] = row.get("error")
+        job["updated_at"] = row.get("updated_at")
+        # Only ever forward: the row's log is what the worker has published so far,
+        # and a shorter one would move an SSE subscriber's cursor backwards.
+        if len(row.get("events") or []) > len(job.get("events") or []):
+            job["events"] = row["events"]
+        job["relayed"] = {}
         _wake(job)
 
 
@@ -345,6 +485,19 @@ async def _run_job(job_id: str, start_from: str | None = None) -> None:
             await _persist(job)
 
     try:
+        # Inside the try, so a disconnected channel is recorded as a failed job with
+        # a reason rather than escaping as an unhandled exception in a detached task.
+        # Here rather than in `_dispatch` because `/edit` and `POST .../publish` both
+        # reach this function without going through it.
+        try:
+            await channels.attach_youtube_client(job)
+        except WorkflowError as exc:
+            # `Workflow.run` emits its own `workflow.failed` before raising; this
+            # one happens before the run starts, so the frame has to come from here
+            # or the browser's last event is a `workflow.started` that never ended.
+            await emit({"type": "workflow.failed", "job_id": job_id, "error": str(exc)})
+            raise
+
         await job["workflow"].run(
             job_id=job_id,
             inputs=job["inputs"],
@@ -387,6 +540,30 @@ async def _persist(job: dict) -> None:
         await repository.save_job(job)
     except Exception:  # noqa: BLE001
         logger.exception("failed to persist job {}", job["id"])
+
+
+def _stage_view(job: dict):
+    """`(status, cost_usd)` per stage, with the worker's relayed events layered on.
+
+    The stored `StageState` wins whenever it has an output, because that is a
+    completed stage with a real value behind it. Where it has none — every stage of
+    a job this process is only relaying — the projection from the event stream
+    answers instead, which is what makes a worker-run job show `4/17 · Voiceover`
+    rather than `0/17` until the moment it finishes.
+    """
+    states = job.get("states", {})
+    relayed = job.get("relayed") or {}
+
+    def view(name: str) -> tuple[StageStatus, float]:
+        state = states.get(name)
+        entry = relayed.get(name)
+        if state is not None and state.output is not None:
+            return state.status, state.output.cost_usd
+        if entry is not None:
+            return entry["status"], float(entry.get("cost_usd") or 0.0)
+        return (state.status if state is not None else StageStatus.PENDING), 0.0
+
+    return view
 
 
 class JobSummary(BaseModel):
@@ -433,16 +610,20 @@ async def list_jobs(
     `status` filters to one state; the Library asks for `completed` and the Queue
     takes everything.
     """
+    # Before the filter, not after: `?status=completed` is how the Library asks, and
+    # a worker-finished render whose mirror still said `interrupted` was missing from
+    # the one screen it belongs on.
+    await _resync([job_id for job_id, job in JOBS.items() if _needs_resync(job)])
+
     out: list[JobSummary] = []
     for job_id, job in JOBS.items():
         if status and job.get("status") != status:
             continue
 
         states = job.get("states", {})
-        done = sum(1 for s in states.values() if s.status is StageStatus.DONE)
-        running = next(
-            (name for name, s in states.items() if s.status is StageStatus.RUNNING), None
-        )
+        view = _stage_view(job)
+        done = sum(1 for name in states if view(name)[0] is StageStatus.DONE)
+        running = next((name for name in states if view(name)[0] is StageStatus.RUNNING), None)
         artifacts = {}
         for state in states.values():
             if state.output:
@@ -454,7 +635,7 @@ async def list_jobs(
                 status=job.get("status", "unknown"),
                 topic=str(job.get("inputs", {}).get("topic", "")),
                 workflow=job["workflow"].name,
-                cost_usd=round(sum(s.output.cost_usd for s in states.values() if s.output), 4),
+                cost_usd=round(sum(view(name)[1] for name in states), 4),
                 created_at=job.get("created_at"),
                 updated_at=job.get("updated_at"),
                 stages_done=done,
@@ -487,6 +668,9 @@ async def list_jobs(
 @app.get("/v1/jobs/{job_id}")
 async def get_job(job_id: str) -> dict:
     job = _require(job_id)
+    if _needs_resync(job):
+        await _resync([job_id])
+    view = _stage_view(job)
     return {
         "id": job_id,
         "status": job["status"],
@@ -495,7 +679,7 @@ async def get_job(job_id: str) -> dict:
         # serialisation and is one annotation away from putting a token in a response.
         "inputs": repository.jsonable(job["inputs"]),
         "stages": _serialize_stages(job),
-        "cost_usd": round(sum(s.output.cost_usd for s in job["states"].values() if s.output), 4),
+        "cost_usd": round(sum(view(name)[1] for name in job["states"]), 4),
     }
 
 
@@ -560,6 +744,13 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
     """
     source = _require(job_id)
 
+    # A render the worker finished while this process was restarting is still
+    # `interrupted` in the mirror, and the check below reads the mirror. Without
+    # this, a perfectly good video could not be published until the API had been
+    # restarted a *second* time.
+    if _needs_resync(source):
+        await _resync([job_id])
+
     if source["status"] != "completed":
         raise HTTPException(409, f"job is {source['status']}; only a completed job can publish")
     if source["workflow"].name != "video":
@@ -572,11 +763,29 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
     existing = _existing_publish(job_id)
     if existing and not force:
         publish_id, state = existing
-        raise HTTPException(
-            409,
-            f"already published as job {publish_id} ({state}); "
-            "pass ?force=true to publish it again",
-        )
+        # Differentiated on the upload stage rather than the job status, because
+        # the two situations have different recoveries and the old one-line message
+        # named neither. "Already published" for a publish that died before the
+        # upload is simply wrong, and it sent people to `?force=true` — a second
+        # 1,600-unit spend — for a video that was already live.
+        if _upload_landed(JOBS[publish_id]):
+            video_id = _uploaded_video_id(JOBS[publish_id]) or "an unrecorded id"
+            detail = (
+                f"video already uploaded as {video_id} by publish job {publish_id} "
+                f"({state}); re-run its remaining steps instead of publishing again"
+            )
+        elif state == "running":
+            detail = (
+                f"publish job {publish_id} is still running and has not uploaded yet; "
+                "wait for it, or pass ?force=true to publish anyway (another 1,600 "
+                "quota units)"
+            )
+        else:
+            detail = (
+                f"previous publish {publish_id} was {state} before the upload landed; "
+                "re-publish with ?force=true (this spends another 1,600 quota units)"
+            )
+        raise HTTPException(409, detail)
 
     creds = channels.CHANNELS.get("default")
     if creds is None:
@@ -660,18 +869,49 @@ def _severity_of(critique: Any) -> int:
         return 0
 
 
-def _existing_publish(source_job_id: str) -> tuple[str, str] | None:
-    """A publish job for this source that is running or has succeeded.
+def _upload_landed(job: dict) -> bool:
+    """Did this publish job's `upload` stage complete?
 
-    A *failed* publish is not a reason to refuse a retry — that is the case
-    `force` exists for, and refusing it would strand a video whose upload died
-    halfway.
+    The only question that matters when deciding whether a second publish would
+    duplicate a video. What the *job* says about itself does not answer it: an
+    `interrupted` or `cancelled` publish can be holding a finished upload and a
+    live video on the channel.
+    """
+    state = job.get("states", {}).get("upload")
+    return state is not None and state.status is StageStatus.DONE
+
+
+def _uploaded_video_id(job: dict) -> str:
+    state = job.get("states", {}).get("upload")
+    return str(state.output.value) if state is not None and state.output else ""
+
+
+def _existing_publish(source_job_id: str) -> tuple[str, str] | None:
+    """A publish job for this source that must block another publish.
+
+    Blocking is the default and `failed` is the only unconditional exemption —
+    that is the case `force` exists for, and refusing it would strand a video
+    whose upload died halfway.
+
+    This used to test for `("running", "completed")`, which is not the complement
+    of "failed": a publish job that was mid-upload when the process died comes back
+    from `load_jobs` as **`interrupted`**, and a publish job cancelled after its
+    upload landed is **`cancelled`** — `cancel_job` explicitly accepts an
+    interrupted job, so cancel-then-republish is an ordinary operator move. Both
+    walked straight through the gate and uploaded the same video again: 1,600 more
+    quota units and a duplicate public video, which is exactly what this exists to
+    stop. A cancelled publish that never got as far as uploading is the one case
+    where re-publishing is the right answer, so that one still passes.
     """
     for publish_id, job in JOBS.items():
         if job.get("inputs", {}).get("source_job_id") != source_job_id:
             continue
-        if job.get("status") in ("running", "completed"):
-            return publish_id, job["status"]
+        status = job.get("status")
+        if status == "failed":
+            continue
+        if status == "cancelled" and not _upload_landed(job):
+            continue
+        return publish_id, str(status)
     return None
 
 
@@ -743,6 +983,36 @@ def _refuse_ungated_upload(job: dict, stage: str) -> None:
     )
 
 
+async def _refuse_while_a_worker_owns_it(job: dict) -> None:
+    """409 if another process is executing this job right now.
+
+    `status == "running"` is not a sufficient gate once a worker is in play, and
+    the hole is reachable in two ordinary ways:
+
+      * **Cancel, then re-run.** `cancel_job` sets a worker-run job to `cancelled`
+        and says so in its own log — *the render continues*. The status gate then
+        let a re-run through, and two workers rendered the same job into the same
+        storage keys at once, interleaved.
+      * **Restart the API mid-render.** The mirror comes back `interrupted`, which
+        is likewise not `running`. `_resync` here reads the row the worker is
+        writing and restores the truth before the gate is checked.
+
+    Both endpoints that call this mutate stage state immediately afterwards, which
+    is why the refusal has to come first.
+    """
+    if not _worker_owned(job):
+        return
+    if _needs_resync(job):
+        await _resync([job["id"]])
+    if job["id"] in _WORKER_OWNED or job.get("status") == "running":
+        raise HTTPException(
+            409,
+            f"job {job['id']} is being executed by a worker; cancelling only stops "
+            "this process's event relay, not the render. Wait for it to finish, "
+            "then re-run.",
+        )
+
+
 @app.post("/v1/jobs/{job_id}/edit")
 async def edit_stage(job_id: str, body: EditRequest) -> dict:
     """Accept a user edit and re-run from that point.
@@ -751,6 +1021,7 @@ async def edit_stage(job_id: str, body: EditRequest) -> dict:
     everything downstream regenerates while the research above it is left alone.
     """
     job = _require(job_id)
+    await _refuse_while_a_worker_owns_it(job)
     if job["status"] == "running":
         raise HTTPException(409, "job is still running; wait or cancel first")
 
@@ -789,6 +1060,9 @@ async def rerun_stage(job_id: str, body: RerunRequest) -> dict:
     client one — `GET /v1/jobs/{id}` returns a `summary` string, not the object.
     """
     job = _require(job_id)
+    # Before anything is invalidated below: a refusal after the STALE writes would
+    # leave the job with nothing coming to re-run it.
+    await _refuse_while_a_worker_owns_it(job)
     if job["status"] == "running":
         raise HTTPException(409, "job is still running; wait or cancel first")
 
@@ -831,7 +1105,14 @@ async def cancel_job(job_id: str) -> dict:
         return {"status": job["status"], "note": "already finished"}
 
     task = job.get("task")
-    if task and not task.done():
+    if task and not task.done() and not job.get("enqueued"):
+        # Only the in-process path has a task worth cancelling. For a worker-run
+        # job `task` is the *relay*, and cancelling it stops nothing that matters
+        # while costing two things that do: the browser's event stream goes silent
+        # even though the render is still publishing frames, and `_relay`'s finally
+        # drops the job out of `_WORKER_OWNED` — which is what tells `/rerun` and
+        # `/edit` that somebody else is still executing it. Dropping it was how
+        # cancel-then-re-run started a second worker on the same job.
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
@@ -866,22 +1147,34 @@ def _require(job_id: str) -> dict:
 def _serialize_stages(job: dict) -> list[dict]:
     from engine.workflows.base import summarize
 
+    view = _stage_view(job)
+    relayed = job.get("relayed") or {}
     out = []
     for stage in job["workflow"].stages:
         state = job["states"][stage.name]
+        status, cost = view(stage.name)
         out.append(
             {
                 "name": stage.name,
                 "title": stage.title,
-                "status": state.status.value,
-                "summary": summarize(state.output.value) if state.output else None,
-                "cost_usd": round(state.output.cost_usd, 4) if state.output else 0.0,
+                "status": status.value,
+                # The relayed summary is the worker's own `summarize(output.value)`,
+                # sent on the completion event — the only version of it this process
+                # can have, since the value itself never leaves the worker.
+                "summary": summarize(state.output.value)
+                if state.output
+                else (relayed.get(stage.name) or {}).get("summary"),
+                "cost_usd": round(cost, 4),
                 "elapsed_ms": state.elapsed_ms,
                 "error": state.error,
                 # Both conditions, not just "it finished". The stage also has to
                 # hold something a person can meaningfully retype — most hold
                 # dataclasses, and offering an edit the endpoint will refuse is
                 # how a UI teaches people not to trust it.
+                #
+                # `state.status`, not the relayed one: a stage the worker has
+                # finished is DONE in the projection but has no *value* here yet,
+                # and `mark_edited` refuses a stage with no output.
                 "editable": state.status is StageStatus.DONE and stage.editable,
             }
         )

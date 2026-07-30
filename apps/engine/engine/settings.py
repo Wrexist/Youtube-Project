@@ -5,9 +5,12 @@ If you find yourself wanting a global `config.app.get(...)` — that is the upst
 MoneyPrinterTurbo pattern and it is a bug here. Add a field below instead.
 """
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
+from dotenv import dotenv_values
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -139,3 +142,30 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def named_credential(name: str) -> str:
+    """The value of a credential whose *variable name* is configuration.
+
+    The one thing a field above cannot express. `ModelSpec.api_key_env` lets an
+    operator point a registered model at its own key — `GROQ_API_KEY`,
+    `OPENROUTER_API_KEY`, whatever they called it — and the set of names is open
+    by construction, so there is nothing to declare. This is the exception the
+    module docstring's "add a field below instead" does not cover, and it lives
+    here rather than in the caller so `os.environ` still has exactly one reader.
+
+    Both sources, in the same precedence pydantic-settings uses: the process
+    environment wins, then `.env`. Reading only the former would miss a key that
+    `scripts/setup.sh` wrote to `.env` and nobody exported, which is the normal
+    way keys arrive here.
+    """
+    value = os.environ.get(name)
+    if value:
+        return value
+    for env_file in Settings.model_config.get("env_file") or ():
+        path = Path(env_file)
+        if path.is_file():
+            found = dotenv_values(path).get(name)
+            if found:
+                return found
+    return ""

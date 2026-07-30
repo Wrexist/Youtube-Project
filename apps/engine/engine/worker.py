@@ -166,6 +166,14 @@ async def run_job_task(ctx: dict, job_id: str, start_from: str | None = None) ->
         from engine.workflows.base import WorkflowError
 
         try:
+            # A publish job reaches this process as an id and nothing else, and
+            # `youtube_client` is stripped from the stored inputs by design — so
+            # without this every publish stage would read `ctx.inputs` and find
+            # nothing. See `channels.attach_youtube_client`.
+            from engine.api.publishing import attach_youtube_client
+
+            await attach_youtube_client(job)
+
             await job["workflow"].run(
                 job_id=job_id,
                 inputs=job["inputs"],
@@ -273,15 +281,33 @@ async def enqueue(job_id: str, start_from: str | None = None) -> bool:
                 await pool.aclose()
 
 
+async def startup(_ctx: dict) -> None:
+    """Hydrate anything the worker resolves per job but reads from disk once.
+
+    Routing is the whole list so far, and it has to be here as well as in the
+    API's lifespan: the singleton `providers.llm.for_task` resolves through is
+    per-process, so a worker that skipped this ran every stage on
+    `DEFAULT_ROUTES` while the API reported the operator's real choice on the
+    Models screen. Same task, two models, depending on whether Redis happened to
+    be up.
+    """
+    from engine.models import hydrate_routing
+
+    hydrate_routing()
+
+
 class WorkerSettings:
     """`python -m arq engine.worker.WorkerSettings`.
 
     arq reads every field here as a plain class *attribute*, so `redis_settings`
     has to be a `RedisSettings` value — a `@staticmethod` is handed to arq
     unevaluated and fails with `'staticmethod' object has no attribute 'host'`.
+    The same rule is why `on_startup` below is a plain module-level function
+    rather than a method: arq reads `__dict__` and calls what it finds with `ctx`.
     """
 
     functions: list[Any] = [run_job_task]
+    on_startup = startup
     redis_settings: RedisSettings = build_redis_settings()
     max_jobs = 4
     # 30s, not arq's default hour. The key's TTL is this + 1, and `enqueue` uses

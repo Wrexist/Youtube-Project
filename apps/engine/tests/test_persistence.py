@@ -226,6 +226,59 @@ async def test_a_channel_round_trips_without_a_plaintext_token(database):
     assert not hasattr(restored["default"], "refresh_token")
 
 
+async def test_a_channel_with_an_expiry_comes_back_usable(database):
+    """The test above never set `expires_at`, which is exactly why the bug survived.
+
+    SQLite has no timezone type, so a stored expiry came back naive while
+    `Credentials.is_fresh` compares it with `datetime.now(UTC)` — TypeError, not
+    "stale", so the refresh that would have healed it never ran and every publish
+    after a restart died on the comparison. Both ends are pinned: the loader
+    normalises, and `is_fresh` coerces anyway.
+    """
+    from engine.providers.youtube import Credentials
+
+    expires = datetime.now(UTC) + timedelta(hours=1)
+    await repository.save_channel(
+        "default",
+        Credentials(
+            refresh_token_encrypted="ENCRYPTED",
+            access_token="live-token",
+            expires_at=expires,
+            channel_id="UC123",
+        ),
+    )
+
+    loaded = (await repository.load_channels())["default"]
+    assert loaded.expires_at is not None
+    assert loaded.expires_at.tzinfo is not None, "a naive expiry cannot be compared with now(UTC)"
+    assert loaded.is_fresh is True
+
+
+def test_a_naive_expiry_is_judged_rather_than_raised_on():
+    """The second half of the fix, independent of any store.
+
+    `load_channels` is not the only way a naive datetime reaches `Credentials` —
+    anything that reconstructs one from JSON does the same. Raising there is the
+    worst outcome available: it is not a refusal, so nothing retries, and it is not
+    a refresh, so nothing heals.
+    """
+    from engine.providers.youtube import Credentials
+
+    fresh = Credentials(
+        refresh_token_encrypted="ENCRYPTED",
+        access_token="live-token",
+        expires_at=(datetime.now(UTC) + timedelta(hours=1)).replace(tzinfo=None),
+    )
+    assert fresh.is_fresh is True
+
+    stale = Credentials(
+        refresh_token_encrypted="ENCRYPTED",
+        access_token="live-token",
+        expires_at=(datetime.now(UTC) - timedelta(hours=1)).replace(tzinfo=None),
+    )
+    assert stale.is_fresh is False, "expired is expired; it must route to refresh()"
+
+
 async def test_the_schedule_round_trips(database):
     at = datetime(2026, 8, 4, 17, 0, tzinfo=UTC)
     await repository.save_slot("vid1", at)

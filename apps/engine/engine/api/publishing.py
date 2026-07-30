@@ -9,6 +9,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from engine import repository
@@ -23,6 +24,7 @@ from engine.scheduling import (
     validate_move,
 )
 from engine.settings import get_settings
+from engine.workflows.base import WorkflowError
 
 router = APIRouter(prefix="/v1", tags=["publishing"])
 
@@ -60,6 +62,63 @@ def _claim_state(state: str) -> bool:
     """Single-use, and only if it has not expired."""
     born = _STATES.pop(state, None)
     return born is not None and time.monotonic() - born <= _STATE_TTL_S
+
+
+# ── the connected channel, for code that is not an endpoint ─────────────────
+
+
+async def credentials_for(key: str = "default") -> youtube.Credentials | None:
+    """A channel's credentials, from the mirror or — failing that — from the row.
+
+    The arq worker never runs the API's lifespan, so `CHANNELS` in that process is
+    empty forever and reading it alone would report every channel disconnected.
+    The API has the mirror already and must not pay for a query per job, hence the
+    order.
+    """
+    creds = CHANNELS.get(key)
+    if creds is not None:
+        return creds
+    if not get_settings().persist:
+        return None
+    try:
+        loaded = await repository.load_channels()
+    except Exception:  # noqa: BLE001 — an unreadable channel is "not connected"
+        logger.exception("could not load channel {!r}", key)
+        return None
+    CHANNELS.update(loaded)
+    return loaded.get(key)
+
+
+async def attach_youtube_client(job: dict) -> None:
+    """Give a publish job that is about to run a live YouTube client.
+
+    `repository.jsonable` strips `youtube_client` out of the inputs before they are
+    stored — it holds an access token, which belongs in neither a row nor an HTTP
+    response — so a publish job that comes back from its row, or is handed to the
+    worker (which only ever receives the id), has no client at all. Every publish
+    stage reads `ctx.inputs["youtube_client"]`, and the failure was quiet in the
+    worst possible place: `CaptionsStage` is `optional=True`, so the framework
+    turned its bare `KeyError` into SKIPPED and the job reported success while the
+    captions of an already-live video were never uploaded.
+
+    Rebuilt here — at the moment the workflow starts — rather than in the lifespan
+    restore, deliberately. The restored mirror *is* the dict `save_job` serialises;
+    putting a live token back into it is one missing filter away from writing an
+    access token to the database.
+
+    A disconnected channel raises rather than leaving the key absent, because a
+    named failure is the only version of this an optional stage cannot swallow.
+    """
+    if job["workflow"].name != "publish" or "youtube_client" in job.get("inputs", {}):
+        return
+
+    creds = await credentials_for("default")
+    if creds is None:
+        raise WorkflowError(
+            f"publish job {job['id']} cannot resume: no YouTube channel is connected "
+            "in this process. Reconnect at /v1/auth/google, then re-run the job."
+        )
+    job["inputs"]["youtube_client"] = youtube.YouTube(creds)
 
 
 class QuotaResponse(BaseModel):

@@ -284,6 +284,11 @@ export async function applyPlanToCalendar(
  * and no API key is ever present in a URL, in client-side JavaScript, or in
  * anything CORS would let another origin observe.
  *
+ * What that argument does *not* cover is the terminal: `next dev` logs every
+ * Server Action call with its arguments, so under `npm start` this one used to
+ * print the pasted key to the launcher's stdout — which is why
+ * `next.config.ts` sets `logging: { serverFunctions: false }`.
+ *
  * Only the names present in `values` are touched — the form sends the fields
  * someone typed into and nothing else, so saving a half-filled form cannot blank
  * the keys it never displayed.

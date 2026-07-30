@@ -8,8 +8,10 @@ ever grew.
 
 from __future__ import annotations
 
+import asyncio
 import stat
 import time
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -315,6 +317,94 @@ def test_a_pending_auth_still_works_under_pressure():
     assert publishing._claim_state("mine") is True
 
 
+# ── and the endpoint actually asks ──────────────────────────────────────────
+#
+# Everything above tests `_claim_state` directly. `finish_auth` — the callback that
+# binds a channel to this install — was executed by nothing, so the check could be
+# deleted from it and the whole suite stayed green while the endpoint happily
+# accepted an authorisation code from anywhere.
+
+
+@pytest.fixture
+def callback(sandbox, monkeypatch):
+    """The callback endpoint, with the token exchange counted rather than made."""
+    from engine.api import publishing
+    from engine.providers import youtube
+
+    calls: list[str] = []
+
+    async def exchange(code: str):
+        calls.append(code)
+        return youtube.Credentials(refresh_token_encrypted="enc", access_token="tok")
+
+    monkeypatch.setattr(youtube, "exchange_code", exchange)
+    publishing._STATES.clear()
+    publishing.CHANNELS.clear()
+
+    from engine import main
+
+    with TestClient(main.app) as running:
+        yield running, calls
+    publishing._STATES.clear()
+    publishing.CHANNELS.clear()
+
+
+def test_a_forged_state_never_reaches_the_token_exchange(callback):
+    """Not merely a 400: the code must not be presented to Google at all."""
+    client, exchanges = callback
+    response = client.get(
+        "/v1/auth/google/callback",
+        params={"code": "4/attacker-code", "state": "never-issued"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    assert exchanges == [], "an unrecognised state still spent the code"
+
+
+def test_a_replayed_callback_is_refused_the_second_time(callback):
+    """A state is single-use, so a resent callback must not bind a second channel."""
+    from engine.api import publishing
+
+    client, exchanges = callback
+    publishing._remember_state("issued")
+
+    first = client.get(
+        "/v1/auth/google/callback",
+        params={"code": "4/real-code", "state": "issued"},
+        follow_redirects=False,
+    )
+    assert first.status_code in (302, 307), first.text
+    assert publishing.CHANNELS["default"].access_token == "tok"
+
+    second = client.get(
+        "/v1/auth/google/callback",
+        params={"code": "4/real-code", "state": "issued"},
+        follow_redirects=False,
+    )
+    assert second.status_code == 400
+    assert exchanges == ["4/real-code"], "the replay was exchanged a second time"
+
+
+def test_the_channel_list_carries_no_tokens(callback):
+    """Deliberate and permanent, per the comment on the endpoint — so pinned.
+
+    The refresh token is permanent access to someone's channel and the access token
+    is an hour of it. Neither has any business in a payload the browser reads.
+    """
+    from engine.api import publishing
+
+    client, _ = callback
+    publishing.CHANNELS["default"] = publishing.youtube.Credentials(
+        refresh_token_encrypted="ENCRYPTED-REFRESH", access_token="ya29.SECRET", channel_id="UC123"
+    )
+
+    body = client.get("/v1/channels").text
+    assert "UC123" in body, "the endpoint should still say which channel is connected"
+    assert "refresh_token" not in body
+    assert "access_token" not in body
+    assert "ENCRYPTED-REFRESH" not in body and "ya29.SECRET" not in body
+
+
 # ── bounded downloads ───────────────────────────────────────────────────────
 
 
@@ -419,3 +509,208 @@ async def test_check_fresh_still_refuses_when_the_day_is_spent(database):
     await ledger.record("videos.insert")
     with pytest.raises(QuotaExceeded):
         await ledger.check_fresh("videos.insert")
+
+
+# ── every YouTube call is metered ───────────────────────────────────────────
+#
+# CLAUDE.md #5: every provider call goes through the metering wrapper. For the
+# YouTube client that wrapper is `YouTube._call`, and every test that touches a
+# publish substitutes a fake client for the real one — so `_call` itself was
+# executed by nothing. Both of its two lines could be deleted with the suite still
+# fully green: `ledger.check` (refuse before spending) and `ledger.record` (book
+# what was spent). Losing either is the silent overrun the ledger exists to
+# prevent, so they are exercised here against a mocked transport.
+
+
+class _OneTransport:
+    """`httpx`, with every `AsyncClient` wired to a single handler.
+
+    `_call` builds its own client per request, so there is no seam to pass a
+    transport through. Rebinding the module-level `httpx` name inside
+    `engine.providers.youtube` is the narrowest substitute available — it is scoped
+    to that one module, not to httpx.
+    """
+
+    def __init__(self, handler) -> None:
+        self.requests: list[httpx.Request] = []
+        self._handler = handler
+
+    def __getattr__(self, name):
+        return getattr(httpx, name)  # everything else stays the real module
+
+    def AsyncClient(self, **kwargs):  # noqa: N802 — this mirrors httpx's own name
+        kwargs.pop("transport", None)
+        return httpx.AsyncClient(transport=httpx.MockTransport(self._seen), **kwargs)
+
+    def _seen(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return self._handler(request)
+
+
+@pytest.fixture
+def metered(monkeypatch, tmp_path):
+    """A YouTube client with a ledger of its own and no network."""
+    from engine.providers import youtube
+    from engine.quota import QuotaLedger
+
+    def build(*, limit: int = 10_000, handler=None):
+        led = QuotaLedger(limit=limit, persist=False)
+        transport = _OneTransport(handler or (lambda _r: httpx.Response(200, json={})))
+        monkeypatch.setattr(youtube, "ledger", led)
+        monkeypatch.setattr(youtube, "httpx", transport)
+        creds = youtube.Credentials(
+            refresh_token_encrypted="enc",
+            access_token="tok",
+            # Fresh on purpose: a stale token sends `_headers` into `refresh()`,
+            # which is a different code path than the one under test.
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            channel_id="UC123",
+        )
+        return youtube.YouTube(creds), led, transport
+
+    return build
+
+
+@pytest.fixture
+def thumbnail(tmp_path):
+    path = tmp_path / "thumb.jpg"
+    path.write_bytes(b"\xff\xd8\xff" + b"x" * 512)
+    return path
+
+
+async def test_a_call_books_its_documented_cost(metered, thumbnail):
+    from engine.quota import COSTS
+
+    client, led, transport = metered()
+    await client.set_thumbnail("yt-1", thumbnail)
+
+    assert led.spent() == COSTS["thumbnails.set"]
+    assert len(transport.requests) == 1
+    # The charge is attributed to the channel, or the per-channel breakdown the
+    # Calendar reads is empty for every call but the upload.
+    assert led.entries[-1].channel_id == "UC123"
+
+
+async def test_a_call_that_cannot_afford_itself_never_leaves_the_process(metered, thumbnail):
+    """Refuse before the request, not after: the units are gone once it lands."""
+    from engine.quota import QuotaExceeded
+
+    client, _led, transport = metered(limit=10)  # a thumbnail set costs 50
+    with pytest.raises(QuotaExceeded):
+        await client.set_thumbnail("yt-1", thumbnail)
+
+    assert transport.requests == [], "the request went out before the ledger was consulted"
+
+
+async def test_a_failing_call_is_still_billed(metered, thumbnail):
+    """Google charges for a request it rejects. Booking only on 200 is how the
+    ledger drifts below the real spend and waves through an upload with no room."""
+    from engine.providers.youtube import YouTubeError
+    from engine.quota import COSTS
+
+    client, led, _transport = metered(handler=lambda _r: httpx.Response(403, text="forbidden"))
+    with pytest.raises(YouTubeError):
+        await client.set_thumbnail("yt-1", thumbnail)
+
+    assert led.spent() == COSTS["thumbnails.set"]
+
+
+# ── reserve and refund: the 1,600-unit booking ──────────────────────────────
+#
+# `reserve()` and `refund()` are how the upload books its units, and both were
+# 0% executed — the upload path is stubbed in every test that reaches it. Emptying
+# either body left the suite green, which is precisely the pair of mutations that
+# reintroduces the double-booking `reserve` was written to close.
+
+
+async def test_reserve_refuses_without_booking_anything(database):
+    from engine.quota import QuotaExceeded, QuotaLedger
+
+    led = QuotaLedger(limit=1_000)  # an upload is 1,600
+    with pytest.raises(QuotaExceeded):
+        await led.reserve("videos.insert")
+    assert led.spent() == 0, "a refused reservation must not leave a charge behind"
+
+
+async def test_two_simultaneous_reservations_admit_exactly_one(database):
+    """The reproduction `reserve` exists for.
+
+    As two separate awaits — check, then record — both callers read the same spend,
+    both passed, and both booked: 3,200 units against a 1,600-unit ceiling, found
+    only when Google refused the second upload it had already charged for.
+    """
+    from engine.quota import QuotaExceeded, QuotaLedger
+
+    led = QuotaLedger(limit=1_600)  # room for one upload and not two
+    results = await asyncio.gather(
+        led.reserve("videos.insert"),
+        led.reserve("videos.insert"),
+        return_exceptions=True,
+    )
+
+    refused = [r for r in results if isinstance(r, QuotaExceeded)]
+    assert len(refused) == 1, f"both reservations were admitted: {results}"
+    assert led.spent() == 1_600
+
+
+async def test_a_refund_gives_the_units_back_and_deletes_the_row(database):
+    """Only for a session that demonstrably never opened. It has to be durable —
+    an in-memory-only refund comes back on the next `load()`."""
+    from sqlalchemy import func, select
+
+    from engine.db import session
+    from engine.quota import QuotaLedger
+    from engine.tables import QuotaEntry
+
+    led = QuotaLedger()
+    entry = await led.reserve("videos.insert")
+    assert led.spent() == 1_600
+    assert entry.row_id is not None
+
+    await led.refund(entry)
+
+    assert led.spent() == 0
+    async with session() as s:
+        assert (await s.execute(select(func.count()).select_from(QuotaEntry))).scalar() == 0
+
+
+async def test_a_refund_still_lands_after_the_ledger_was_reloaded(database):
+    """`load()` replaces every entry with a fresh object read back from its row, so
+    the one the caller is holding is no longer the one in the list.
+
+    A refund that quietly does nothing is the expensive direction: it eats a day's
+    budget that Google never charged for.
+    """
+    from engine.quota import QuotaLedger
+
+    led = QuotaLedger()
+    entry = await led.reserve("videos.insert")
+    await led.load()
+    assert all(e is not entry for e in led.entries), "the premise: load() swapped the object out"
+
+    await led.refund(entry)
+    assert led.spent() == 0
+
+    reloaded = QuotaLedger()
+    await reloaded.load()
+    assert reloaded.spent() == 0, "the row survived the refund"
+
+
+async def test_a_refund_falls_back_to_the_row_id_when_the_reloaded_entry_differs(database):
+    """The other half of the same problem, and the reason `refund` matches on
+    `row_id` at all.
+
+    SQLite hands a timestamp back exactly as it was given, so the reloaded `Entry`
+    compares equal and `list.remove` finds it. A store with a coarser column does
+    not, and then equality misses — which without the fallback is a refund that
+    logs a warning and gives nothing back.
+    """
+    from engine.quota import QuotaLedger
+
+    led = QuotaLedger()
+    entry = await led.reserve("videos.insert")
+    await led.load()
+    led.entries[0].at = led.entries[0].at.replace(microsecond=0)  # a second-resolution column
+
+    await led.refund(entry)
+    assert led.spent() == 0

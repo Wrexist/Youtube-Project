@@ -162,11 +162,15 @@ class Credentials:
     @property
     def is_fresh(self) -> bool:
         # 60s of headroom so a token doesn't expire mid-upload.
-        return (
-            bool(self.access_token)
-            and bool(self.expires_at)
-            and (self.expires_at > datetime.now(UTC) + timedelta(seconds=60))
-        )
+        if not self.access_token or not self.expires_at:
+            return False
+        # A naive `expires_at` is coerced rather than compared. It reaches here from
+        # any store with no timezone type — SQLite is the one in the box — and
+        # comparing naive with aware raises TypeError, which is not "stale" and does
+        # not reach `refresh()`. Coercing means a naive row is simply judged on its
+        # merits and, when it loses, self-heals through the refresh path.
+        expires = self.expires_at if self.expires_at.tzinfo else self.expires_at.replace(tzinfo=UTC)
+        return expires > datetime.now(UTC) + timedelta(seconds=60)
 
 
 # ── OAuth ───────────────────────────────────────────────────────────────────

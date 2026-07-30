@@ -3,6 +3,11 @@
     "schemas": {
       "AddModel": {
         "properties": {
+          "api_key_env": {
+            "default": "",
+            "title": "Api Key Env",
+            "type": "string"
+          },
           "base_url": {
             "default": "",
             "title": "Base Url",

@@ -877,6 +877,11 @@ export interface components {
         /** AddModel */
         AddModel: {
             /**
+             * Api Key Env
+             * @default
+             */
+            api_key_env: string;
+            /**
              * Base Url
              * @default
              */

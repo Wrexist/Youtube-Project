@@ -36,6 +36,12 @@ class AddModel(BaseModel):
     output_per_m: float = 0.0
     json_mode: bool = True
     context: int = Field(default=128_000, gt=0)
+    #: Name of the env var holding this model's key. Without it the provider's
+    #: default key is sent to `base_url` — so registering a Groq or OpenRouter
+    #: gateway shipped the real `OPENAI_API_KEY` to a third party. The *name*, not
+    #: the value: a key posted to this endpoint would be persisted to
+    #: `routing.json`, and CLAUDE.md #4 keeps secrets in `.env`.
+    api_key_env: str = ""
 
 
 class TaskRoute(BaseModel):
