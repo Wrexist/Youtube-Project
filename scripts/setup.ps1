@@ -12,6 +12,13 @@
 #
 # No Docker required. The engine defaults to SQLite, so the only hard
 # prerequisites are Python 3.11+ and Node 20+.
+#
+# Keep this file pure ASCII. Windows PowerShell 5.1 reads a .ps1 that has no BOM
+# using the machine's ANSI code page, not UTF-8, so a single em dash inside a
+# string is decoded as three bytes - and on a double-byte code page one of them
+# swallows the closing quote, which surfaces as a pile of nonsense parser errors
+# ("Unexpected token ')'") on lines that are perfectly valid. Same for the .cmd
+# files at the repository root.
 
 $ErrorActionPreference = "Stop"
 
@@ -66,7 +73,7 @@ function Offer($name, $why, $wingetId, $url) {
     return $false
 }
 
-# ── prerequisites ───────────────────────────────────────────────────────────
+# -- prerequisites -----------------------------------------------------------
 
 Step "Checking prerequisites"
 
@@ -77,7 +84,7 @@ $probe = "import sys; print(sys.version_info[:2] >= (3, 11))"
 function Find-Python {
     foreach ($candidate in @("py", "python", "python3")) {
         if (-not (Get-Command $candidate -ErrorAction SilentlyContinue)) { continue }
-        # `-3` for the launcher, nothing for the others. Never name this `$args` —
+        # `-3` for the launcher, nothing for the others. Never name this `$args` -
         # that is an automatic variable and assigning it breaks the call.
         $prefix = if ($candidate -eq "py") { @("-3") } else { @() }
         $result = & $candidate @prefix "-c" $script:probe 2>$null
@@ -124,7 +131,7 @@ if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
     Note "ffmpeg not on PATH - will use the one bundled with imageio-ffmpeg"
 }
 
-# ── engine ──────────────────────────────────────────────────────────────────
+# -- engine ------------------------------------------------------------------
 
 Step "Setting up the engine"
 
@@ -150,7 +157,7 @@ $installed = $LASTEXITCODE
 Pop-Location
 if ($installed -ne 0) { Die "installing the engine failed" }
 
-# ── web ─────────────────────────────────────────────────────────────────────
+# -- web ---------------------------------------------------------------------
 
 Step "Setting up the web app"
 Note "installing npm workspaces"
@@ -158,7 +165,7 @@ npm install --silent
 if ($LASTEXITCODE -ne 0) { Die "npm install failed" }
 
 # Tailwind v4 compiles CSS through native binaries, and npm records an optional
-# dependency only for the platform that generated the lockfile — which was Linux.
+# dependency only for the platform that generated the lockfile - which was Linux.
 # Windows was the platform this actually broke on: no win32 entry existed, the
 # binary was never fetched, and the first page load 500'd with "Cannot find module
 # '../lightningcss.win32-x64-msvc.node'". The root package.json now pins every
@@ -178,7 +185,7 @@ if ($LASTEXITCODE -ne 0) {
     Note "web dependencies OK"
 }
 
-# ── config ──────────────────────────────────────────────────────────────────
+# -- config ------------------------------------------------------------------
 
 Step "Configuration"
 
@@ -200,20 +207,20 @@ $env:STUDIO_PERSIST = "true"
 & $VenvPython -c "import asyncio; from engine import db; print('  ' + asyncio.run(db.ensure_schema()))"
 # Checked, like every other native call here. `$ErrorActionPreference` does not
 # stop on a non-zero exit from an external program, so a failed schema creation
-# scrolled past and setup went on to run the tests and print "Setup complete" —
+# scrolled past and setup went on to run the tests and print "Setup complete" -
 # on an install whose database does not exist.
 $Schema = $LASTEXITCODE
 Pop-Location
 if ($Schema -ne 0) { Die "could not create the database schema" }
 
-# ── verify ──────────────────────────────────────────────────────────────────
+# -- verify ------------------------------------------------------------------
 
 Step "Running the test suite"
 Push-Location apps\engine
 $env:STUDIO_PERSIST = "false"
 # Captured, not piped straight to the host. `... | Select-Object -Last 3` leaves
 # `$LASTEXITCODE` describing Select-Object rather than pytest, so a failing suite
-# scrolled three lines past and setup went on to print "Setup complete" — the one
+# scrolled three lines past and setup went on to print "Setup complete" - the one
 # thing this step exists to stop.
 $TestOutput = & $VenvPython -m pytest -q 2>&1
 $Tests = $LASTEXITCODE
@@ -229,7 +236,7 @@ if ($Tests -ne 0) {
 }
 
 Step "Adding a launcher"
-# Never fatal — see the note in setup.sh.
+# Never fatal - see the note in setup.sh.
 node scripts\install-shortcut.mjs
 
 Step "Checking what is still missing"
@@ -247,18 +254,18 @@ if ($Doctor -eq 0) {
 Write-Host ""
 Write-Host "Next:"
 Write-Host "  Double-click the Studio shortcut on your Desktop." -ForegroundColor Cyan
-Write-Host "  (or Studio.cmd in this folder — same thing)"
+Write-Host "  (or Studio.cmd in this folder - same thing)"
 Write-Host ""
 if ($Doctor -eq 0) {
     Write-Host "  Your browser opens by itself. Type a topic and press Generate."
 } else {
     Write-Host "  Your browser opens by itself, on the setup screen. Paste your"
-    Write-Host "  keys in there — it says what each one unlocks and links to"
+    Write-Host "  keys in there - it says what each one unlocks and links to"
     Write-Host "  where to get it."
 }
 Write-Host ""
 # `npm start` runs both halves. Kept here for when you want to restart one on its
-# own — and the leading .\ is required, because PowerShell looks a bare `apps\...`
+# own - and the leading .\ is required, because PowerShell looks a bare `apps\...`
 # up as a command name and fails with "The module 'apps' could not be loaded".
 Write-Host "To run the two halves separately instead:" -ForegroundColor DarkGray
 Write-Host "  npm run dev" -ForegroundColor DarkGray
