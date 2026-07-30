@@ -12,6 +12,10 @@ no API for it.
 | **Python 3.11+** | runs the render engine | <https://www.python.org/downloads/> |
 | **Node.js 20+** | runs the web app | <https://nodejs.org> |
 
+3.11, 3.12 or 3.13 for preference: two dependencies publish compiled Windows wheels
+only for versions that have been out a while, and setup will offer to fetch 3.12
+alongside a newer Python rather than fight it.
+
 That is the whole list. **No Docker, no database server, no ffmpeg** — one ships
 with the engine's Python dependencies. Postgres and Redis are optional upgrades
 (see the bottom of this page), never prerequisites.
@@ -326,6 +330,25 @@ given as a relative path. Prefix it with `.\`:
 
 **`The term '```bash' is not recognized`** — that line is markdown fencing from
 these docs, not a command. Copy the lines *between* the fences.
+
+**`NativeCommandError` during setup, naming a program that looks like it worked** —
+for example `py.exe : Python 3.14.6 ... NativeCommandError`. Windows PowerShell 5.1
+turns a single line written to stderr into a terminating error whenever the script
+captures output and `$ErrorActionPreference` is `Stop`, so a program that succeeded
+can still stop the install. Fixed in `setup.ps1`; if you see it, you are on an old
+copy — `git pull` and run `Install Studio.cmd` again.
+
+**`Unexpected token ')'` in `setup.ps1`, on a line that is plainly fine** — same
+cause, one layer down: a `.ps1` saved as UTF-8 with no BOM is read using the
+machine's ANSI code page, and a non-ASCII character in a string can swallow the
+closing quote. The file is ASCII-only for this reason, so again: `git pull`.
+
+**Setup offers to install Python 3.12 when you already have 3.14** — deliberate,
+and it installs alongside rather than replacing anything. Some dependencies
+(`ctranslate2`, `scipy`) publish compiled Windows wheels only for versions that
+have been out a while; on a newer Python pip tries to build them from source and
+fails on the absent C++ toolchain. Decline it and setup continues on 3.14 anyway.
+To point setup at a specific interpreter, set `STUDIO_PYTHON` to its full path.
 
 **Anything engine-side** — run the doctor; it names the single next action for
 whatever is missing.
