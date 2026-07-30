@@ -219,13 +219,30 @@ thing. From a terminal, `npm start` is the same thing again.
 
 All three run one process that starts both halves, labels their output so you can
 tell an engine traceback from a Next one, waits for the web app to actually
-answer, and then opens your browser. A window stays open while Studio runs — that
+answer, and then opens Studio. A window stays open while Studio runs — that
 is deliberate, it is where errors appear, and closing it is how you quit. Both
 halves go down together: a web app talking to a dead engine quietly falls back to
 demo data and looks like it is working, which is worse than stopping.
 
-Launching it again while it is already running just brings the browser back
-rather than starting a second copy.
+Launching it again while it is already running just brings the window back rather
+than starting a second copy.
+
+### The window it opens
+
+Studio opens in a window of its own — no tabs, no address bar, no bookmarks bar,
+its own taskbar entry. That is a Chromium app window (`--app=`), borrowed from
+whichever of Edge, Chrome or Brave is installed; Edge ships with Windows, so on
+Windows there is normally nothing to choose. It is the same app either way, and
+where none of those exist it opens a normal browser tab instead.
+
+Set `STUDIO_BROWSER=1` to always get an ordinary tab — worth it if you want
+devtools, your extensions, or your own profile.
+
+It is not an Electron app, and deliberately so: a real `.exe` would mean shipping
+a second browser engine, a build step and code signing, to change what the window
+frame looks like. If you want a Start-menu entry that behaves like an installed
+program, the browser will make you one — in Edge, **Settings and more (…) → Apps →
+Install this site as an app**, with Studio running.
 
 If something *else* holds the ports it says so, and suggests different ones,
 rather than letting uvicorn print `[Errno 98] Address already in use`.
