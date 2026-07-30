@@ -131,7 +131,9 @@ async def test_a_refused_scrape_falls_through_to_the_next_backend():
 @respx.mock
 async def test_wikipedia_is_the_floor_when_both_scrapes_are_dead():
     respx.post(DDG_LITE).mock(side_effect=httpx.ConnectError("blocked"))
+    respx.get(DDG_LITE).mock(side_effect=httpx.ConnectError("blocked"))
     respx.post(DDG_HTML).mock(return_value=httpx.Response(200, text="<html>changed markup</html>"))
+    respx.get(DDG_HTML).mock(return_value=httpx.Response(200, text="<html>changed markup</html>"))
     respx.get(WIKI).mock(
         return_value=httpx.Response(
             200,
@@ -146,6 +148,103 @@ async def test_wikipedia_is_the_floor_when_both_scrapes_are_dead():
         "https://en.wikipedia.org/wiki/YouTube_history",
     ]
     assert problem == ""
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_redirected_search_is_followed_rather_than_parsed_as_empty():
+    """The second reported failure: `parsed 0 results` on a well-covered topic.
+
+    `follow_redirects` defaults to False in httpx and a 30x is not an error status, so
+    `raise_for_status()` passed, the body was a redirect stub, and the regexes matched
+    nothing. Both DuckDuckGo endpoints redirect a POST to their canonical host, so
+    every backend reported an empty index for a query it never actually ran.
+    """
+    respx.post(DDG_LITE).mock(
+        return_value=httpx.Response(302, headers={"location": f"{DDG_LITE}?q=x"})
+    )
+    respx.get(DDG_LITE).mock(
+        return_value=httpx.Response(200, text=lite_page(["https://example.com/a"]))
+    )
+
+    urls, problem = await web._search("anything", limit=8)
+
+    assert urls == ["https://example.com/a"]
+    assert problem == ""
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_post_that_returns_nothing_is_retried_as_a_get():
+    respx.post(DDG_LITE).mock(return_value=httpx.Response(200, text="<html>nothing</html>"))
+    get = respx.get(DDG_LITE).mock(
+        return_value=httpx.Response(200, text=lite_page(["https://example.com/a"]))
+    )
+
+    urls, _ = await web._search("anything", limit=8)
+
+    assert get.called
+    assert urls == ["https://example.com/a"]
+
+
+# ── phrasing ────────────────────────────────────────────────────────────────
+
+
+def test_a_question_is_reduced_to_the_words_a_full_text_index_can_match():
+    """The reported topic, verbatim: "How did mrbeast take over youtube".
+
+    Wikipedia's search ANDs its terms — every word has to appear in a page — so the
+    interrogative scaffolding takes a well-covered subject to zero hits. `take over`
+    is kept: it is part of the subject, not the question.
+    """
+    assert web._keywords("How did mrbeast take over youtube") == "mrbeast take over youtube"
+    assert web._variants("How did mrbeast take over youtube") == [
+        "How did mrbeast take over youtube",
+        "mrbeast take over youtube",
+    ]
+
+
+def test_a_topic_that_is_already_keywords_is_searched_once():
+    assert web._variants("mrbeast youtube") == ["mrbeast youtube"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_keyword_form_is_tried_when_the_question_finds_nothing():
+    """Wikipedia answering 0 hits for the question and hits for its keywords."""
+    respx.post(DDG_LITE).mock(side_effect=httpx.ConnectError("blocked"))
+    respx.get(DDG_LITE).mock(side_effect=httpx.ConnectError("blocked"))
+    respx.post(DDG_HTML).mock(side_effect=httpx.ConnectError("blocked"))
+    respx.get(DDG_HTML).mock(side_effect=httpx.ConnectError("blocked"))
+
+    def by_phrasing(request):
+        from urllib.parse import parse_qs, urlparse
+
+        srsearch = parse_qs(urlparse(str(request.url)).query)["srsearch"][0]
+        hits = [{"title": "MrBeast"}] if srsearch == "mrbeast take over youtube" else []
+        return httpx.Response(200, json={"query": {"search": hits}})
+
+    respx.get(WIKI).mock(side_effect=by_phrasing)
+
+    urls, problem = await web._search("How did mrbeast take over youtube", limit=8)
+
+    assert urls == ["https://en.wikipedia.org/wiki/MrBeast"]
+    assert problem == ""
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_the_same_backend_failing_on_both_phrasings_is_reported_once():
+    """The row is truncated in the UI; six clauses for three problems reads as noise."""
+    respx.post(DDG_LITE).mock(return_value=httpx.Response(403, text="no"))
+    respx.post(DDG_HTML).mock(return_value=httpx.Response(403, text="no"))
+    respx.get(WIKI).mock(return_value=httpx.Response(200, json={"query": {"search": []}}))
+
+    urls, problem = await web._search("How did mrbeast take over youtube", limit=8)
+
+    assert urls == []
+    assert problem.count("duckduckgo-lite") == 1
+    assert problem.count("wikipedia") == 1
 
 
 @pytest.mark.asyncio

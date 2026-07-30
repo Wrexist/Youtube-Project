@@ -16,6 +16,26 @@ from loguru import logger
 
 USER_AGENT = "StudioBot/0.1 (+research; contact via project owner)"
 
+#: What the scraped endpoints are sent instead. `StudioBot/0.1` is the honest answer
+#: and it is also the one DuckDuckGo's HTML front-ends answer with a results-free
+#: page: they serve browsers, and an unrecognised agent gets nothing to parse. Read
+#: as user-hostile if you like — the alternative is a search step that never works.
+_SCRAPE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+#: Interrogative scaffolding, dropped when a phrasing found nothing. Deliberately not
+#: a general stopword list: `take over` carries meaning to a full-text index, and
+#: stripping every common word leaves two nouns and a worse search than the question.
+_QUESTION_WORDS = frozenset(
+    {"how", "what", "why", "when", "where", "who", "did", "does", "do", "is", "are", "the", "a"}
+)
+
 #: Hosts that are never a source: the search engine's own pages, and the ad and
 #: redirect domains its result lists carry.
 _NOT_SOURCES = frozenset(
@@ -68,52 +88,95 @@ async def _search(topic: str, *, limit: int) -> tuple[list[str], str]:
     contract and changes without notice; Wikipedia's API is, which is why it is last
     rather than absent. Nothing here needs a key: the first run of a fresh clone has
     to be able to research something.
+
+    Each backend is tried against the topic as typed and then against its keywords,
+    because the two failure modes are different: a scrape is indifferent to phrasing
+    and Wikipedia's search is not (see `_keywords`). Six requests worst case, all of
+    them cheap, and only reached when the ones before returned nothing.
     """
     attempts: list[str] = []
 
-    for name, backend in (
-        # Lite first: the same index, markup simple enough that it does not rot.
-        ("duckduckgo-lite", _ddg_lite),
-        ("duckduckgo-html", _ddg_html),
-        # Not as good, but it always answers and it is genuinely citable.
-        ("wikipedia", _wikipedia),
-    ):
-        try:
-            urls = await backend(topic, limit)
-        except Exception as exc:  # noqa: BLE001 — one backend failing is not fatal
-            attempts.append(f"{name}: {type(exc).__name__}: {exc}")
-            continue
-        if urls:
-            logger.info("research: {} returned {} source(s) for {!r}", name, len(urls), topic)
-            return urls, ""
-        attempts.append(f"{name}: parsed 0 results")
+    for query in _variants(topic):
+        for name, backend in (
+            # Lite first: the same index, markup simple enough that it does not rot.
+            ("duckduckgo-lite", _ddg_lite),
+            ("duckduckgo-html", _ddg_html),
+            # Not as good, but it always answers and it is genuinely citable.
+            ("wikipedia", _wikipedia),
+        ):
+            try:
+                urls = await backend(query, limit)
+            except Exception as exc:  # noqa: BLE001 — one backend failing is not fatal
+                _record(attempts, f"{name}: {type(exc).__name__}: {exc}")
+                continue
+            if urls:
+                logger.info("research: {} returned {} source(s) for {!r}", name, len(urls), query)
+                return urls, ""
+            _record(attempts, f"{name}: parsed 0 results")
 
     problem = "; ".join(attempts)
     logger.warning("research: every search backend failed for {!r} — {}", topic, problem)
     return [], problem
 
 
+def _record(attempts: list[str], reason: str) -> None:
+    """Collect a failure once. The same backend failing on both phrasings is one fact.
+
+    Without this the reason reads `lite: parsed 0 results; html: parsed 0 results;
+    wikipedia: …; lite: parsed 0 results; …` — six clauses for three problems, and
+    the UI truncates the row long before the last one.
+    """
+    if reason not in attempts:
+        attempts.append(reason)
+
+
+def _client(headers: dict[str, str]) -> httpx.AsyncClient:
+    """A client that follows redirects, because every backend here needs one that does.
+
+    `follow_redirects` defaults to *False* in httpx, and a 30x is not an error status —
+    so `raise_for_status()` passes, `resp.text` is the few bytes of a redirect stub,
+    and the regexes below match nothing. That is indistinguishable from a search that
+    found nothing: it is reported as `parsed 0 results` on a topic with pages of
+    coverage. Both DuckDuckGo endpoints redirect a POST to their canonical host.
+    """
+    return httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=headers)
+
+
 async def _ddg_lite(topic: str, limit: int) -> list[str]:
-    async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": USER_AGENT}) as client:
+    async with _client(_SCRAPE_HEADERS) as client:
         resp = await client.post("https://lite.duckduckgo.com/lite/", data={"q": topic})
         resp.raise_for_status()
+        text = resp.text
+        # The POST form is what the endpoint is for, but it is also the shape most
+        # likely to be refused. A plain GET is the same query and a different guess.
+        if not _pick(re.findall(r'href="([^"]+)"', text), limit):
+            resp = await client.get("https://lite.duckduckgo.com/lite/", params={"q": topic})
+            text = resp.text if resp.status_code < 400 else text
     # The class first, then every link on the page: the markup is not a contract,
     # and `_unwrap` already rejects anything that is not a result destination.
-    linked = re.findall(r'<a[^>]+href="([^"]+)"[^>]*class="result-link"', resp.text)
-    return _pick(linked, limit) or _pick(re.findall(r'href="([^"]+)"', resp.text), limit)
+    linked = re.findall(r'<a[^>]+href="([^"]+)"[^>]*class="result-link"', text)
+    return _pick(linked, limit) or _pick(re.findall(r'href="([^"]+)"', text), limit)
 
 
 async def _ddg_html(topic: str, limit: int) -> list[str]:
-    async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": USER_AGENT}) as client:
+    async with _client(_SCRAPE_HEADERS) as client:
         resp = await client.post("https://html.duckduckgo.com/html/", data={"q": topic})
         resp.raise_for_status()
-    linked = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"', resp.text)
-    return _pick(linked, limit) or _pick(re.findall(r'href="([^"]+)"', resp.text), limit)
+        text = resp.text
+        if not _pick(re.findall(r'href="([^"]+)"', text), limit):
+            resp = await client.get("https://html.duckduckgo.com/html/", params={"q": topic})
+            text = resp.text if resp.status_code < 400 else text
+    linked = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"', text)
+    return _pick(linked, limit) or _pick(re.findall(r'href="([^"]+)"', text), limit)
 
 
 async def _wikipedia(topic: str, limit: int) -> list[str]:
-    """The floor under the other two. Keyless, stable, and a real citation."""
-    async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": USER_AGENT}) as client:
+    """The floor under the other two. Keyless, stable, and a real citation.
+
+    Kept on the honest `USER_AGENT` rather than the browser string the scrapes send:
+    Wikimedia's policy asks for a descriptive agent with a contact, and they mean it.
+    """
+    async with _client({"User-Agent": USER_AGENT}) as client:
         resp = await client.get(
             "https://en.wikipedia.org/w/api.php",
             params={
@@ -131,6 +194,28 @@ async def _wikipedia(topic: str, limit: int) -> list[str]:
         for hit in hits
         if hit.get("title")
     ][:limit]
+
+
+def _variants(topic: str) -> list[str]:
+    """The topic as typed, then its keywords — in that order, deduped."""
+    out = [topic.strip()]
+    keywords = _keywords(topic)
+    if keywords and keywords not in out:
+        out.append(keywords)
+    return out
+
+
+def _keywords(topic: str) -> str:
+    """`How did mrbeast take over youtube` -> `mrbeast take over youtube`.
+
+    Video topics are written as questions, and Wikipedia's search ANDs its terms:
+    every word has to appear somewhere in a page, so a leading `How did` can take a
+    well-covered subject to zero hits. Dropping the interrogative scaffolding is the
+    difference between "no usable sources" and a page of them.
+    """
+    words = re.findall(r"[\w'-]+", topic.lower())
+    kept = [w for w in words if w not in _QUESTION_WORDS]
+    return " ".join(kept[:8])
 
 
 def _pick(hrefs: list[str], limit: int) -> list[str]:
