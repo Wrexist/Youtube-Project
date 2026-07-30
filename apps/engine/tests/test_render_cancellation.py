@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -127,38 +128,64 @@ async def test_cancelling_a_render_does_not_return_before_the_thread_does(stub_r
     assert exited.is_set(), "the coroutine unwound while the encode was still running"
 
 
-async def test_the_render_slot_comes_back_only_once_the_thread_has_gone(stub_render):
+async def test_the_render_slot_is_held_until_the_thread_has_gone(stub_render):
     """`max_concurrent_renders` is the guardrail that keeps one box usable.
 
     A slot released while the abandoned encode is still burning CPU is worse than
     no guardrail at all: it is a guardrail that reports it is holding.
+
+    Driven through `RenderStage.run`, because that is the only thing that touches
+    `_render_slots` — `compose_video` never does. An earlier version of this test
+    took the semaphore itself and then asserted the count came back, which is true
+    however production behaves: it was measuring its own `async with`. The slot has
+    to be observed *from outside* the code that owns it, mid-render, which is what
+    the second acquire below is for.
     """
-    from engine.workflows.media import _render_slots
+    from engine.workflows.media import RenderStage, _render_slots
 
     entered, exited = stub_render
     slots = _render_slots()
-    taken = slots._value
+    free = slots._value
 
-    async with slots:
-        assert slots._value == taken - 1, "the premise: the slot is held while rendering"
-        task = await _start_render("j2")
-        await asyncio.to_thread(entered.wait, 10)
-        task.cancel()
-        with pytest.raises((asyncio.CancelledError, Exception)):
-            await asyncio.wait_for(task, timeout=25)
-        assert exited.is_set()
+    task = asyncio.create_task(RenderStage().run(_Ctx("j2")))
+    await asyncio.to_thread(entered.wait, 10)
 
-    assert slots._value == taken, "the render slot was not returned"
+    # The stage is inside its `async with` now. This is the assertion the old
+    # version could not make.
+    assert slots._value == free - 1, "the stage did not take a slot while rendering"
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=25)
+
+    # The ordering is the whole finding: the thread must be gone *before* the slot
+    # is free, or a second render starts while the first is still saturating the CPU.
+    assert exited.is_set(), "the slot came back while the encode was still running"
+    assert slots._value == free, "the render slot was not returned"
 
 
 class _Ctx:
-    """The four things `RenderStage.run` reads off a context, and nothing else."""
+    """The four things `RenderStage.run` reads off a context, and nothing else.
+
+    `materials` and `voiceover` come back shaped rather than as `[]`, because a test
+    that drives the real `_render` (rather than monkeypatching it) gets as far as
+    `materials.clips` and `voiceover.audio_key`. No clips and no audio is exactly the
+    render these tests want — the stubbed `_render_sync` is what blocks — so the
+    values are empty, but the attributes have to exist.
+    """
 
     def __init__(self, job_id: str = "j4") -> None:
         self.job_id = job_id
         self.inputs: dict = {}
 
-    def get(self, _name: str):
+    def get(self, name: str):
+        if name == "materials":
+            return SimpleNamespace(clips=[])
+        if name == "voiceover":
+            # A key, not None: `store.local_path` joins it onto the storage root, so
+            # None is a TypeError before the render is even reached. The file need
+            # not exist — the stubbed `_render_sync` never opens it.
+            return SimpleNamespace(audio_key="voice/absent.mp3", duration_s=0.0)
         return []
 
     async def progress(self, _message: str, _fraction: float | None = None) -> None:
