@@ -199,6 +199,12 @@ function chromiumBinary() {
       : [
           "/usr/bin/google-chrome",
           "/usr/bin/microsoft-edge",
+          // Brave is listed on the other two platforms, so leaving it out here
+          // meant a Linux machine with only Brave fell back to a tab for no
+          // reason. Its package names differ by channel; -stable is the usual one.
+          "/usr/bin/brave-browser-stable",
+          "/usr/bin/brave-browser",
+          "/usr/bin/brave",
           "/usr/bin/chromium",
           "/usr/bin/chromium-browser",
           "/snap/bin/chromium",

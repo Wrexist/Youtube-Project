@@ -53,7 +53,24 @@ function Invoke-Native {
 
     $previous = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    if ($WorkingDirectory) { Push-Location $WorkingDirectory }
+
+    # Whether the push actually happened, rather than whether one was asked for.
+    # The preference is already `Continue` by this point, so a failed
+    # `Push-Location` is non-terminating: without this, a directory that does not
+    # exist would run the program in the caller's directory and then pop an
+    # unrelated entry off the stack on the way out. Reported as its own failure
+    # instead, because "npm install failed" from the wrong directory is a lie.
+    $pushed = $false
+    if ($WorkingDirectory) {
+        Push-Location $WorkingDirectory -ErrorAction SilentlyContinue
+        $pushed = $?
+        if (-not $pushed) {
+            $ErrorActionPreference = $previous
+            $message = "cannot enter $WorkingDirectory"
+            return @{ Lines = @($message); Text = $message; Code = 9009 }
+        }
+    }
+
     # Pre-set, so a program that never launches at all cannot leave the previous
     # command's success code standing. 9009 is what cmd reports for "not found".
     $global:LASTEXITCODE = 9009
@@ -66,7 +83,7 @@ function Invoke-Native {
         $lines = @("$_")
         $code = 9009
     } finally {
-        if ($WorkingDirectory) { Pop-Location }
+        if ($pushed) { Pop-Location }
         $ErrorActionPreference = $previous
     }
 
@@ -294,6 +311,14 @@ if (Test-Path $VenvPython) {
     if (-not $venvVersion) {
         Note "apps\engine\.venv does not run - rebuilding it"
         Remove-Item -Recurse -Force $VenvDir
+    } elseif ($venvVersion -lt $PyMin) {
+        # The floor as well as the ceiling. A venv left behind on 3.9 answers the
+        # probe perfectly well and is below the ceiling, so without this it is
+        # reused and the failure lands several minutes later as a requires-python
+        # error out of pip, which reads like a broken dependency rather than an
+        # interpreter this project never supported.
+        Note "apps\engine\.venv is on Python $venvVersion, below $PyMin - rebuilding it on $($found.Version)"
+        Remove-Item -Recurse -Force $VenvDir
     } elseif ($venvVersion -ge $PyTooNew -and $found.Version -lt $PyTooNew) {
         Note "apps\engine\.venv is on Python $venvVersion - rebuilding it on $($found.Version)"
         Remove-Item -Recurse -Force $VenvDir
@@ -332,7 +357,11 @@ if ($engine.Code -ne 0) {
 
 Step "Setting up the web app"
 Note "installing npm workspaces (also slow)"
-$npm = Invoke-Native "npm" @("install", "--silent", "--no-fund", "--no-audit")
+# `--loglevel=error`, not `--silent`. Silent suppresses npm's own error reporting
+# as well as its progress, so a failed install printed forty lines of nothing
+# through Show-Output. Checked: a 404 on a missing package produces no output at
+# all under --silent, and the full `npm error 404` block under --loglevel=error.
+$npm = Invoke-Native "npm" @("install", "--loglevel=error", "--no-fund", "--no-audit")
 if ($npm.Code -ne 0) { Show-Output $npm 40; Die "npm install failed" }
 
 # Tailwind v4 compiles CSS through native binaries, and npm records an optional
