@@ -155,29 +155,90 @@ it: the verification step has a delay Google controls.
 
 ### 3. A Google Cloud OAuth client
 
-1. <https://console.cloud.google.com> → create a project.
-2. **APIs & Services → Library**: enable **YouTube Data API v3** and
-   **YouTube Analytics API**. Both.
-3. **OAuth consent screen**: External, add yourself as a test user. You do not
-   need to submit for verification while you are the only user.
-4. **Credentials → Create Credentials → OAuth client ID** → *Web application*.
-   Add this exact redirect URI:
+Every click, because the console renamed half of this in 2025 and most guides now
+describe menus that no longer exist. What used to be "OAuth consent screen" is now
+**Google Auth Platform**, and its Test users live under **Audience**.
+
+**Why it has to be your own project.** The two values are not a second login —
+they identify your copy of Studio to Google. The YouTube API's 10,000 units a day
+(≈ six uploads) are counted *per Cloud project*, so a client shipped inside Studio
+would mean everyone who installed it fighting over the same six.
+
+**3a. A project.** <https://console.cloud.google.com/projectcreate> → any name →
+**Create**. Nothing is billed. Wait for the notification, then make sure the
+project picker at the top shows it — every step below applies to the selected
+project, and the commonest way to lose an hour here is doing step 3c in a
+different project from step 3d.
+
+**3b. The two APIs.** Enable both, on that project:
+
+- <https://console.cloud.google.com/apis/library/youtube.googleapis.com> →
+  **Enable**. This is the one that uploads.
+- <https://console.cloud.google.com/apis/library/youtubeanalytics.googleapis.com> →
+  **Enable**. This is the one that measures.
+
+**3c. The consent screen** — <https://console.cloud.google.com/auth/overview>.
+If it offers **Get started**, take it. Then:
+
+1. **Branding**: App name (`Studio` is fine — only you ever see it), user support
+   email = your own, developer contact email = your own → **Save**.
+2. **Audience**: User type **External**. Under **Test users** → **+ Add users** →
+   your own Google address → **Save**. Only accounts listed here can authorise the
+   app while it is in Testing.
+3. **Data access** → **Add or remove scopes** → **Manually add scopes**, and paste
+   these four:
+   ```
+   https://www.googleapis.com/auth/youtube.upload
+   https://www.googleapis.com/auth/youtube.readonly
+   https://www.googleapis.com/auth/youtube.force-ssl
+   https://www.googleapis.com/auth/yt-analytics.readonly
+   ```
+   → **Update** → **Save**. (`force-ssl` is not optional — captions need it.)
+
+**3d. The client** — <https://console.cloud.google.com/auth/clients> →
+**+ Create client**:
+
+1. Application type: **Web application**. Not "Desktop app": the flow here is a
+   redirect back to a local HTTP server, which is the web-application shape.
+2. Name: anything.
+3. Leave **Authorised JavaScript origins** empty.
+4. **Authorised redirect URIs** → **+ Add URI** → paste exactly:
    ```
    http://localhost:8080/v1/auth/google/callback
    ```
-5. Put the two values in `.env`:
-   ```
-   GOOGLE_CLIENT_ID=...
-   GOOGLE_CLIENT_SECRET=...
-   ```
+   `http` not `https`, `8080` not `3000`, no trailing slash. Anything else is
+   `redirect_uri_mismatch` later, which is the least informative error Google
+   returns.
+5. **Create**. The dialog then shows both values. The client ID ends
+   `.apps.googleusercontent.com`; the secret starts `GOCSPX-`.
 
-Then visit <http://localhost:8080/v1/auth/google> and follow the link it returns.
-If the credentials are missing it says so plainly rather than handing you a broken
-URL.
+**3e. Into Studio.** Paste both into the Publishing fields on
+<http://localhost:3000/setup> → **Save** → **Connect YouTube**. Or put them in
+`.env` by hand:
 
-> If you change `GOOGLE_REDIRECT_URI`, it must match what you registered in step 4
-> **character for character**. A mismatch produces `redirect_uri_mismatch`, which
-> is the least informative error Google returns.
+```
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+```
+
+Google then asks which account, warns that the app is unverified — **Advanced →
+Go to Studio** — and shows the permissions. **Leave every checkbox ticked**: an
+unticked upload scope fails at the moment you publish a video, not here. Studio
+stores one refresh token, encrypted, and nothing else.
+
+> **Testing mode expires refresh tokens after seven days.** Once you have
+> confirmed the connection works, go back to **Audience** and press
+> **Publish app**. It stays unverified — the warning screen and the 100-user cap
+> remain, neither of which matters for your own channel — but the weekly
+> reconnect stops. This is the single most common reason a working connection
+> dies a week later for no visible reason.
+
+> If you change `GOOGLE_REDIRECT_URI`, or Studio reports the engine on a port
+> other than 8080 because something else held it, the registered URI must match
+> what Studio actually uses, character for character.
+
+The engine must be running when you press Connect: the redirect lands on
+`localhost:8080`, and nothing is listening otherwise.
 
 ### 4. A YouTube channel — manual, permanently
 

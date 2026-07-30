@@ -363,18 +363,20 @@ function GoogleCloudSteps() {
     },
     {
       body:
-        "OAuth consent screen: pick External, fill in a name and your email, " +
-        "then add your own Google account under Test users. No verification is " +
+        "Consent screen — now called Google Auth Platform. Under Branding, an " +
+        "app name and your own email. Under Audience, User type External, then " +
+        "Test users → Add users → your own Google account. No verification is " +
         "needed while you are the only user.",
-      href: "https://console.cloud.google.com/apis/credentials/consent",
+      href: "https://console.cloud.google.com/auth/overview",
       link: "Consent screen",
     },
     {
       body:
-        "Create Credentials → OAuth client ID → Web application, and add the " +
-        "redirect URI below. Google then shows the client ID and secret: paste " +
-        "them into the two fields above and press Save.",
-      href: "https://console.cloud.google.com/apis/credentials/oauthclient",
+        "Create client → Application type Web application (not Desktop app), " +
+        "then Authorised redirect URIs → Add URI → the URI below. Google then " +
+        "shows the client ID and secret: paste them into the two fields above " +
+        "and press Save.",
+      href: "https://console.cloud.google.com/auth/clients",
       link: "Create client",
     },
   ];
@@ -428,7 +430,16 @@ function GoogleCloudSteps() {
           <p className="mt-3 max-w-[70ch] text-[12px] leading-relaxed text-[var(--color-faint)]">
             On the &ldquo;Google hasn&apos;t verified this app&rdquo; screen,
             choose Advanced, then continue. That is what your own unverified
-            test app looks like, and it is expected.
+            test app looks like, and it is expected. Leave every permission
+            ticked — an unticked upload scope fails when you publish a video,
+            not before.
+          </p>
+          <p className="mt-2 max-w-[70ch] text-[12px] leading-relaxed text-[var(--color-faint)]">
+            Once it works, press Publish app on the Audience page. A project
+            left in Testing expires its refresh token after seven days, which is
+            why a connection that worked can quietly need redoing a week later.
+            Publishing changes nothing else — it stays unverified, warning
+            screen included.
           </p>
         </div>
       </Card>
