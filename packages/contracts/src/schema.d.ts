@@ -1504,9 +1504,10 @@ export interface operations {
     };
     finish_auth_v1_auth_google_callback_get: {
         parameters: {
-            query: {
-                code: string;
-                state: string;
+            query?: {
+                code?: string | null;
+                state?: string | null;
+                error?: string | null;
             };
             header?: never;
             path?: never;
