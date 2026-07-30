@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -175,6 +176,32 @@ def _render_slots() -> asyncio.Semaphore:
     return asyncio.Semaphore(get_settings().max_concurrent_renders)
 
 
+#: The abort switch for each render currently in flight, by job id.
+#:
+#: A registry rather than something threaded through `WorkflowContext` because the
+#: only writer is `main.cancel_job`, which has a job id and nothing else — the
+#: context belongs to the run it is cancelling and is not reachable from outside it.
+#: Process-local by nature: a render in the arq worker is not cancellable from the
+#: API process at all, which is what `cancel_job` already says out loud.
+_ABORTS: dict[str, threading.Event] = {}
+
+
+def abort_render(job_id: str) -> bool:
+    """Ask this job's render thread to stop. True if there was one to ask.
+
+    Cancelling the coroutine does not touch the thread it is waiting on, and that
+    thread is inside ffmpeg for most of a render's life. Without this, Cancel
+    stopped the *reporting* and left the encode running to completion — still
+    burning a CPU, still holding a slot in `_render_slots`, so
+    `STUDIO_MAX_CONCURRENT_RENDERS` no longer bounded live encodes.
+    """
+    event = _ABORTS.get(job_id)
+    if event is None:
+        return False
+    event.set()
+    return True
+
+
 class RenderStage(Stage[str]):
     name = "render"
     title = "Render"
@@ -196,10 +223,26 @@ class RenderStage(Stage[str]):
             # Say so rather than showing a stage that sits at 0% for ten minutes.
             await ctx.progress("waiting for a render slot")
 
-        async with slots:
-            return await self._render(ctx, materials, voiceover, cues, beats, on_progress)
+        abort = threading.Event()
+        _ABORTS[ctx.job_id] = abort
+        try:
+            async with slots:
+                return await self._render(
+                    ctx, materials, voiceover, cues, beats, on_progress, abort
+                )
+        except compose.RenderAborted as exc:
+            # A cancel, not a failure. Translated to the outcome the rest of the
+            # system already understands: `Workflow.run` lets CancelledError through
+            # untouched, so the job ends as cancelled rather than as a failed render
+            # with a mystifying error string.
+            logger.info("render for job {} stopped on request", ctx.job_id)
+            raise asyncio.CancelledError(str(exc)) from exc
+        finally:
+            # After the `async with`, so the slot is released only once the thread
+            # has actually exited — `compose_video` does not return until it has.
+            _ABORTS.pop(ctx.job_id, None)
 
-    async def _render(self, ctx, materials, voiceover, cues, beats, on_progress):
+    async def _render(self, ctx, materials, voiceover, cues, beats, on_progress, abort=None):
         output_path = await compose.compose_video(
             clips=materials.clips,
             beats=beats,
@@ -208,6 +251,7 @@ class RenderStage(Stage[str]):
             aspect=ctx.inputs.get("aspect", "9:16"),
             job_id=ctx.job_id,
             on_progress=on_progress,
+            abort=abort,
         )
         key = await store.put_file(output_path, f"renders/{ctx.job_id}.mp4")
 

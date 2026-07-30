@@ -22,38 +22,99 @@ function Step($text) { Write-Host ""; Write-Host $text -ForegroundColor White }
 function Note($text) { Write-Host "  $text" -ForegroundColor DarkGray }
 function Die($text) { Write-Host "X $text" -ForegroundColor Red; exit 1 }
 
+<#
+Offer to install a missing prerequisite, rather than only naming it.
+
+A brand-new Windows machine has neither Python nor Node, and "install it from
+python.org and tick Add Python to PATH" is three decisions and a wrong-answer
+trap in one sentence. `winget` ships with Windows 10 1709+ and Windows 11, so on
+any machine likely to run this it is already there and does the whole thing
+correctly.
+
+Asked, never assumed: installing software is the operator's call. Declining is a
+normal answer and leaves the manual instructions on screen.
+#>
+function Offer($name, $why, $wingetId, $url) {
+    Write-Host ""
+    Write-Host "  $name is not installed." -ForegroundColor Yellow
+    Write-Host "  Studio needs it $why."
+    Write-Host ""
+
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "  Install it now with winget? [Y/n] " -ForegroundColor Cyan -NoNewline
+        $answer = Read-Host
+        if ($answer -eq "" -or $answer -match "^[Yy]") {
+            Write-Host ""
+            winget install --id $wingetId --exact --accept-package-agreements --accept-source-agreements
+            # winget updates the persisted environment, not this process's copy of
+            # it, so the freshly installed executable is not on PATH here until we
+            # re-read it. Without this the next probe fails on software that was
+            # just installed successfully.
+            $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
+            $user = [Environment]::GetEnvironmentVariable("Path", "User")
+            $env:Path = "$machine;$user"
+            return $true
+        }
+    } else {
+        Write-Host "  winget is not available on this machine, so install it by hand:"
+    }
+
+    Write-Host ""
+    Write-Host "    $url" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Then double-click 'Install Studio.cmd' again."
+    return $false
+}
+
 # ── prerequisites ───────────────────────────────────────────────────────────
 
 Step "Checking prerequisites"
 
 # `python3` is the Unix name; Windows installs `python`, and the Store shim named
 # `python` exits without doing anything, so `py` is tried first where present.
-$Python = $null
-$PythonArgs = @()
 $probe = "import sys; print(sys.version_info[:2] >= (3, 11))"
-foreach ($candidate in @("py", "python", "python3")) {
-    if (-not (Get-Command $candidate -ErrorAction SilentlyContinue)) { continue }
-    # `-3` for the launcher, nothing for the others. Never name this `$args` —
-    # that is an automatic variable and assigning it breaks the call.
-    $prefix = if ($candidate -eq "py") { @("-3") } else { @() }
-    $result = & $candidate @prefix "-c" $probe 2>$null
-    if ($LASTEXITCODE -eq 0 -and "$result" -eq "True") {
-        $Python = $candidate
-        $PythonArgs = $prefix
-        break
+
+function Find-Python {
+    foreach ($candidate in @("py", "python", "python3")) {
+        if (-not (Get-Command $candidate -ErrorAction SilentlyContinue)) { continue }
+        # `-3` for the launcher, nothing for the others. Never name this `$args` —
+        # that is an automatic variable and assigning it breaks the call.
+        $prefix = if ($candidate -eq "py") { @("-3") } else { @() }
+        $result = & $candidate @prefix "-c" $script:probe 2>$null
+        if ($LASTEXITCODE -eq 0 -and "$result" -eq "True") {
+            return @{ Cmd = $candidate; Args = $prefix }
+        }
+    }
+    return $null
+}
+
+$found = Find-Python
+if (-not $found) {
+    # Probed again after the install, rather than telling someone to start over:
+    # `Offer` refreshes PATH, so the interpreter it just installed is findable in
+    # this same run.
+    if (Offer "Python 3.11+" "to run the render engine" "Python.Python.3.12" "https://www.python.org/downloads/") {
+        $found = Find-Python
     }
 }
-if (-not $Python) {
-    Die "No Python 3.11+ found. Install it from python.org and tick 'Add Python to PATH'."
+if (-not $found) {
+    Die "Python 3.11+ is still not available. Install it, then run this again."
 }
+$Python = $found.Cmd
+$PythonArgs = $found.Args
 $PyVersion = & $Python @PythonArgs -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"
 Note "python $PyVersion"
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Die "node not found. Install Node 20 or newer from nodejs.org."
+    Offer "Node.js 20+" "to run the web app" "OpenJS.NodeJS.LTS" "https://nodejs.org" | Out-Null
+}
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Die "Node.js is still not available. Install it, then run this again."
 }
 $NodeMajor = [int](node -p "process.versions.node.split('.')[0]")
-if ($NodeMajor -lt 20) { Die "Node $(node -v) is too old - 20+ is required." }
+if ($NodeMajor -lt 20) {
+    Die "Node $(node -v) is too old - 20+ is required. Update it from nodejs.org."
+}
 Note "node $(node -v)"
 
 if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
@@ -167,6 +228,10 @@ if ($Tests -ne 0) {
     Die "the engine is not working on this machine - please open an issue with the output above"
 }
 
+Step "Adding a launcher"
+# Never fatal — see the note in setup.sh.
+node scripts\install-shortcut.mjs
+
 Step "Checking what is still missing"
 & $VenvPython (Join-Path $Root "apps\engine\scripts\doctor.py")
 $Doctor = $LASTEXITCODE
@@ -181,13 +246,15 @@ if ($Doctor -eq 0) {
 
 Write-Host ""
 Write-Host "Next:"
-Write-Host "  npm start" -ForegroundColor Cyan
+Write-Host "  Double-click the Studio shortcut on your Desktop." -ForegroundColor Cyan
+Write-Host "  (or Studio.cmd in this folder — same thing)"
 Write-Host ""
 if ($Doctor -eq 0) {
-    Write-Host "  then open http://localhost:3000 and type a topic."
+    Write-Host "  Your browser opens by itself. Type a topic and press Generate."
 } else {
-    Write-Host "  then open http://localhost:3000/setup and paste your keys in."
-    Write-Host "  The screen says what each one unlocks and links to where to get it."
+    Write-Host "  Your browser opens by itself, on the setup screen. Paste your"
+    Write-Host "  keys in there — it says what each one unlocks and links to"
+    Write-Host "  where to get it."
 }
 Write-Host ""
 # `npm start` runs both halves. Kept here for when you want to restart one on its

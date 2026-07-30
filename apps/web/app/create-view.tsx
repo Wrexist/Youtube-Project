@@ -140,7 +140,18 @@ export function CreateView({ ready }: { ready: Readiness }) {
               setError(null);
               startTransition(async () => {
                 const result = await rerunFrom(jobId, name);
-                if (!result.ok) setError(result.error ?? "could not re-run that stage");
+                if (!result.ok) {
+                  setError(result.error ?? "could not re-run that stage");
+                  return;
+                }
+                // The stream for this job has already closed — `stream.closed`
+                // shuts the EventSource, and the terminal status it left behind
+                // is what enables Publish. Both have to be undone here, or the
+                // pipeline sits on the old run's rows while the engine rewrites
+                // the stages beneath them, with Publish live over a video that
+                // is being regenerated (CLAUDE.md #3).
+                stream.markRunning();
+                setAttempt((a) => a + 1);
               });
             }}
           />
@@ -227,7 +238,8 @@ export function CreateView({ ready }: { ready: Readiness }) {
             onClick={() => setFormat("long")}
             label="Long-form 16:9"
           />
-          <Chip active={false} onClick={() => {}} label="From a series…" />
+          {/* "From a series…" was here with an empty onClick. Nothing serves series
+              yet, so it was a chip that swallowed the click and changed nothing. */}
 
           <div className="ml-auto">
             <Button
@@ -292,10 +304,20 @@ function SetupPrompt({ missing }: { missing: string[] }) {
   );
 }
 
-/** The pipeline before the first event arrives, so the shape is visible immediately. */
+/** The pipeline before the first event arrives, so the shape is visible immediately.
+ *
+ *  Only the graph's shape is borrowed from `DEMO_JOB` — name, title, editable. Every
+ *  field is listed rather than spread, because a spread carried the fixtures' own
+ *  `detail` and `variants` into a *live* job: expanding Research on a real render
+ *  showed the NTSB bridge write-up, and Hook offered three demo variants to pick
+ *  between, neither of which the engine had produced. A stage with no detail must
+ *  say so (pipeline.tsx renders "No detail captured for this stage."), and any field
+ *  added to the fixtures later must not leak in by default. */
 function emptyStages(): Stage[] {
   return DEMO_JOB.stages.map((s) => ({
-    ...s,
+    name: s.name,
+    title: s.title,
+    editable: s.editable,
     status: "pending" as const,
     summary: null,
     error: null,

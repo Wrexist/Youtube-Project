@@ -26,7 +26,7 @@ import httpx
 from loguru import logger
 
 from engine.models import ModelSpec, routing
-from engine.settings import get_settings
+from engine.settings import get_settings, named_credential
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
@@ -43,6 +43,10 @@ class Completion:
     input_tokens: int
     output_tokens: int
     spec: ModelSpec | None = None
+    #: How many *earlier*, discarded calls are folded into the token counts above.
+    #: Set by `LLM.json`, whose retry loop pays for every attempt but only ever
+    #: returns the last one. Zero for a plain `complete()`.
+    discarded_attempts: int = 0
 
     @property
     def cost_usd(self) -> float:
@@ -62,13 +66,36 @@ class LLM:
         self.spec = spec
         self.settings = get_settings()
 
+    def _credential(self, default: str) -> str:
+        """The key to send for this model.
+
+        `ModelSpec.api_key_env` wins when it is set, because the alternative is
+        sending the provider's own key to whatever `base_url` points at — and
+        `base_url` is how every supported gateway is reached, so that is the normal
+        case, not an exotic one. Empty `api_key_env` keeps the settings key, which
+        is what every catalogue entry and every existing route relies on.
+
+        An `api_key_env` naming an unset variable is an error rather than a silent
+        fall back to the default key: falling back would send the OpenAI key to the
+        gateway, which is the exact thing the field exists to stop.
+        """
+        if not self.spec.api_key_env:
+            return default
+        key = named_credential(self.spec.api_key_env)
+        if not key:
+            raise ProviderUnavailable(
+                f"{self.spec.key()} is configured to authenticate with "
+                f"${self.spec.api_key_env}, which is unset or empty. Add it to .env."
+            )
+        return key
+
     # ── transports ──────────────────────────────────────────────────────────
 
     async def _anthropic(self, prompt: str, system: str | None, max_tokens: int, temp: float):
         from anthropic import AsyncAnthropic
 
         client = AsyncAnthropic(
-            api_key=self.settings.anthropic_api_key,
+            api_key=self._credential(self.settings.anthropic_api_key),
             base_url=self.spec.base_url or None,
         )
         kwargs: dict[str, Any] = {
@@ -87,7 +114,7 @@ class LLM:
         self, prompt: str, system: str | None, max_tokens: int, temp: float
     ):
         base = self.spec.base_url or "https://api.openai.com/v1"
-        key = self.settings.openai_api_key
+        key = self._credential(self.settings.openai_api_key)
         messages = ([{"role": "system", "content": system}] if system else []) + [
             {"role": "user", "content": prompt}
         ]
@@ -123,7 +150,12 @@ class LLM:
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(
                 f"{base}/models/{self.spec.model}:generateContent",
-                params={"key": self.settings.gemini_api_key},
+                # Header, not `?key=`. Google accepts both, but a query string is the
+                # one part of an HTTPS request that leaks by default — into proxy
+                # logs, into `httpx`'s own INFO line, into any traceback that quotes
+                # `request.url`. The header form is documented for generateContent and
+                # keeps the key out of every one of those.
+                headers={"x-goog-api-key": self._credential(self.settings.gemini_api_key)},
                 json=body,
             )
         if resp.status_code >= 400:
@@ -228,10 +260,21 @@ class LLM:
         to, so parse defensively and retry with the parse error fed back rather than
         failing the stage on a formatting hiccup. Local models need this more, which
         is why they get an extra attempt.
+
+        **Every attempt is billed, and the returned `Completion` says so.** The
+        provider charges for a response that could not be parsed exactly as it
+        charges for one that could, but only the last one is returned — and that
+        object is the entire cost record a stage keeps. So a call that succeeded on
+        its third try recorded a third of its own bill, `spent_usd` under-reported
+        the whole run, and the per-video ceiling guarded a number that was never the
+        real one. The discarded attempts' tokens are folded into the winner's counts
+        (same spec, so the arithmetic is exact) rather than tracked separately,
+        because `cost_usd` is derived from them and every consumer reads that.
         """
         instruction = f"{prompt}\n\nRespond with valid JSON only. No prose, no markdown fences."
         attempts = retries + (1 if self.spec.is_local else 0)
         last_error = ""
+        discarded_input = discarded_output = 0
 
         for attempt in range(attempts + 1):
             body = (
@@ -250,8 +293,10 @@ class LLM:
                 want_json=True,
             )
             try:
-                return _extract_json(completion.text), completion
+                value = _extract_json(completion.text)
             except ValueError as exc:
+                discarded_input += completion.input_tokens
+                discarded_output += completion.output_tokens
                 last_error = str(exc)
                 logger.warning(
                     "JSON parse failed on {} (attempt {}): {}",
@@ -259,6 +304,12 @@ class LLM:
                     attempt + 1,
                     exc,
                 )
+                continue
+
+            completion.input_tokens += discarded_input
+            completion.output_tokens += discarded_output
+            completion.discarded_attempts = attempt
+            return value, completion
 
         hint = (
             f" {self.spec.label or self.spec.model} is marked as unreliable at strict "
@@ -266,8 +317,14 @@ class LLM:
             if not self.spec.json_mode
             else ""
         )
+        # The spend is named because it is real and nothing else will record it: the
+        # stage raises, so there is no Completion and no StageOutput to carry a cost.
+        # A run that burned four frontier-model calls and recorded $0 for them is the
+        # one case where the log is the only ledger there is.
+        wasted = self.spec.cost(discarded_input, discarded_output)
         raise ValueError(
-            f"{self.spec.key()} did not return parseable JSON after {attempts + 1} attempts.{hint}"
+            f"{self.spec.key()} did not return parseable JSON after {attempts + 1} "
+            f"attempts (${wasted:.4f} spent and unrecorded).{hint}"
         )
 
 

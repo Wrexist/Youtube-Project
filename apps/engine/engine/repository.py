@@ -1,9 +1,18 @@
 """Persistence for the things that used to be module-level dicts.
 
-`JOBS`, `CHANNELS`, `SCHEDULE` and `LAUNCHES` were dicts, so a restart lost every
-job, channel, booking and launch — and, worst of all, the day's quota spend. The
-dict shapes were kept compatible with this on purpose, so these functions are
-mostly a serialise/deserialise pair rather than a redesign.
+`JOBS`, `CHANNELS` and `SCHEDULE` were dicts, so a restart lost every job, channel
+and booking — and, worst of all, the day's quota spend. The dict shapes were kept
+compatible with this on purpose, so these functions are mostly a serialise/
+deserialise pair rather than a redesign.
+
+**`LAUNCHES` is the exception and this docstring used to imply otherwise.**
+`save_launch`/`load_launches` exist and work, but nothing in the application calls
+either — only a test does — so a channel launch is still lost on restart. It is not a
+one-line fix: `load_launches` returns a flattened dict that does not match the mirror
+shape `api/channels.py` reads (which needs `states`, `events`, `inputs`), so wiring it
+up means rewriting the loader. What is lost is a regenerable LLM artifact on a flow
+whose manual channel-creation step is a documented gap anyway, which is why this is
+recorded rather than fixed. See KNOWN-ISSUES §5.8.
 
 Jobs keep a **live in-process mirror** as well as their row. A running job holds
 things that cannot go in a database — the `asyncio.Event` subscribers wait on,
@@ -263,12 +272,70 @@ async def save_job(job: dict) -> None:
         row.workflow = job["workflow"].name
         row.status = job["status"]
         row.inputs = _jsonable(job.get("inputs", {}))
-        row.states = dump_states(job.get("states", {}))
-        row.events = job.get("events", [])
-        row.cost_usd = _cost_of(job)
+
+        states = dump_states(job.get("states", {}))
+        if job.get("enqueued") and _is_pristine(states) and not _is_pristine(row.states or {}):
+            # Belt and braces for the API process's mirror of a *worker* job. It
+            # never executes the workflow, so its `states` stay all-PENDING while
+            # the worker writes the real ones — and a full save from this side
+            # replaced a row holding six finished stages with a blank one, which
+            # makes the job unresumable and zeroes its recorded cost. The caller
+            # that used to do this (`cancel_job`) now writes through
+            # `update_job_status`; this is what catches the next one.
+            logger.warning(
+                "refusing to blank job {}'s stages from a worker-job mirror; writing status only",
+                job["id"],
+            )
+        else:
+            row.states = states
+            row.cost_usd = _cost_of(job)
+
+        # Only ever forward, for the same reason `main._resync` only grows its log:
+        # the worker's row may already carry events this mirror never saw.
+        events = job.get("events", [])
+        if len(events) >= len(row.events or []):
+            row.events = events
+
         row.error = job.get("error", "") or ""
         row.source_job_id = job.get("inputs", {}).get("source_job_id")
         row.updated_at = datetime.now(UTC)
+
+
+def _is_pristine(states: dict) -> bool:
+    """True when no stage in this map has started. An empty map counts."""
+    return all(
+        str((state or {}).get("status", "pending")) == StageStatus.PENDING.value
+        for state in states.values()
+    )
+
+
+async def update_job_status(job_id: str, status: str, extra_event: dict | None = None) -> bool:
+    """Write a job's status, and optionally append one event. Nothing else.
+
+    For the case where this process knows the *outcome* but not the work:
+    cancelling a job the render worker is executing. A full `save_job` there wrote
+    the API's pristine mirror — no stage outputs, zero cost — straight over the
+    worker's row, so a cancel at stage twelve threw away eleven finished stages and
+    the money they cost. The narrow write leaves `states`, `cost_usd` and the
+    worker's own events exactly as they are.
+
+    Returns False when there is no row to update, so the caller can tell "wrote it"
+    from "there was nothing there".
+    """
+    if not _persistence_enabled():
+        return False
+    async with session() as s:
+        row = await s.get(Job, job_id)
+        if row is None:
+            return False
+        row.status = status
+        if extra_event is not None:
+            # Reassigned rather than appended in place: `events` is a JSON column
+            # and SQLAlchemy does not track mutation of the list it handed back, so
+            # an in-place append is simply not written.
+            row.events = [*(row.events or []), extra_event]
+        row.updated_at = datetime.now(UTC)
+        return True
 
 
 def _cost_of(job: dict) -> float:
@@ -289,8 +356,15 @@ def jsonable(inputs: dict) -> dict:
     """Inputs reduced to what can be stored and served.
 
     `youtube_client` is a live client instance that a publish job carries — it holds
-    an access token, so it must reach neither the database nor an HTTP response. It
-    is rebuilt from the channel row on resume.
+    an access token, so it must reach neither the database nor an HTTP response.
+
+    It is rebuilt at *dispatch* time, not on restore: `main._run_job` and
+    `worker.run_job_task` both call `api.publishing.attach_youtube_client` before
+    starting the workflow, so both execution paths get one and the restored mirror
+    — which is the dict this function serialises — never holds a live token. This
+    docstring used to claim the rebuild happened "on resume" when nothing rebuilt it
+    at all, and the missing key surfaced as a bare KeyError that `CaptionsStage`,
+    being optional, swallowed into SKIPPED on an already-live video.
     """
     out = {}
     for key, value in inputs.items():
@@ -347,6 +421,50 @@ def _aware(moment: datetime | None) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
+def _mirror_of(row: Job, workflow) -> dict:
+    """One row as a mirror entry, status taken verbatim.
+
+    Shared by the startup loader and the mid-life re-read below; the difference
+    between them is only what "running" is allowed to mean, and that is the
+    caller's decision, not this function's.
+    """
+    import asyncio
+
+    states, needs_rerun = load_states(row.states or {}, workflow.initial_states())
+
+    # A stage that has to re-run may produce a different value, so anything
+    # downstream of it is no longer trustworthy either. The framework already
+    # models this for user edits; the same rule applies here.
+    for name in needs_rerun:
+        for dependent in workflow.dependents_of(name):
+            states[dependent].status = StageStatus.STALE
+            states[dependent].output = None
+    if needs_rerun:
+        logger.warning(
+            "job {}: {} stage(s) will re-run ({})",
+            row.id,
+            len(needs_rerun),
+            ", ".join(needs_rerun),
+        )
+
+    return {
+        "id": row.id,
+        "workflow": workflow,
+        "inputs": _restore_inputs(row.inputs or {}),
+        "states": states,
+        "events": row.events or [],
+        "wake": asyncio.Event(),
+        "status": row.status,
+        "error": row.error,
+        # Normalised on the way out: SQLite has no timezone type and hands
+        # back naive datetimes, while a job created in this process carries an
+        # aware one. Sorting the two together raises TypeError, so `GET
+        # /v1/jobs` died the moment a restored job and a new job coexisted.
+        "created_at": _aware(row.created_at),
+        "updated_at": _aware(row.updated_at),
+    }
+
+
 async def load_jobs(get_workflow) -> dict[str, dict]:
     """Rebuild the in-process job mirror from rows. Called once at startup.
 
@@ -354,8 +472,6 @@ async def load_jobs(get_workflow) -> dict[str, dict]:
     started — so it is marked `interrupted`. That is honest, and it is what lets
     the Queue screen offer a resume instead of showing a spinner forever.
     """
-    import asyncio
-
     mirror: dict[str, dict] = {}
     async with session() as s:
         rows = (await s.execute(select(Job).order_by(Job.created_at))).scalars().all()
@@ -368,49 +484,47 @@ async def load_jobs(get_workflow) -> dict[str, dict]:
             logger.warning("job {} ran unknown workflow {!r}; skipping", row.id, row.workflow)
             continue
 
-        status = row.status
-        if status == "running":
-            status = "interrupted"
+        entry = _mirror_of(row, workflow)
+        if entry["status"] == "running":
+            entry["status"] = "interrupted"
             interrupted += 1
-
-        states, needs_rerun = load_states(row.states or {}, workflow.initial_states())
-
-        # A stage that has to re-run may produce a different value, so anything
-        # downstream of it is no longer trustworthy either. The framework already
-        # models this for user edits; the same rule applies here.
-        for name in needs_rerun:
-            for dependent in workflow.dependents_of(name):
-                states[dependent].status = StageStatus.STALE
-                states[dependent].output = None
-        if needs_rerun:
-            logger.warning(
-                "job {}: {} stage(s) will re-run ({})",
-                row.id,
-                len(needs_rerun),
-                ", ".join(needs_rerun),
-            )
-
-        mirror[row.id] = {
-            "id": row.id,
-            "workflow": workflow,
-            "inputs": _restore_inputs(row.inputs or {}),
-            "states": states,
-            "events": row.events or [],
-            "wake": asyncio.Event(),
-            "status": status,
-            "error": row.error,
-            # Normalised on the way out: SQLite has no timezone type and hands
-            # back naive datetimes, while a job created in this process carries an
-            # aware one. Sorting the two together raises TypeError, so `GET
-            # /v1/jobs` died the moment a restored job and a new job coexisted.
-            "created_at": _aware(row.created_at),
-            "updated_at": _aware(row.updated_at),
-        }
+        mirror[row.id] = entry
 
     if interrupted:
         logger.warning("{} job(s) were mid-run at shutdown; marked interrupted", interrupted)
     logger.info("restored {} job(s)", len(mirror))
     return mirror
+
+
+async def reload_jobs(job_ids: list[str], get_workflow) -> dict[str, dict]:
+    """Re-read specific rows **mid-life**, taking their status at face value.
+
+    Not `load_jobs`. That one is the startup loader and rewrites a "running" row
+    to "interrupted", which is the right reading exactly once — when the process
+    has just begun and therefore cannot be running anything. Every other time it
+    is a lie: the arq worker is running the job right now, in another process, and
+    it is the only writer of that row.
+
+    This exists because the API's mirror is written only by the process that
+    dispatched the job. Restart the API mid-render and every later answer came
+    from the frozen snapshot the lifespan restored — the job sat at `interrupted`,
+    0 stages done, forever, and the publish gate refused it for not being
+    `completed` until somebody restarted the API a *second* time.
+    """
+    if not job_ids:
+        return {}
+    async with session() as s:
+        rows = (await s.execute(select(Job).where(Job.id.in_(job_ids)))).scalars().all()
+
+    out: dict[str, dict] = {}
+    for row in rows:
+        try:
+            workflow = get_workflow(row.workflow)
+        except KeyError:
+            logger.warning("job {} ran unknown workflow {!r}; skipping", row.id, row.workflow)
+            continue
+        out[row.id] = _mirror_of(row, workflow)
+    return out
 
 
 # ── channels ────────────────────────────────────────────────────────────────
@@ -439,8 +553,19 @@ async def save_channel(key: str, creds) -> None:
             s.add(row)
         row.channel_id = creds.channel_id
         row.refresh_token_encrypted = creds.refresh_token_encrypted
-        row.access_token = creds.access_token
-        row.expires_at = creds.expires_at
+        # The access token is deliberately *not* written. CLAUDE.md #4 keeps
+        # secrets out of anywhere they are not encrypted, and this column was
+        # plaintext OAuth — a live credential for the channel, sitting in a table
+        # next to the refresh token that is encrypted precisely because it is one.
+        #
+        # Nothing is lost by dropping it. `save_channel` is not called after
+        # `refresh()`, so the stored value was already stale inside the hour, and
+        # `load_channels` restoring a dead token is indistinguishable from restoring
+        # none: `is_fresh` says no and the provider refreshes on first use. The
+        # columns are left in place and cleared rather than migrated away, so a row
+        # written by an older build stops carrying a token the moment it is saved.
+        row.access_token = ""
+        row.expires_at = None
 
 
 async def load_channels() -> dict:
@@ -453,8 +578,15 @@ async def load_channels() -> dict:
     for row in rows:
         out[row.key] = Credentials(
             refresh_token_encrypted=row.refresh_token_encrypted,
-            access_token=row.access_token,
-            expires_at=row.expires_at,
+            # Never read back, even when an old row still holds one — see
+            # `save_channel`. Restoring nothing makes `is_fresh` False, which sends
+            # the first publish through `refresh()` and heals the credential from
+            # the encrypted refresh token, the only thing worth persisting.
+            #
+            # (This also disposes of the reason `expires_at` needed normalising to
+            # an aware datetime here: with no token to date, nothing compares it.)
+            access_token="",
+            expires_at=None,
             channel_id=row.channel_id,
         )
     logger.info("restored {} channel(s)", len(out))
@@ -493,6 +625,11 @@ async def load_schedule() -> dict[str, datetime]:
 
 
 # ── channel launches ────────────────────────────────────────────────────────
+#
+# UNWIRED. Neither function below has an application caller — grep says the only
+# call site in the repository is a test. A channel launch therefore does not survive
+# a restart, whatever the `ChannelLaunch` table's existence suggests. Do not treat
+# this section as working persistence; see the note at the top of the module.
 
 
 async def save_launch(launch_id: str, status: str, niche: str, payload: dict) -> None:

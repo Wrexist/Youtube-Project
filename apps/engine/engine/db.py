@@ -50,11 +50,69 @@ async def ensure_schema() -> str:
 
         await conn.run_sync(Base.metadata.create_all)
 
+        if not existing:
+            # A schema built from metadata is at head by construction, but Alembic
+            # has no way to know that — so `alembic upgrade head`, which README,
+            # SETUP and CLAUDE.md all document, replayed the initial revision on top
+            # of the tables that already existed and died with
+            # `table channel_launches already exists`. Every machine that had
+            # started the app once hit it. Stamping closes the gap.
+            #
+            # Same connection and same transaction as `create_all` deliberately: on
+            # a crash in between, a stamped-but-empty or created-but-unstamped
+            # database is exactly the state this is meant to prevent. (`command.stamp`
+            # would open its own connection unless handed one through
+            # `cfg.attributes`, so the row is written directly.)
+            stamped = await conn.run_sync(_stamp_head)
+            if stamped:
+                return f"created schema ({len(missing)} tables) at {stamped}"
+
     if existing:
         # Some tables were there and some were not: a revision was probably added
         # without being applied. Creating the gap keeps the app up, but say so.
+        #
+        # Not stamped, deliberately — unlike the fresh case there may be a genuinely
+        # pending revision here, and claiming head would make `upgrade` skip it.
         return f"created {len(missing)} missing table(s) — consider `alembic upgrade head`"
     return f"created schema ({len(missing)} tables)"
+
+
+def _stamp_head(conn) -> str | None:
+    """Record the head revision in `alembic_version`. Returns it, or None.
+
+    Never raises: this runs during startup, and a missing `alembic.ini` — which is
+    the case if the engine is ever installed as a wheel without it — must degrade to
+    an unstamped schema, not a boot failure. The cost of returning None is that
+    `alembic upgrade head` needs `stamp head` first, which is the status quo.
+    """
+    from pathlib import Path
+
+    from sqlalchemy import text
+
+    ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+    if not ini.is_file():
+        return None
+
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        head = ScriptDirectory.from_config(Config(str(ini))).get_current_head()
+    except Exception:  # noqa: BLE001 — see the docstring; boot must survive this
+        return None
+    if not head:
+        return None
+
+    conn.execute(
+        text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)")
+    )
+    # Empty-guarded rather than unconditional: `create_all` above only ran because
+    # tables were missing, but the version table is not one of `Base.metadata`'s, so
+    # it can outlive a dropped schema and a second row would make Alembic ambiguous
+    # about where it is.
+    if conn.execute(text("SELECT COUNT(*) FROM alembic_version")).scalar() == 0:
+        conn.execute(text("INSERT INTO alembic_version (version_num) VALUES (:v)"), {"v": head})
+    return head
 
 
 @lru_cache(maxsize=1)

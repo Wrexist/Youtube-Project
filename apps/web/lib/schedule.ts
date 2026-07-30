@@ -9,9 +9,13 @@
  *  deliberately and in one place, rather than scattered through the components.
  */
 
+/** The default ceiling. Real installs read `quota.limit` off `GET /v1/quota` and
+ *  pass it down — an approved quota extension raises it, and a screen that keeps
+ *  insisting on 10,000 would refuse drops the engine would happily accept. */
 export const DAILY_LIMIT = 10_000;
 export const PUBLISH_COST = 1600 + 50 + 400; // insert + thumbnail + captions
-export const MAX_PER_DAY = Math.floor(DAILY_LIMIT / PUBLISH_COST); // 4
+/** How many uploads a day's units buy. 4 at the default ceiling. */
+export const uploadsPerDay = (limit = DAILY_LIMIT) => Math.floor(limit / PUBLISH_COST);
 export const MIN_GAP_HOURS = 20;
 export const PEAK_LEAD_HOURS = 2;
 
@@ -48,17 +52,20 @@ export function validateMove(
   at: Date,
   existing: Scheduled[],
   quotaByDay: Record<string, number>,
+  limit = DAILY_LIMIT,
   now = new Date(),
 ): { ok: boolean; message: string } {
   if (at <= now) return { ok: false, message: "that time has already passed" };
 
-  const key = dayKey(at);
+  // Quota days, not calendar days — see `quotaKey`. Both sides have to agree, so
+  // the already-booked count is keyed the same way the ledger is.
+  const key = quotaKey(at);
   const used = quotaByDay[key] ?? 0;
-  const sameDay = existing.filter((s) => dayKey(s.at) === key).length;
-  if (Math.floor((DAILY_LIMIT - used) / PUBLISH_COST) <= sameDay) {
+  const sameDay = existing.filter((s) => quotaKey(s.at) === key).length;
+  if (Math.floor((limit - used) / PUBLISH_COST) <= sameDay) {
     return {
       ok: false,
-      message: `no upload quota left on ${at.getDate()} — each upload costs ${PUBLISH_COST.toLocaleString()} of ${DAILY_LIMIT.toLocaleString()} daily units`,
+      message: `no upload quota left on ${at.getDate()} — each upload costs ${PUBLISH_COST.toLocaleString()} of ${limit.toLocaleString()} daily units`,
     };
   }
 
@@ -105,9 +112,15 @@ export function autoSchedule(
   pending: { id: string; format: "short" | "long" }[],
   existing: Scheduled[],
   quotaByDay: Record<string, number>,
-  opts: { shortsPerWeek?: number; longPerWeek?: number; horizonDays?: number } = {},
+  opts: {
+    shortsPerWeek?: number;
+    longPerWeek?: number;
+    horizonDays?: number;
+    dailyLimit?: number;
+  } = {},
 ): AutoResult {
-  const { shortsPerWeek = 3, longPerWeek = 1, horizonDays = 28 } = opts;
+  const { shortsPerWeek = 3, longPerWeek = 1, horizonDays = 28, dailyLimit = DAILY_LIMIT } = opts;
+  const perDayCap = uploadsPerDay(dailyLimit);
   const now = new Date();
   const taken = [...existing];
   const result: AutoResult = { assignments: [], unplaced: [] };
@@ -124,7 +137,7 @@ export function autoSchedule(
   slots.sort((a, b) => slotScore(b) - slotScore(a));
 
   const perDay: Record<string, number> = {};
-  for (const s of taken) perDay[dayKey(s.at)] = (perDay[dayKey(s.at)] ?? 0) + 1;
+  for (const s of taken) perDay[quotaKey(s.at)] = (perDay[quotaKey(s.at)] ?? 0) + 1;
   const perWeek: Record<string, number> = {};
 
   // Long-form first: it costs more to make and gains more from a good slot.
@@ -137,9 +150,9 @@ export function autoSchedule(
     const slot = slots.find((at) => {
       if (taken.some((s) => Math.abs(at.getTime() - s.at.getTime()) < MIN_GAP_HOURS * 3600_000))
         return false;
-      const key = dayKey(at);
-      if ((perDay[key] ?? 0) >= MAX_PER_DAY) return false;
-      const budget = Math.floor((DAILY_LIMIT - (quotaByDay[key] ?? 0)) / PUBLISH_COST);
+      const key = quotaKey(at);
+      if ((perDay[key] ?? 0) >= perDayCap) return false;
+      const budget = Math.floor((dailyLimit - (quotaByDay[key] ?? 0)) / PUBLISH_COST);
       if (budget - (perDay[key] ?? 0) <= 0) return false;
       const wk = `${weekOf(at)}:${video.format}`;
       return (perWeek[wk] ?? 0) < cap;
@@ -160,7 +173,7 @@ export function autoSchedule(
       reason: slotReason(slot),
     });
     taken.push({ videoId: video.id, at: slot });
-    perDay[dayKey(slot)] = (perDay[dayKey(slot)] ?? 0) + 1;
+    perDay[quotaKey(slot)] = (perDay[quotaKey(slot)] ?? 0) + 1;
     const wk = `${weekOf(slot)}:${video.format}`;
     perWeek[wk] = (perWeek[wk] ?? 0) + 1;
   }
@@ -169,8 +182,44 @@ export function autoSchedule(
   return result;
 }
 
+/** The calendar day a date falls on, locally, as `YYYY-MM-DD`.
+ *
+ *  Zero-padded because the engine keys everything it sends by `date.isoformat()`
+ *  (`api/publishing.py`), and this emitted `2026-1-5` — so `quotaByDay[dayKey(d)]`
+ *  missed every day before the 10th of a month and every month before October, and
+ *  the calendar reported those days as having no quota spent at all.
+ *
+ *  Local, not Pacific: this keys grid cells and groups chips into them, and both
+ *  sides of that comparison are the viewer's own dates. For looking up what the
+ *  *engine* has spent against a specific publish instant, use `quotaKey`. */
 export function dayKey(d: Date): string {
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+/** The engine's quota day for an instant, as `YYYY-MM-DD`.
+ *
+ *  Google resets quota at midnight Pacific, so `quota.py:quota_day` converts to
+ *  `America/Los_Angeles` before taking the date — a 22:00 publish on the US east
+ *  coast is charged to the *previous* quota day, and an 09:00 publish in Europe to
+ *  the previous one too. Keying a drag off the viewer's local date therefore
+ *  checked the wrong day's budget for part of every day, everywhere but Pacific.
+ *
+ *  `formatToParts` rather than a formatted string: the parts are named, so this
+ *  cannot be broken by a locale that reorders or re-punctuates the date. */
+const PACIFIC = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Los_Angeles",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+export function quotaKey(at: Date): string {
+  const parts = Object.fromEntries(
+    PACIFIC.formatToParts(at).map((p) => [p.type, p.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function weekOf(d: Date): number {

@@ -50,7 +50,7 @@ export function StageRow({
 
         <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-muted)]">
           {stage.status === "running" ? (
-            <RunningBar />
+            <RunningBar message={stage.summary} />
           ) : stage.status === "failed" ? (
             <span className="text-[var(--color-bad)]">{stage.error ?? "failed"}</span>
           ) : (
@@ -140,11 +140,19 @@ function StatusGlyph({ status }: { status: StageStatus }) {
   );
 }
 
-function RunningBar() {
+/** A running stage's line. The skeleton stays — it is what says the job is alive —
+ *  but "working…" is only the placeholder for a stage that has said nothing yet.
+ *  UI-DESIGN.md #5: long work streams progress, and `stage.progress` /
+ *  `stage.retrying` messages land on `summary`. Rendering the skeleton
+ *  unconditionally meant a twelve-minute render and a stage on its third retry
+ *  looked identical. */
+function RunningBar({ message }: { message?: string | null }) {
   return (
     <span className="flex items-center gap-2.5">
-      <span className="skeleton h-1 w-32 rounded-full" />
-      <span className="text-[12px] text-[var(--color-faint)]">working…</span>
+      <span className="skeleton h-1 w-32 shrink-0 rounded-full" />
+      <span className="min-w-0 truncate text-[12px] text-[var(--color-faint)]">
+        {message || "working…"}
+      </span>
     </span>
   );
 }

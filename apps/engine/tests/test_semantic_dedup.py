@@ -48,13 +48,18 @@ class TestCosine:
 class TestFindDuplicateAsyncJaccard:
     @pytest.mark.asyncio
     async def test_clear_duplicate_detected(self):
-        """Jaccard is decisive above DUPLICATE_THRESHOLD."""
+        """Jaccard is decisive above DUPLICATE_THRESHOLD.
+
+        Asserting the method string alone proved nothing: the no-duplicate path
+        returns `(None, score, "Jaccard …")` too, so `method.startswith("Jaccard")`
+        held whether or not a duplicate was found. Name the candidate.
+        """
         existing = ["why bridges collapse"]
-        # Highly similar wording — Jaccard should exceed 0.45.
         dup, score, method = await find_duplicate_async(
             "why bridges collapse suddenly", existing, ollama_base_url=None
         )
-        # Score varies; just verify method says Jaccard and result is returned.
+        assert dup == "why bridges collapse"
+        assert score >= DUPLICATE_THRESHOLD  # 0.667 vs 0.45
         assert method.startswith("Jaccard")
 
     @pytest.mark.asyncio
@@ -78,18 +83,30 @@ class TestFindDuplicateAsyncJaccard:
             ["why bridges collapse"],
             ollama_base_url=None,
         )
-        # Perfect Jaccard match → returned as Jaccard method.
+        # Perfect Jaccard match → returned as Jaccard method. `dup is not None` is
+        # the load-bearing half: "Jaccard" appears in the method string on the
+        # no-duplicate path as well.
+        assert dup is not None
+        assert score == pytest.approx(1.0)
         assert "Jaccard" in method
 
     @pytest.mark.asyncio
     async def test_best_candidate_returned(self):
+        """The *best* candidate, not merely a matching one.
+
+        The `if dup:` guard this test used to hang its only assertion on made it
+        unconditionally green — including on the bug it exists to catch, where the
+        first candidate above the threshold wins instead of the highest-scoring one.
+        """
         existing = ["cat food recipes", "why bridges collapse", "cat grooming tips"]
         dup, score, method = await find_duplicate_async(
             "cat grooming guide", existing, ollama_base_url=None
         )
-        # "cat grooming tips" is more similar than the others.
-        if dup:
-            assert "cat" in dup.lower() or "groom" in dup.lower()
+        # 0.5 for "cat grooming tips" against 0.2 for "cat food recipes", which is
+        # itself above SEMANTIC_LOWER — so returning the first match would pick the
+        # wrong one.
+        assert dup == "cat grooming tips"
+        assert score == pytest.approx(0.5)
 
 
 # ── find_duplicate_async — embedding path (mocked Ollama) ────────────────────

@@ -14,7 +14,6 @@ guard — it fails when a new field is added and never read.
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -252,20 +251,134 @@ def test_only_the_setup_endpoint_writes_the_environment():
     assert set(writers) <= _MAY_WRITE_ENV, f"unexpected environment writer: {writers}"
 
 
+#: Names that hold a credential rather than describing one.
+_CREDENTIAL = re.compile(r"api_key|secret|token", re.IGNORECASE)
+
+#: An f-string that interpolates one: `f"key={api_key}"`. Needed separately because
+#: the tokenizer hands back a whole f-string as one STRING token, so the scan below
+#: would otherwise look straight past it.
+_FSTRING_INTERPOLATION = re.compile(r"\{[^}]*(api_key|secret|token)[^}]*\}", re.IGNORECASE)
+
+#: The tail of a `logger.<level>` call, matched against the tokens just before an
+#: opening paren to decide whether the scan below has entered a logging call. Matches
+#: `log` as well as `logger`, and underscores in the method name, so an aliased import
+#: (`from loguru import logger as log`) or `logger.opt_info` is not a blind spot.
+#:
+#: Only the *call* is located here — deciding what inside it is a leak is the job of
+#: `_CREDENTIAL` and `_FSTRING_INTERPOLATION` above. Describing a credential in the
+#: message text stays fine: "no api_key configured" is a good log line, and it is a
+#: STRING token, which the walk ignores.
+_LOGGER_CALL = re.compile(r"(?:logger|log)\.[a-z_]+$")
+
+
+def _logged_credentials(path) -> list[str]:
+    """Credential *values* reaching a `logger.…` call in *path*.
+
+    Token-based rather than regex-per-line, for two reasons. The house logging idiom
+    is loguru's positional form — `logger.info("using {}", api_key)` — which no
+    single-line regex looking for `{api_key}` can see, and which the previous version
+    of this check therefore missed entirely (verified: it caught the f-string and the
+    `+` concatenation and waved the positional form through). And a logger call that
+    spans several lines has its arguments on lines that do not contain the word
+    "logger" at all.
+
+    The rule: inside a logger call, a credential name appearing as an *identifier* is
+    a value being passed; the same word inside a plain string is prose.
+    """
+    import io
+    import tokenize
+
+    source = path.read_text(encoding="utf-8")
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):  # pragma: no cover
+        return []
+
+    found: list[str] = []
+    depth = 0  # paren depth inside a logger call; 0 means we are not in one
+    for index, token in enumerate(tokens):
+        if depth == 0:
+            # `logger` `.` `info` `(` — match on the trailing name so `self.logger`
+            # and a module-level `logger` both count.
+            if token.type == tokenize.OP and token.string == "(" and index >= 1:
+                prefix = "".join(
+                    t.string for t in tokens[max(0, index - 3) : index] if t.type != tokenize.NL
+                )
+                if _LOGGER_CALL.search(prefix):
+                    depth = 1
+            continue
+
+        if token.type == tokenize.OP and token.string in "([{":
+            depth += 1
+        elif token.type == tokenize.OP and token.string in ")]}":
+            depth -= 1
+            if depth == 0:
+                continue
+        elif token.type == tokenize.NAME and _CREDENTIAL.search(token.string):
+            found.append(f"{path.name}:{token.start[0]}: {token.line.strip()}")
+        elif token.type == tokenize.STRING and _FSTRING_INTERPOLATION.search(token.string):
+            found.append(f"{path.name}:{token.start[0]}: {token.line.strip()}")
+
+    return found
+
+
 def test_no_secret_is_logged():
-    """A key in a log file is a leaked key. Cheap to assert, expensive to miss."""
-    result = subprocess.run(
-        ["grep", "-rnE", r"logger\.[a-z]+\(.*(api_key|secret|token)", str(ENGINE)],
-        capture_output=True,
-        text=True,
-    )
-    interesting = [
-        line
-        for line in result.stdout.splitlines()
-        # Naming a *variable* is fine; interpolating its value is not.
-        if re.search(r"\{[^}]*(api_key|secret|token)[^}]*\}|\+\s*\w*(api_key|secret|token)", line)
+    """A key in a log file is a leaked key. Cheap to assert, expensive to miss.
+
+    In Python rather than a `grep` subprocess: Windows is a documented first-class
+    path (SETUP.md, and `.venv/Scripts/python` throughout CLAUDE.md) and has no
+    `grep`, so the subprocess raised `FileNotFoundError` there — turning the check
+    into an error on the one platform least likely to be running CI.
+    """
+    offenders = [
+        offender for path in sorted(ENGINE.rglob("*.py")) for offender in _logged_credentials(path)
     ]
-    assert not interesting, f"possible secret in a log line: {interesting}"
+    assert not offenders, f"possible secret in a log line: {offenders}"
+
+
+def test_the_secret_scan_catches_every_way_of_logging_a_key(tmp_path):
+    """The check above passes vacuously if it cannot see a leak. Plant four.
+
+    Three of these are leaks and one is not, and the positional form is the one the
+    previous `grep`-based version of this check let through — which is also the form
+    every real log line in this engine uses.
+    """
+    leaks = tmp_path / "leaky.py"
+    leaks.write_text(
+        "from loguru import logger\n"
+        "\n"
+        "\n"
+        "def positional(api_key):\n"
+        '    logger.info("using {}", api_key)\n'
+        "\n"
+        "\n"
+        "def interpolated(api_key):\n"
+        '    logger.info(f"using {api_key}")\n'
+        "\n"
+        "\n"
+        "def concatenated(api_key):\n"
+        '    logger.info("using " + api_key)\n'
+        "\n"
+        "\n"
+        "def across_lines(api_key):\n"
+        "    logger.info(\n"
+        '        "using {}",\n'
+        "        api_key,\n"
+        "    )\n",
+        encoding="utf-8",
+    )
+    assert len(_logged_credentials(leaks)) == 4
+
+    innocent = tmp_path / "clean.py"
+    innocent.write_text(
+        "from loguru import logger\n"
+        "\n"
+        "\n"
+        "def complain():\n"
+        '    logger.warning("no api_key configured — set OPENAI_API_KEY in .env")\n',
+        encoding="utf-8",
+    )
+    assert _logged_credentials(innocent) == []
 
 
 # ── worker dispatch ─────────────────────────────────────────────────────────

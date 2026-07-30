@@ -117,7 +117,15 @@ CREDENTIALS: tuple[Credential, ...] = (
     Credential(
         env="OPENAI_API_KEY",
         label="OpenAI",
-        unlocks="Generates thumbnail backgrounds with GPT Image.",
+        unlocks=(
+            "Generates thumbnail backgrounds with GPT Image. It is also the default "
+            "bearer token sent to every openai_compatible model in the routing "
+            "catalogue — including a Groq, DeepSeek or OpenRouter gateway you "
+            "register — so one value has two jobs: a gateway key here breaks "
+            "thumbnails, which always call api.openai.com, and a real OpenAI key "
+            "here is handed to the gateway. Give the gateway its own variable and "
+            "name it in the model's api_key_env."
+        ),
         without_it="Thumbnails still compose, over a flat colour instead of generated art.",
         url="https://platform.openai.com/api-keys",
         effort="2 minutes",
@@ -216,13 +224,38 @@ def env_path() -> Path:
     Save writing to a file the engine will never look at — which would present as
     a save that reported success and changed nothing.
     """
-    for candidate in (Path(".env"), Path("../../.env")):
-        if candidate.is_file():
-            return candidate.resolve()
-    # None exists yet: create it beside the repository root if that is
-    # identifiable, otherwise in the working directory.
-    root = Path(__file__).resolve().parents[4]
-    return (root / ".env") if root.is_dir() else Path(".env").resolve()
+    try:
+        for candidate in (Path(".env"), Path("../../.env")):
+            if candidate.is_file():
+                return candidate.resolve()
+
+        # None exists yet: create it beside the repository root if that is
+        # identifiable, otherwise in the working directory.
+        #
+        # Found by walking up and looking for a marker, never by indexing a fixed
+        # depth. `parents[4]` assumed this file sits five levels below the repo
+        # root, which holds for a checkout (`<root>/apps/engine/engine/api/`) and
+        # does not hold in the Docker image, where the engine is copied to `/app`
+        # and there are only four parents — so `parents[4]` raised IndexError and
+        # took `GET /v1/setup` and `PUT /v1/setup/keys` down with a 500 on every
+        # `--profile full` container. The Setup screen is the first thing a new
+        # install opens.
+        parents = Path(__file__).resolve().parents
+        # `.git` first and on its own pass: it marks the *repository* root, which is
+        # where the engine's second env_file candidate (`../../.env`) points and
+        # therefore the only location both start-up directories agree on. The
+        # package markers are a second pass because `apps/engine/pyproject.toml`
+        # would otherwise win and put `.env` somewhere only one of them reads.
+        for marker in ((".git",), ("package.json", "pyproject.toml")):
+            for ancestor in parents:
+                if any((ancestor / name).exists() for name in marker):
+                    return ancestor / ".env"
+    except OSError:
+        # A permission error part-way up the walk must not 500 the setup screen;
+        # the fallback below is where the engine looks first anyway.
+        logger.warning("could not locate a repository root for .env; using the working directory")
+
+    return Path(".env").resolve()
 
 
 def _tail(value: str) -> str:

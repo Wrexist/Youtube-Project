@@ -8,6 +8,7 @@ portrait render and crops the subject out of frame.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from engine.services import stock
@@ -15,7 +16,32 @@ from engine.services.stock import (
     _matches_orientation,
     _parse_pexels,
     _parse_pixabay,
+    _target_orientation,
 )
+
+
+class _FakeClient:
+    """Just enough of `httpx.AsyncClient` to drive one provider request.
+
+    The response carries a real `httpx.Request` built from the same params the code
+    sent, because that is exactly how the live client builds it — and the Pixabay
+    key is one of those params, which is the whole point of the leak test below.
+    """
+
+    def __init__(self, *, status: int = 200, content_type: str = "application/json", body: bytes):
+        self._status = status
+        self._content_type = content_type
+        self._body = body
+        self.params: dict = {}
+
+    async def get(self, url: str, *, params: dict, headers: dict | None = None) -> httpx.Response:
+        self.params = dict(params)
+        return httpx.Response(
+            self._status,
+            content=self._body,
+            headers={"content-type": self._content_type},
+            request=httpx.Request("GET", url, params=params),
+        )
 
 
 def _pexels(video_id: int, files: list[tuple[int, int]], duration: float = 10.0) -> dict:
@@ -64,6 +90,46 @@ def _pixabay(hit_id: int, sizes: dict[str, tuple[int, int]], duration: float = 1
 )
 def test_orientation_filter(width, height, aspect, expected):
     assert _matches_orientation(width, height, aspect) is expected
+
+
+# The filter above is only half of it. Pexels *does* take an orientation parameter,
+# so for that provider what gets asked for decides what there is to filter — and the
+# two halves were written apart and drifted. `1:1` asked for "landscape" while the
+# filter rejects anything wider than 1.45, so every clip a square render fetched from
+# Pexels was thrown away on arrival and the beat came back empty.
+
+_SAMPLE_OF = {"portrait": (1080, 1920), "square": (1080, 1080), "landscape": (1920, 1080)}
+
+
+@pytest.mark.parametrize(
+    ("aspect", "orientation"),
+    [("9:16", "portrait"), ("1:1", "square"), ("16:9", "landscape")],
+)
+def test_each_aspect_asks_for_its_own_orientation(aspect, orientation):
+    assert _target_orientation(aspect) == orientation
+
+
+@pytest.mark.parametrize("aspect", ["9:16", "1:1", "16:9"])
+def test_what_is_requested_is_what_the_filter_keeps(aspect):
+    """The invariant, so the request and the filter cannot drift apart again.
+
+    Asserted through the sample rather than by comparing strings: the two sides
+    speak different languages — one an API parameter, one a width/height ratio — and
+    the only thing that matters is that a clip matching the request survives.
+    """
+    width, height = _SAMPLE_OF[_target_orientation(aspect)]
+    assert _matches_orientation(width, height, aspect) is True
+
+
+@pytest.mark.parametrize(
+    ("aspect", "orientation"),
+    [("9:16", "portrait"), ("1:1", "square"), ("16:9", "landscape")],
+)
+async def test_the_orientation_reaches_the_pexels_request(aspect, orientation):
+    """And that the mapping is actually wired into the query, not just defined."""
+    client = _FakeClient(body=b'{"videos": []}')
+    await stock._search_pexels(client, "bridges", aspect, 5)
+    assert client.params["orientation"] == orientation
 
 
 # ── pexels ──────────────────────────────────────────────────────────────────
@@ -154,6 +220,35 @@ def test_pixabay_ignores_renditions_with_missing_fields():
 def test_pixabay_tolerates_an_empty_payload():
     assert _parse_pixabay({}, "bridges", "9:16") == []
     assert _parse_pixabay({"hits": []}, "bridges", "9:16") == []
+
+
+async def test_a_pixabay_error_does_not_put_the_key_in_the_message(monkeypatch):
+    """CLAUDE.md non-negotiable #4: secrets are never logged.
+
+    Pixabay takes its key as a *query parameter*, and `resp.raise_for_status()`
+    formats the entire request URL into its message. `search()` catches that
+    exception and logs it at WARNING — so the single most likely Pixabay failure, a
+    bad or rate-limited key, is also the one that writes the key into the log file,
+    where it stays and gets pasted into bug reports.
+
+    The content-type guard above it does not cover this: a 401 from Pixabay is
+    `application/json`, so it sails past the Cloudflare check and dies on
+    `raise_for_status` instead.
+    """
+    from engine.settings import get_settings
+
+    monkeypatch.setenv("PIXABAY_API_KEY", "pixabay-secret-1234")
+    get_settings.cache_clear()
+
+    client = _FakeClient(status=401, body=b'{"error": "invalid key"}')
+    with pytest.raises(Exception) as caught:  # noqa: B017 — the type is the fix's choice
+        await stock._search_pixabay(client, "bridges", "9:16", 5)
+
+    assert client.params["key"] == "pixabay-secret-1234", "the key really was on the wire"
+    assert "pixabay-secret-1234" not in str(caught.value)
+    assert "pixabay-secret-1234" not in repr(caught.value)
+    # Still diagnosable — a scrubbed message that says nothing is its own bug.
+    assert "401" in str(caught.value)
 
 
 # ── download ────────────────────────────────────────────────────────────────

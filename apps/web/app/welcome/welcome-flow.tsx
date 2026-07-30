@@ -35,26 +35,56 @@ export function WelcomeFlow({ setup }: { setup: SetupStatus | null }) {
 
   if (!setup) return <EngineDown />;
 
+  /**
+   * Write whatever is typed on the current step. Returns false if the save failed,
+   * in which case the caller must not move on.
+   *
+   * Shared by advance() and finish() rather than living inside advance(): Done is
+   * the only way off the last step, so when this was inlined in advance() the
+   * Google client ID and secret pasted on Publishing were dropped on the floor —
+   * the one step whose keys nothing else prompts for.
+   */
+  async function persist(): Promise<boolean> {
+    const values = { ...drafts };
+    if (Object.keys(values).length === 0) return true;
+    const result = await saveCredentials(values);
+    if (!result.ok) {
+      setError(result.error ?? "Those keys were not saved.");
+      return false;
+    }
+    setDrafts({});
+    // Re-read the setup status the page was rendered with, so "Already set" and
+    // the Connect YouTube button update in place. Without it, saving the client
+    // ID and secret left Connect disabled until a round-trip through /setup.
+    router.refresh();
+    return true;
+  }
+
   /** Save whatever was typed on this step, then advance. */
   function advance(to: number) {
     setError(null);
-    const values = { ...drafts };
     startTransition(async () => {
-      if (Object.keys(values).length > 0) {
-        const result = await saveCredentials(values);
-        if (!result.ok) {
-          setError(result.error ?? "Those keys were not saved.");
-          return;
-        }
-        setDrafts({});
-      }
+      if (!(await persist())) return;
       setStep(to);
     });
   }
 
-  /** Leave onboarding for good. Records it so this does not reappear. */
-  function finish(destination: string) {
+  /**
+   * Leave onboarding for good. Records it so this does not reappear.
+   *
+   * `save` is Skip's contract, made explicit: Done writes what is on screen first,
+   * Skip discards it. Skip carrying a silent save would be worse than either — the
+   * one button whose label promises nothing happens is the wrong place to write
+   * credentials.
+   */
+  function finish(destination: string, save: boolean) {
+    setError(null);
     startTransition(async () => {
+      if (save) {
+        if (!(await persist())) return;
+      } else {
+        setDrafts({});
+      }
       await finishOnboarding();
       router.push(destination);
       router.refresh();
@@ -143,7 +173,22 @@ export function WelcomeFlow({ setup }: { setup: SetupStatus | null }) {
                 onChange={(v) => edit(c.env, v)}
               />
             ))}
-            <Connect setup={setup} pending={pending} onError={setError} />
+            <Connect
+              setup={setup}
+              pending={pending}
+              onError={setError}
+              typed={(byGroup.Publishing ?? []).some(
+                (c) => (drafts[c.env] ?? "").trim() !== "",
+              )}
+              satisfied={
+                setup.can_connect ||
+                ((byGroup.Publishing ?? []).length > 0 &&
+                  (byGroup.Publishing ?? []).every(
+                    (c) => c.configured || (drafts[c.env] ?? "").trim() !== "",
+                  ))
+              }
+              onSave={persist}
+            />
           </Step>
         )}
       </div>
@@ -155,8 +200,8 @@ export function WelcomeFlow({ setup }: { setup: SetupStatus | null }) {
         dirty={Object.keys(drafts).length > 0}
         onBack={() => setStep(step - 1)}
         onNext={() => advance(step + 1)}
-        onFinish={() => finish(setup.can_render ? "/" : "/setup")}
-        onSkipAll={() => finish("/")}
+        onFinish={() => finish(setup.can_render ? "/" : "/setup", true)}
+        onSkipAll={() => finish("/", false)}
       />
     </div>
   );
@@ -313,14 +358,31 @@ function Field({
   );
 }
 
+/**
+ * The one control on this step that is not a text field.
+ *
+ * It saves before it connects. Publishing is the last step, so the only button
+ * that used to write anything here was Done — which then navigates away, meaning
+ * the honest instruction was "press Done and come back from Setup". Saving the two
+ * halves inline instead lets the consent flow start from the step that asked for
+ * them, which is where someone who just pasted them expects it to work.
+ */
 function Connect({
   setup,
   pending,
   onError,
+  typed,
+  satisfied,
+  onSave,
 }: {
   setup: SetupStatus;
   pending: boolean;
   onError: (message: string) => void;
+  /** Something has been pasted into a Publishing field and not yet saved. */
+  typed: boolean;
+  /** Both OAuth halves will exist once anything typed is saved. */
+  satisfied: boolean;
+  onSave: () => Promise<boolean>;
 }) {
   const [busy, start] = useTransition();
   if (setup.can_publish) {
@@ -333,15 +395,20 @@ function Connect({
   return (
     <div className="border-t border-[var(--color-line)] pt-5">
       <p className="text-[13px] text-[var(--color-muted)]">
-        {setup.can_connect
-          ? "Now pick the channel. Studio asks for upload and analytics access, and stores only an encrypted refresh token."
-          : "Save the client ID and secret first — the consent page cannot be built without them. Press Continue, then come back here from Setup."}
+        {satisfied
+          ? typed
+            ? "Connect YouTube saves both halves first, then asks Google for consent. Studio requests upload and analytics access, and stores only an encrypted refresh token."
+            : "Now pick the channel. Studio asks for upload and analytics access, and stores only an encrypted refresh token."
+          : "Paste the client ID and secret above — the consent page cannot be built without them. Press Done to save what you have and finish; the Setup screen has this same button."}
       </p>
       <div className="mt-3">
         <Button
-          disabled={!setup.can_connect || pending || busy}
+          disabled={!satisfied || pending || busy}
           onClick={() =>
             start(async () => {
+              // Anything typed but unsaved has to reach the engine first: it is
+              // what builds the consent URL.
+              if (typed && !(await onSave())) return;
               const result = await connectYouTube();
               if (!result.ok || !result.data) {
                 onError(result.error ?? "Could not start the YouTube connection.");

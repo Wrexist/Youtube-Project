@@ -47,10 +47,33 @@ HEALTH_KEY = default_queue_name + health_check_key_suffix
 def build_redis_settings() -> RedisSettings:
     """Connection details for the worker process.
 
-    Keeps arq's generous retry defaults on purpose: the worker is long-running and
-    should ride out a Redis restart rather than dying on one refused connection.
+    This used to claim arq's defaults let the worker "ride out a Redis restart".
+    They do not, and the difference matters because the sentence was load-bearing:
+    `conn_retries`/`conn_retry_delay` bound only the *initial* connect, and with
+    `retry_on_error` unset redis-py re-raises the moment an established connection
+    is dropped. Measured by stopping Redis under a running job: `emit`'s publish
+    raised `ConnectionError: Error 111` and the stage that had already done its work
+    was recorded as failed.
+
+    So: a wider connect window, and — the part that was actually missing — a retry
+    on a dropped connection, which is what a restart or a failover looks like from
+    this side.
+
+    What this still does not buy is immortality. arq's own poll loop has no
+    reconnect of its own, so a Redis that stays down past redis-py's retry ends the
+    worker process; the supervisor is expected to restart it, and an interrupted job
+    comes back resumable. Surviving an outage *mid-stage* is `run_job_task.emit`'s
+    job, not this function's.
     """
-    return RedisSettings.from_dsn(get_settings().redis_url)
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    settings = RedisSettings.from_dsn(get_settings().redis_url)
+    settings.conn_retries = 10
+    settings.conn_retry_delay = 3
+    settings.retry_on_timeout = True
+    settings.retry_on_error = [RedisConnectionError, RedisTimeoutError]
+    return settings
 
 
 def probe_redis_settings() -> RedisSettings:
@@ -104,51 +127,102 @@ async def run_job_task(ctx: dict, job_id: str, start_from: str | None = None) ->
     safe to run on a different machine.
     """
     from engine import repository
+    from engine.quota import ledger
     from engine.workflows import video
 
     redis = ctx["redis"]
-    jobs = await repository.load_jobs(video.get)
-    job = jobs.get(job_id)
-    if job is None:
-        logger.error("worker asked for unknown job {}", job_id)
-        return "unknown"
 
-    job["status"] = "running"
-
-    async def emit(event: dict) -> None:
-        job["events"].append(event)
-        await redis.publish(CHANNEL.format(job_id), json.dumps(event))
-        if event["type"].startswith(("stage.completed", "stage.failed", "workflow.")):
-            await repository.save_job(job)
-
-    from engine.workflows.base import WorkflowError
-
+    # Everything is inside this try, including the job lookup and the ledger
+    # refresh. `__done__` is the only thing that closes the API's relay, and the
+    # unknown-job branch used to `return` from *above* the try — so a worker started
+    # against a different database (or with STUDIO_PERSIST=false, where there are no
+    # rows at all) left every SSE connection for that job open until the browser gave
+    # up. The refresh below was outside it for the same reason and would have caused
+    # the same hang: it is a database round-trip, so a transient failure there — the
+    # exact thing the reconnect loops elsewhere exist for — skipped the `finally` and
+    # stranded the stream.
     try:
-        await job["workflow"].run(
-            job_id=job_id,
-            inputs=job["inputs"],
-            emit=emit,
-            states=job["states"],
-            budget_usd=get_settings().max_cost_per_video_usd,
-            start_from=start_from,
-        )
-        job["status"] = "completed"
-    except WorkflowError as exc:
-        job["status"] = "failed"
-        job["error"] = str(exc)
-        logger.error("job {} failed: {}", job_id, exc)
-    except Exception as exc:  # noqa: BLE001
-        job["status"] = "failed"
-        job["error"] = str(exc)
-        logger.exception("job {} crashed", job_id)
-        await emit({"type": "workflow.failed", "job_id": job_id, "error": str(exc)})
-    finally:
-        await repository.save_job(job)
-        # A terminal marker so the API's subscriber closes the stream instead of
-        # waiting for an event that is never coming.
-        await redis.publish(CHANNEL.format(job_id), json.dumps({"type": "__done__"}))
+        # Per job, not just at startup. An arq worker is long-lived — days, on a box
+        # that is left running — and everything the *API* process spends in between is
+        # invisible to this cache. `check()` before a publish would then be answering
+        # from whatever the ledger looked like when the worker booted.
+        await ledger.refresh()
 
-    return job["status"]
+        jobs = await repository.load_jobs(video.get)
+        job = jobs.get(job_id)
+        if job is None:
+            logger.error("worker asked for unknown job {}", job_id)
+            return "unknown"
+
+        job["status"] = "running"
+
+        async def emit(event: dict) -> None:
+            job["events"].append(event)
+            # Neither of these may take the run down with them. A stage that has
+            # already done its work — a finished render, a completed upload — being
+            # recorded as `failed` because Redis blinked while its event was being
+            # published is a strictly worse outcome than a lost event, and the
+            # event log is rebuilt from the row anyway. `main._persist` has guarded
+            # the in-process path this way since it was written; this path never was.
+            try:
+                await redis.publish(CHANNEL.format(job_id), json.dumps(event))
+            except Exception:  # noqa: BLE001
+                logger.warning("could not publish {} for job {}", event.get("type"), job_id)
+            if event["type"].startswith(("stage.completed", "stage.failed", "workflow.")):
+                try:
+                    await repository.save_job(job)
+                except Exception:  # noqa: BLE001
+                    logger.exception("failed to persist job {} at {}", job_id, event.get("type"))
+
+        from engine.workflows.base import WorkflowError
+
+        try:
+            # A publish job reaches this process as an id and nothing else, and
+            # `youtube_client` is stripped from the stored inputs by design — so
+            # without this every publish stage would read `ctx.inputs` and find
+            # nothing. See `channels.attach_youtube_client`.
+            from engine.api.publishing import attach_youtube_client
+
+            await attach_youtube_client(job)
+
+            await job["workflow"].run(
+                job_id=job_id,
+                inputs=job["inputs"],
+                emit=emit,
+                states=job["states"],
+                budget_usd=get_settings().max_cost_per_video_usd,
+                start_from=start_from,
+            )
+            job["status"] = "completed"
+        except WorkflowError as exc:
+            job["status"] = "failed"
+            job["error"] = str(exc)
+            logger.error("job {} failed: {}", job_id, exc)
+        except Exception as exc:  # noqa: BLE001
+            job["status"] = "failed"
+            job["error"] = str(exc)
+            logger.exception("job {} crashed", job_id)
+            await emit({"type": "workflow.failed", "job_id": job_id, "error": str(exc)})
+
+        # Before `__done__`, and separately guarded: the relay re-reads the row the
+        # moment it sees the marker, so a save that happens after it would be read
+        # too late, and a save that *raises* used to skip the marker altogether and
+        # strand the stream.
+        try:
+            await repository.save_job(job)
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to persist the final state of job {}", job_id)
+
+        return job["status"]
+    finally:
+        # A terminal marker so the API's subscriber closes the stream instead of
+        # waiting for an event that is never coming. Unconditional: an unknown job,
+        # a database that is down, a crash in `load_jobs` — every one of them still
+        # has a browser tab waiting on this.
+        try:
+            await redis.publish(CHANNEL.format(job_id), json.dumps({"type": "__done__"}))
+        except Exception:  # noqa: BLE001
+            logger.warning("could not publish the terminal marker for job {}", job_id)
 
 
 async def worker_is_alive(pool) -> bool:
@@ -218,15 +292,45 @@ async def enqueue(job_id: str, start_from: str | None = None) -> bool:
                 await pool.aclose()
 
 
+async def startup(_ctx: dict) -> None:
+    """Hydrate anything the worker resolves per job but reads from disk once.
+
+    Routing is the whole list so far, and it has to be here as well as in the
+    API's lifespan: the singleton `providers.llm.for_task` resolves through is
+    per-process, so a worker that skipped this ran every stage on
+    `DEFAULT_ROUTES` while the API reported the operator's real choice on the
+    Models screen. Same task, two models, depending on whether Redis happened to
+    be up.
+
+    The quota ledger is the other one, and it is the more expensive omission. The
+    worker is the process that *uploads*, and `QuotaLedger` starts empty — so a
+    fresh worker believed nothing had been spent today and happily started a
+    1,600-unit upload on a day the API knew was full. `reserve()` re-reads inside
+    its own transaction and would catch it at the last moment, but only after the
+    stage had done all its work; hydrating here is what makes the pre-flight
+    `check()` mean anything.
+    """
+    from engine.models import hydrate_routing
+    from engine.quota import ledger
+
+    hydrate_routing()
+
+    if get_settings().persist:
+        await ledger.load()
+
+
 class WorkerSettings:
     """`python -m arq engine.worker.WorkerSettings`.
 
     arq reads every field here as a plain class *attribute*, so `redis_settings`
     has to be a `RedisSettings` value — a `@staticmethod` is handed to arq
     unevaluated and fails with `'staticmethod' object has no attribute 'host'`.
+    The same rule is why `on_startup` below is a plain module-level function
+    rather than a method: arq reads `__dict__` and calls what it finds with `ctx`.
     """
 
     functions: list[Any] = [run_job_task]
+    on_startup = startup
     redis_settings: RedisSettings = build_redis_settings()
     max_jobs = 4
     # 30s, not arq's default hour. The key's TTL is this + 1, and `enqueue` uses

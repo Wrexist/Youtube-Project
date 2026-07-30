@@ -313,6 +313,24 @@ def validate_move(
                 f"The YouTube upload quota for {day} is exhausted; choose a different day.",
             )
 
+    # Hard block: too many uploads already on that day.
+    #
+    # `MAX_PUBLISHES_PER_DAY` is documented as "more than this many uploads in one
+    # day harms the channel", but it was enforced only inside `auto_schedule` —
+    # so the automatic planner respected it and every manual drag ignored it. One
+    # constant, two paths, one of them honouring it.
+    #
+    # Counted from `existing` rather than taken as a new parameter: the caller
+    # already passes every other scheduled time, so asking for a tally as well
+    # would be a second source of the same truth, and the two would drift.
+    same_day = sum(1 for t in existing if t.astimezone(at.tzinfo).date() == at.date())
+    if same_day >= MAX_PUBLISHES_PER_DAY:
+        return (
+            False,
+            f"{at.date()} already has {same_day} uploads scheduled. More than "
+            f"{MAX_PUBLISHES_PER_DAY} in a day splits your own audience.",
+        )
+
     # Soft warning: too close to another scheduled upload.
     for t in existing:
         gap_hours = abs((at - t).total_seconds()) / 3600

@@ -39,6 +39,62 @@ SCOPES = (
 
 CHUNK = 8 * 1024 * 1024
 
+#: YouTube's own field limits, enforced once more at the wire. `workflows/seo.py`
+#: shapes a generated package to fit these, but it is not the only way a value
+#: reaches here: a hand edit, a job restored from before a limit changed, or a
+#: caller that never ran the SEO chain all arrive unchecked, and the API rejects the
+#: whole insert — after the resumable session has already booked its 1,600 units.
+#:
+#: Deliberately not imported from `workflows.seo`: a provider that imports a
+#: workflow inverts the layering every other provider here respects.
+TITLE_MAX = 100
+#: Bytes, not characters. The API measures the description in bytes and this one is
+#: assembled with em dashes, so a 5,000-*character* description can be over.
+DESCRIPTION_MAX_BYTES = 5000
+TAGS_TOTAL_MAX = 500
+
+
+def _tag_cost(tag: str) -> int:
+    """A tag's share of the 500-character budget. A spaced tag is serialised
+    quoted — `foo,"bar baz"` — so it costs two more than its own length plus the
+    comma. Mirrors `workflows.seo.tag_cost`; see the note above on why it is not
+    imported."""
+    return len(tag) + (3 if " " in tag else 1)
+
+
+def _clamp_tags(tags: list[str]) -> list[str]:
+    """Drop tags once the budget is spent, rather than letting the API refuse them all.
+
+    Greedy from the front: the SEO chain has already ordered them by value, and a
+    caller that did not is no worse off than it was.
+    """
+    out: list[str] = []
+    used = 0
+    for tag in tags:
+        tag = tag.strip()
+        if not tag:
+            continue  # one empty string rejects the entire field
+        cost = _tag_cost(tag)
+        if used + cost > TAGS_TOTAL_MAX:
+            continue
+        out.append(tag)
+        used += cost
+    if len(out) != len(tags):
+        logger.warning(
+            "trimmed {} tag(s) to fit YouTube's 500-character budget", len(tags) - len(out)
+        )
+    return out
+
+
+def _clamp_utf8(text: str, limit: int) -> str:
+    """Cut to `limit` UTF-8 bytes without splitting a character."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    logger.warning("description is {} bytes; truncating to {}", len(encoded), limit)
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
+
 #: Consecutive transient failures on the same chunk before giving up. The loop was
 #: a bare `continue` with no cap and no delay, so a persistent 503 spun as fast as
 #: the network allowed, forever, against an API that was asking us to slow down.
@@ -106,11 +162,15 @@ class Credentials:
     @property
     def is_fresh(self) -> bool:
         # 60s of headroom so a token doesn't expire mid-upload.
-        return (
-            bool(self.access_token)
-            and bool(self.expires_at)
-            and (self.expires_at > datetime.now(UTC) + timedelta(seconds=60))
-        )
+        if not self.access_token or not self.expires_at:
+            return False
+        # A naive `expires_at` is coerced rather than compared. It reaches here from
+        # any store with no timezone type — SQLite is the one in the box — and
+        # comparing naive with aware raises TypeError, which is not "stale" and does
+        # not reach `refresh()`. Coercing means a naive row is simply judged on its
+        # merits and, when it loses, self-heals through the refresh path.
+        expires = self.expires_at if self.expires_at.tzinfo else self.expires_at.replace(tzinfo=UTC)
+        return expires > datetime.now(UTC) + timedelta(seconds=60)
 
 
 # ── OAuth ───────────────────────────────────────────────────────────────────
@@ -266,9 +326,9 @@ class YouTube:
 
         body = {
             "snippet": {
-                "title": title[:100],
-                "description": description[:5000],
-                "tags": tags,
+                "title": title[:TITLE_MAX],
+                "description": _clamp_utf8(description, DESCRIPTION_MAX_BYTES),
+                "tags": _clamp_tags(tags),
                 "categoryId": category_id,
                 "defaultLanguage": language,
                 "defaultAudioLanguage": language,
@@ -285,36 +345,50 @@ class YouTube:
             body["status"]["publishAt"] = publish_at.astimezone(UTC).isoformat()
 
         size = (await asyncio.to_thread(video_path.stat)).st_size
-        # Freshly, not from this process's cache: the worker uploads and the API
-        # serves, so each would otherwise miss the other's spend and both could
-        # approve the same last 1,600 units.
-        await ledger.check_fresh("videos.insert")
 
-        # 1. Open the resumable session.
+        # 1. Reserve the units, then open the resumable session.
+        #
+        # Reserved, not merely checked. This used to be `check_fresh()` here and
+        # `record()` after the session opened — two separate awaits with a network
+        # round trip between them. Two publishes starting together both re-read the
+        # same "8,400 of 10,000 spent", both passed, and both then booked 1,600, so
+        # the ledger sailed past its own ceiling and Google refused the second
+        # upload after it had already been charged for. `reserve()` re-reads, checks
+        # and books under one lock, so the second caller sees the first one's spend.
+        #
+        # Booked *before* the session rather than after it because Google charges
+        # when the session is created, whatever happens to the upload afterwards —
+        # recording only on success meant every failed upload spent real quota the
+        # ledger never saw.
+        entry = await ledger.reserve(
+            "videos.insert", channel_id=self.creds.channel_id, note=title[:60]
+        )
+
         headers = {
             **(await self._headers()),
             "Content-Type": "application/json; charset=UTF-8",
             "X-Upload-Content-Length": str(size),
             "X-Upload-Content-Type": "video/mp4",
         }
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            init = await client.post(
-                UPLOAD,
-                params={"uploadType": "resumable", "part": "snippet,status"},
-                headers=headers,
-                content=json.dumps(body),
-            )
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                init = await client.post(
+                    UPLOAD,
+                    params={"uploadType": "resumable", "part": "snippet,status"},
+                    headers=headers,
+                    content=json.dumps(body),
+                )
+        except Exception:
+            # No session, so nothing to charge for. Refunding is the *only* safe
+            # window: past this point the session exists and its units are spent
+            # whether the upload finishes or not.
+            await ledger.refund(entry)
+            raise
         if init.status_code not in (200, 201):
+            await ledger.refund(entry)
             raise YouTubeError(f"could not open upload session: {init.text[:300]}")
 
         session_url = init.headers["Location"]
-
-        # Booked here, not on success. Google charges the 1,600 units when the
-        # session is created, whatever happens afterwards — so recording it only on
-        # 200/201 meant every failed upload spent real quota the ledger never saw.
-        # Enough of those and `check_fresh` waves through an upload there is no
-        # budget left for, which is the silent overrun this ledger exists to stop.
-        await ledger.record("videos.insert", channel_id=self.creds.channel_id, note=title[:60])
 
         # 2. Push chunks, resuming from the last byte the server confirmed.
         offset = 0

@@ -109,6 +109,10 @@ class WorkflowContext:
         self._states = states
         self._emit = emit
         self.budget_usd = budget_usd
+        #: Set by `Workflow._run_stage` around each stage so `progress()` can name
+        #: the stage it came from. The context is per-run and stages run one at a
+        #: time, so a single slot is enough.
+        self._current_stage: str | None = None
 
     def get(self, stage_name: str) -> Any:
         """Read a completed dependency's value.
@@ -144,6 +148,12 @@ class WorkflowContext:
             {
                 "type": "stage.progress",
                 "job_id": self.job_id,
+                # Self-describing, like every other frame. This was the one event
+                # type with no `stage`, so a consumer had to guess which row it
+                # belonged to by looking for whichever stage was RUNNING — a guess
+                # that is wrong for a resumed job whose graph the client never
+                # loaded, and one the web reducer carries a special case for.
+                "stage": self._current_stage,
                 "message": message,
                 "fraction": fraction,
             }
@@ -170,9 +180,37 @@ class Stage(Generic[T]):
     optional: bool = False
     #: Rough pre-flight cost estimate, used to refuse a run that can't afford to finish.
     estimated_cost_usd: float = 0.0
+    #: May an operator replace this stage's value by hand?
+    #:
+    #: Off by default, and that default is the point. `mark_edited` writes the
+    #: submitted JSON straight over the stage's output, and most stages hold
+    #: dataclasses — a plausible payload for `titles` leaves `DescriptionStage`
+    #: raising `AttributeError` on `variants[0].text`, the retry loop burns three
+    #: attempts, the job fails, and the plain dict is persisted, so the corruption
+    #: survives a restart with no route back.
+    #:
+    #: Turned on only for stages whose value is a plain `str` or `list[str]`,
+    #: which is also the only kind of edit anyone has asked for: fixing the
+    #: wording of a description, or adding a tag. `editable_type` is checked at
+    #: edit time so the promise is enforced, not merely declared.
+    editable: bool = False
+    #: The type an edit must produce. Only consulted when `editable`.
+    editable_type: type | None = None
 
     async def run(self, ctx: WorkflowContext) -> StageOutput[T]:  # pragma: no cover
         raise NotImplementedError
+
+    def validate_edit(self, value: Any) -> Any:
+        """Check — and optionally clamp — a hand-submitted value. Returns what to store.
+
+        `editable_type` only proves the *shape*. It says nothing about the limits the
+        stage's own `run` enforces, so an edit went straight past every one of them:
+        a 20,000-character description and a 2,590-character tag list were both
+        accepted, persisted, and only rejected by YouTube after the upload had spent
+        its 1,600 units. Raise `WorkflowError` to refuse, or return a corrected
+        value to clamp.
+        """
+        return value
 
     def should_skip(self, ctx: WorkflowContext) -> bool:
         """Override for conditional stages (e.g. thumbnail only for long-form)."""
@@ -228,7 +266,38 @@ class Workflow:
     def mark_edited(
         self, states: dict[str, StageState], stage_name: str, new_value: Any
     ) -> list[str]:
-        """Apply a user edit and invalidate downstream. Returns the invalidated names."""
+        """Apply a user edit and invalidate downstream. Returns the invalidated names.
+
+        Refuses anything the stage has not declared editable, and anything of the
+        wrong shape. Both checks are before the write, because there is no way
+        back after it: the value is persisted, and a corrupted stage takes every
+        stage downstream of it with them.
+        """
+        stage = next((s for s in self.stages if s.name == stage_name), None)
+        if stage is None:
+            raise WorkflowError(f"unknown stage '{stage_name}'")
+
+        if not stage.editable:
+            raise WorkflowError(
+                f"'{stage_name}' cannot be edited by hand — its value is a structured "
+                f"object, not text. Re-run it instead."
+            )
+
+        expected = stage.editable_type
+        if expected is not None and not isinstance(new_value, expected):
+            got = type(new_value).__name__
+            raise WorkflowError(f"'{stage_name}' expects {expected.__name__}, got {got}")
+        # `list[str]` is not checkable with isinstance, so the element type is
+        # asserted separately — a list of dicts would otherwise sail through a
+        # bare `isinstance(value, list)` and reproduce the exact corruption this
+        # guard exists to prevent.
+        if expected is list and not all(isinstance(item, str) for item in new_value):
+            raise WorkflowError(f"'{stage_name}' expects a list of strings")
+
+        # Shape is not the same as legality — see `Stage.validate_edit`. Before the
+        # write, like the checks above, because there is no way back after it.
+        new_value = stage.validate_edit(new_value)
+
         state = states[stage_name]
         if state.output is None:
             raise WorkflowError(f"cannot edit '{stage_name}': it has not produced output")
@@ -366,6 +435,7 @@ class Workflow:
         state.status = StageStatus.RUNNING
         state.started_at = time.monotonic()
         state.error = None
+        ctx._current_stage = stage.name
         await emit(
             {
                 "type": "stage.started",
@@ -428,6 +498,27 @@ class Workflow:
                 state.status = StageStatus.SKIPPED if stage.optional else StageStatus.FAILED
                 state.error = err
                 state.finished_at = time.monotonic()
+                # Retries exhausted, and until now this emitted nothing at all.
+                #
+                # For a *required* stage the run does go on to emit
+                # `workflow.failed`, but that frame names no stage, so the row that
+                # actually died stayed on "retrying" in the UI forever and the
+                # persistence hooks — which key off `stage.failed` — never wrote it.
+                #
+                # For an *optional* stage it was worse: nothing was emitted, the run
+                # continued, and `workflow.completed` arrived with that row still
+                # spinning next to an enabled Publish button. `ThumbnailStage` is
+                # optional and last, so that is the likelier of the two.
+                await emit(
+                    {
+                        "type": "stage.skipped" if stage.optional else "stage.failed",
+                        "job_id": job_id,
+                        "stage": stage.name,
+                        "error": err,
+                        "message": err,  # `stage.skipped` frames elsewhere carry this
+                        "elapsed_ms": state.elapsed_ms,
+                    }
+                )
 
 
 def summarize(value: Any) -> str:

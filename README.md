@@ -11,20 +11,56 @@ Idea → researched script → narrated, subtitled, rendered video → grounded 
 - [AUDIT.md](AUDIT.md) — **full-system audit, 20 findings, phased plan with fixes**
 - [FIX-TASKS.md](FIX-TASKS.md) — paste-able agent prompts to fix all of it
 
+## What you need
+
+Two pieces of software, and two free API keys. That is the whole list.
+
+| | | |
+|---|---|---|
+| **Python 3.11+** | runs the render engine | <https://www.python.org/downloads/> |
+| **Node.js 20+** | runs the web app | <https://nodejs.org> |
+
+On Windows the installer offers to fetch both for you via `winget`; on
+macOS and Linux it prints the one command for your package manager. **Nothing
+else is required** — no Docker, no database server, no ffmpeg install (one ships
+with the engine's dependencies). Postgres and Redis are optional upgrades, not
+prerequisites.
+
+The two keys — one model provider, one stock-footage provider — are asked for
+inside the app on first run, and both are free to obtain. See
+[SETUP.md](SETUP.md).
+
 ## Run it
 
+**Windows — no terminal needed.** Double-click these, in this order:
+
+| | |
+|---|---|
+| **`Install Studio.cmd`** | Once. Installs everything, a couple of minutes. |
+| **`Studio.cmd`** | Every time after. Or the **Studio** shortcut it puts on your Desktop. |
+
+**macOS / Linux**
+
 ```bash
-./scripts/setup.sh      # or on Windows: powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
-npm start
+./scripts/setup.sh
 ```
 
-Then open **<http://localhost:3000/setup>** and paste in your keys. The screen
-says what each one unlocks, links to where to get it, and turns green when you
-have enough to make a video — no file to edit and nothing to restart.
+Then open **Studio** from Applications (macOS) or the Studio launcher on your
+Desktop (Linux). `npm start` does the same thing from a terminal, on any platform.
 
-`setup.sh` does the whole install: venv, both toolchains, `.env`, database schema,
-tests. **No Docker needed** — the engine defaults to SQLite and runs renders
-in-process. `npm start` runs both halves and takes them down together.
+Either way your browser opens by itself once the app is ready. On a fresh install
+it lands on a short setup flow that asks for your keys — it says what each one
+unlocks, links to where to get it, and turns green when you have enough to make a
+video. No file to edit, nothing to restart.
+
+If something else on your machine already holds port 3000 or 8080 — another dev
+server, usually — Studio moves to the next free pair and prints where it went. It
+does not stop and ask you to fix it. Double-clicking the launcher while Studio is
+already running just brings the browser back to it.
+
+Setup does the whole install: venv, both toolchains, `.env`, database schema,
+tests, and the desktop launcher. **No Docker needed** — the engine defaults to
+SQLite and runs renders in-process.
 
 Two keys is the whole list: one LLM provider, one stock-footage provider. Both are
 free to obtain and together take about five minutes. Publishing to YouTube needs a
@@ -83,15 +119,35 @@ vendor/        MoneyPrinterTurbo, read-only reference. Never imported.
 
 ## Status
 
-Phases 0–10 are code-complete; 314 engine tests pass. **Neither Google API has been
-exercised against a live account** — upload, captions and analytics are reviewed
-code, not proven code. That needs OAuth credentials from a Google Cloud project.
+Phases 0–10 are code-complete. The test count is deliberately not written down here
+— every figure this file has carried went stale within a week. Ask the suite:
+
+```bash
+apps/engine/.venv/bin/python -m pytest apps/engine/tests -q | tail -1
+```
+
+**Neither Google API has been exercised against a live account** — upload, captions
+and analytics are reviewed code, not proven code. That needs OAuth credentials from
+a Google Cloud project.
 
 Motion, crossfades and the music bed were verified by a real MoviePy render with
 measurements, not by eye — see [KNOWN-ISSUES.md](KNOWN-ISSUES.md) §2. That render
 used synthetic clips and tones; the pipeline has still not been run end to end
 against live Pexels footage and edge-tts audio.
 
-State survives a restart (Postgres), renders run in an arq worker, and the web app
-reads live engine data with a labelled demo fallback. See [AUDIT.md](AUDIT.md) for
-what was found, fixed and measured.
+State survives a restart (Postgres) and renders run in an arq worker.
+
+The web app is **seven of ten screens live, three not wired at all** — a distinction
+"reads live engine data with a labelled demo fallback" glossed over, so it is worth
+stating plainly:
+
+| | |
+|---|---|
+| Create, Queue, Library, Models | live, with `lib/demo.ts` as the fallback when the engine is unreachable |
+| Setup, Welcome | live only — they refuse to fake it and say the engine is down |
+| Calendar | quota and bookings live; the video tray it drags from is always demo |
+| Analytics, Series, New channel | demo only, **no network call** — the endpoints behind them do not exist yet |
+
+Every screen showing fixtures carries a "demo data" badge, and Calendar declines to
+persist a drag it cannot save rather than appearing to succeed. See
+[AUDIT.md](AUDIT.md) for what was found, fixed and measured.

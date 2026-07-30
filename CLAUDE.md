@@ -61,15 +61,22 @@ docker compose up -d                        # postgres + redis
 npm run dev                                 # web on :3000 (one half only)
 apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
-apps/engine/.venv/bin/python -m alembic upgrade head       # schema
+apps/engine/.venv/bin/python -m alembic -c apps/engine/alembic.ini upgrade head   # schema
 apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings   # render worker
 ```
 
+`-c apps/engine/alembic.ini` is not optional from the repo root: `alembic.ini` lives
+in `apps/engine/`, and without it alembic exits with `No 'script_location' key found
+in configuration`, which reads like a corrupt config rather than a wrong cwd.
+
 On Windows the interpreter is at `.venv/Scripts/python` instead of `.venv/bin/python`.
 
-The web app runs entirely on demo data (`apps/web/lib/demo.ts`) with no engine and no
-API keys — that is deliberate, so the design can be judged before the plumbing exists.
-Swapping to live data is a change to the data source, not to the views.
+The web app runs **without an engine and without any API keys** — start it alone and
+every screen still renders, from `apps/web/lib/demo.ts`, so the design can be judged
+before the plumbing exists. With the engine up, seven of the ten screens read it for
+real; Analytics, Series and New channel make no network call at all because the
+endpoints behind them do not exist yet. `KNOWN-ISSUES.md` §5.5 has the per-screen
+breakdown. When you wire one of those three up, that table is what needs updating.
 
 **Toolchain note:** this machine has neither `pnpm` nor `uv`, so the repo uses npm
 workspaces and a plain venv at `apps/engine/.venv`. Switch to pnpm/uv if you install

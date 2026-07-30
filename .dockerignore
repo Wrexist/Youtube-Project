@@ -1,0 +1,31 @@
+# Applies to builds whose context is the repo root — today that is only the web
+# image (`docker compose --profile full build web`). The engine builds from
+# ./apps/engine and reads apps/engine/.dockerignore, which does not exist and
+# does not need to: BuildKit sends it about 1 MB.
+#
+# This file is not about keeping secrets out of the image. The web Dockerfile's
+# final stage copies four explicit paths from the build stage, so `.env` never
+# reaches the exported image either way. It is about the build working at all:
+#
+#   * `node_modules/` is the load-bearing entry. The build stage does
+#     `COPY --from=deps /repo/node_modules` and then `COPY . .` — without this
+#     line the host's tree lands on top of it. On this repo that is glibc-built
+#     native modules overwriting the musl ones `npm ci` just produced inside
+#     node:22-alpine, and `npm run build` fails on a binary it cannot load.
+#   * The rest is size. The unfiltered context is ~1.7 GB (node_modules, .git,
+#     the vendored MPT snapshot, storage/, the engine venv); filtered it is a
+#     few MB, which is the difference between a build that starts immediately
+#     and one that spends a minute in "transferring context".
+
+# `**/` on node_modules rather than a bare `node_modules`: a bare pattern only
+# matches at the context root, and npm hoists to the root *usually*, not always.
+# A machine that ended up with apps/web/node_modules would hit the overwrite
+# above with the file looking like it was doing its job.
+**/node_modules
+.git
+.env
+storage
+vendor
+**/.next
+**/.venv
+**/__pycache__

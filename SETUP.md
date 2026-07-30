@@ -5,17 +5,44 @@ which is **API keys and one Google form**. Nothing here is busywork — each ite
 exists because it needs an account only you can hold, or because Google provides
 no API for it.
 
+## What you need first
+
+| | | |
+|---|---|---|
+| **Python 3.11+** | runs the render engine | <https://www.python.org/downloads/> |
+| **Node.js 20+** | runs the web app | <https://nodejs.org> |
+
+That is the whole list. **No Docker, no database server, no ffmpeg** — one ships
+with the engine's Python dependencies. Postgres and Redis are optional upgrades
+(see the bottom of this page), never prerequisites.
+
+You do not have to install these by hand. On Windows the installer offers to
+fetch both through `winget`, which ships with Windows 10 and 11; on macOS and
+Linux it prints the exact one-line command for your package manager and stops.
+Either way you are told what is missing and how to get it, rather than meeting a
+failure halfway through.
+
+On Windows, tick **"Add Python to PATH"** if you do install it yourself — it is
+off by default, and nothing works without it.
+
 ## The short version
 
-```bash
-./scripts/setup.sh      # or: powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
-npm start
-```
+**Windows — nothing to type.** Double-click **`Install Studio.cmd`** once, then
+**`Studio.cmd`** (or the **Studio** shortcut it puts on your Desktop) whenever
+you want to use it.
 
-Then open **<http://localhost:3000/setup>** and paste your keys into the screen.
-It says what each one unlocks, links to where to get it, and turns green when
-you have enough to make a video. You do not need to edit a file, and you do not
-need to restart anything — a save takes effect immediately.
+**macOS / Linux** — run `./scripts/setup.sh` once. After that, open **Studio**
+from Applications (macOS) or the Studio launcher on your Desktop (Linux).
+`npm start` works everywhere too.
+
+Your browser opens by itself. On a fresh install it lands on a short setup flow
+that asks for your keys — it says what each one unlocks, links to where to get
+it, and turns green when you have enough to make a video. You do not need to
+edit a file, and you do not need to restart anything: a save takes effect
+immediately.
+
+Double-clicking the launcher while Studio is already running just brings the
+browser back rather than starting a second copy.
 
 The rest of this page is the same information at length, for when something goes
 wrong or you would rather edit `.env` by hand. **You can stop reading here.**
@@ -75,9 +102,13 @@ action. Exit code is non-zero only if something genuinely blocking is wrong.
 These two are the only things standing between a fresh clone and a rendered
 video.
 
-**The easy way:** `npm start`, then <http://localhost:3000/setup>. Paste them in
-and press Save. The screen writes `.env` for you, keeps your comments, and shows
+**The easy way:** double-click the launcher (or `npm start`) — your browser opens on
+the setup screen by itself, normally at <http://localhost:3000/setup>. Paste the keys
+in and press Save. The screen writes `.env` for you, keeps your comments, and shows
 which keys are already set without ever displaying one back.
+
+If port 3000 or 8080 is already taken, Studio moves to the next free pair rather than
+refusing to start, and prints the address it chose — so use whatever it printed.
 
 **By hand:** put both in `.env` at the repository root. The names below are the
 ones the engine reads.
@@ -178,21 +209,22 @@ and country. Name, handle, avatar and banner stay manual permanently.
 
 ## Running it
 
-```bash
-npm start
-```
+Double-click the **Studio** launcher — the Desktop shortcut on Windows and Linux,
+or Studio in Applications on macOS. `Studio.cmd` in this folder is the same
+thing. From a terminal, `npm start` is the same thing again.
 
-One command, both halves, on every platform. It prints where each one is
-listening, labels their output so you can tell an engine traceback from a Next
-one, and takes both down together on Ctrl-C — a web app talking to a dead engine
-quietly falls back to demo data and looks like it is working, which is worse than
-stopping.
+All three run one process that starts both halves, labels their output so you can
+tell an engine traceback from a Next one, waits for the web app to actually
+answer, and then opens your browser. A window stays open while Studio runs — that
+is deliberate, it is where errors appear, and closing it is how you quit. Both
+halves go down together: a web app talking to a dead engine quietly falls back to
+demo data and looks like it is working, which is worse than stopping.
 
-Then open **<http://localhost:3000>**.
+Launching it again while it is already running just brings the browser back
+rather than starting a second copy.
 
-If the ports are busy it says so and suggests different ones rather than letting
-uvicorn print `[Errno 98] Address already in use`. The usual cause is that Studio
-is already running in another terminal.
+If something *else* holds the ports it says so, and suggests different ones,
+rather than letting uvicorn print `[Errno 98] Address already in use`.
 
 <details>
 <summary>Starting the two halves separately</summary>
@@ -341,10 +373,13 @@ Honest about the edges, because you will hit them before I would:
 - **The pipeline has not been run end to end with real footage and real TTS.**
   The render core is verified by measurement (see `KNOWN-ISSUES.md` §2) but with
   synthetic clips and tones.
-- **Ollama is implemented and has no test coverage at all.** Not just "no real
-  daemon" — `tests/conftest.py` stubs out `engine.providers.llm` entirely, so no
-  test in this repository ever exercises the transport. The routing table and cost
-  model around it are covered; the code that talks to a daemon is not.
+- **No LLM provider has been called for real.** All four transports — Anthropic,
+  OpenAI-compatible, Gemini and Ollama — are covered by `tests/test_llm.py` against
+  mocked HTTP, so the request shape and the response parsing are proven. That a live
+  endpoint accepts those requests is not: a renamed usage field or a rejected
+  parameter would pass the suite and fail on first contact. (Until recently this was
+  worse — `tests/conftest.py` stubbed the module out entirely, so *no* test touched
+  it. That stub is gone.)
 - **No image API has been called for real.** The two transports are written against
   OpenAI's `images/generations` and Imagen's `:predict`, and both are covered by
   tests against recorded response shapes — but like the Google clients, they are

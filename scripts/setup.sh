@@ -9,7 +9,8 @@
 # API keys, and the doctor at the end tells you exactly which.
 #
 # No Docker required. The engine defaults to SQLite, so the only hard
-# prerequisites are Python 3.11+, Node 20+, and ffmpeg.
+# prerequisites are Python 3.11+ and Node 20+. ffmpeg is used if it is on PATH,
+# but imageio-ffmpeg ships one, so it is not something to install first.
 
 set -euo pipefail
 
@@ -35,14 +36,63 @@ VENV_BIN="apps/engine/.venv/bin"
 
 step "Checking prerequisites"
 
-command -v python3 >/dev/null || die "python3 not found. Install Python 3.11 or newer."
+# Name the command that installs it, not just the thing that is missing.
+# "Install Python 3.11 or newer" is a web search and a decision; `brew install
+# python@3.12` is a copy and a paste. Which one is right depends on the machine,
+# so it is worked out here rather than left to the reader.
+howto() {
+  local what="$1"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    if command -v brew >/dev/null; then
+      case "$what" in
+        python) echo "brew install python@3.12" ;;
+        node)   echo "brew install node" ;;
+      esac
+    else
+      echo "install Homebrew from https://brew.sh first, then re-run this"
+    fi
+  elif command -v apt >/dev/null; then
+    case "$what" in
+      python) echo "sudo apt update && sudo apt install -y python3 python3-venv" ;;
+      node)   echo "sudo apt update && sudo apt install -y nodejs npm   # or: https://nodejs.org" ;;
+    esac
+  elif command -v dnf >/dev/null; then
+    case "$what" in
+      python) echo "sudo dnf install -y python3" ;;
+      node)   echo "sudo dnf install -y nodejs" ;;
+    esac
+  elif command -v pacman >/dev/null; then
+    case "$what" in
+      python) echo "sudo pacman -S python" ;;
+      node)   echo "sudo pacman -S nodejs npm" ;;
+    esac
+  else
+    case "$what" in
+      python) echo "https://www.python.org/downloads/" ;;
+      node)   echo "https://nodejs.org" ;;
+    esac
+  fi
+}
+
+missing() {
+  echo "${red}✗ $1${reset}" >&2
+  echo >&2
+  echo "  Install it with:" >&2
+  echo >&2
+  echo "    ${bold}$(howto "$2")${reset}" >&2
+  echo >&2
+  echo "  Then run this script again." >&2
+  exit 1
+}
+
+command -v python3 >/dev/null || missing "Python 3.11+ is required to run the render engine." python
 PY_OK=$(python3 -c 'import sys; print(1 if sys.version_info[:2] >= (3, 11) else 0)')
-[ "$PY_OK" = "1" ] || die "Python $(python3 -V | cut -d' ' -f2) is too old — 3.11+ is required."
+[ "$PY_OK" = "1" ] || missing "Python $(python3 -V | cut -d' ' -f2) is too old — 3.11+ is required." python
 note "python3 $(python3 -V | cut -d' ' -f2)"
 
-command -v node >/dev/null || die "node not found. Install Node 20 or newer."
+command -v node >/dev/null || missing "Node.js 20+ is required to run the web app." node
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
-[ "$NODE_MAJOR" -ge 20 ] || die "Node $(node -v) is too old — 20+ is required."
+[ "$NODE_MAJOR" -ge 20 ] || missing "Node $(node -v) is too old — 20+ is required." node
 note "node $(node -v)"
 
 if command -v ffmpeg >/dev/null; then
@@ -135,6 +185,11 @@ if [ $TESTS -ne 0 ]; then
   exit 1
 fi
 
+step "Adding a launcher"
+# Never fatal: a missing shortcut is a small inconvenience, and a setup script
+# that aborts over one having already installed everything is a much bigger one.
+node scripts/install-shortcut.mjs || true
+
 step "Checking what is still missing"
 set +e
 "$ROOT/$VENV_BIN/python" apps/engine/scripts/doctor.py
@@ -151,12 +206,17 @@ echo
 # Setup used to end here, having installed everything and never said how to start
 # it. The next command is the whole point of having run this one.
 echo "${bold}Next:${reset}"
-echo "  ${bold}npm start${reset}"
+if [ "$(uname -s)" = "Darwin" ]; then
+  echo "  Open ${bold}Studio${reset} from your Applications folder."
+else
+  echo "  Double-click the ${bold}Studio${reset} launcher on your Desktop."
+fi
+echo "  (or run ${bold}npm start${reset} here — same thing)"
 echo
 if [ $DOCTOR -ne 0 ]; then
-  echo "  then open ${bold}http://localhost:3000/setup${reset} and paste your keys in."
-  echo "  The screen says what each one unlocks and links to where to get it."
+  echo "  Your browser opens by itself, on the setup screen. Paste your keys in"
+  echo "  there — it says what each one unlocks and links to where to get it."
 else
-  echo "  then open ${bold}http://localhost:3000${reset} and type a topic."
+  echo "  Your browser opens by itself. Type a topic and press Generate."
 fi
 echo

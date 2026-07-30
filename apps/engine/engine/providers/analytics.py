@@ -1,7 +1,15 @@
 """YouTube Analytics API.
 
 A separate API from the Data API, with its own — much more generous — quota, so
-pulling daily is fine. It is still recorded in the ledger for visibility.
+pulling daily is fine.
+
+These calls are **not** metered into `engine.quota`, which is the one documented
+exception to CLAUDE.md #5. The ledger models the Data API's 10,000 units/day and is
+what `can_afford` consults before an upload; feeding a second, unrelated quota pool
+into the same counter would make it refuse uploads there is budget for. Doing it
+properly means a second pool, which is real work for a breakdown panel nobody reads.
+The docstring here used to claim the calls "are still recorded in the ledger for
+visibility" — they never were. See KNOWN-ISSUES §3.
 
 The important caveat, enforced here rather than left to callers: **data lags 24-48
 hours**. The two most recent days are always incomplete, and treating them as final

@@ -166,7 +166,27 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Apply Plan */
+        /**
+         * Apply Plan
+         * @description Book a whole plan, or as much of it as the rules allow.
+         *
+         *     Two things were wrong with the old version, and they compounded.
+         *
+         *     It **wrote as it went**, so a malformed entry at position three left one and
+         *     two booked and the caller with a 500 — no way to know what had landed short
+         *     of re-reading the calendar. Everything is now checked before the first write,
+         *     so the outcome is all-or-reported, never half-applied-and-unexplained.
+         *
+         *     And it **never called `validate_move`**, which `schedule_one` twenty lines
+         *     above does on every manual drag. The same times that endpoint 409s — in the
+         *     past, too close to another upload, over the day's quota — were persisted here
+         *     without complaint, which is how a calendar ends up describing a schedule
+         *     YouTube will refuse.
+         *
+         *     Rejected entries come back in `skipped` with a reason rather than failing the
+         *     request: a fourteen-video plan with one bad slot should book thirteen and say
+         *     which one it did not.
+         */
         post: operations["apply_plan_v1_calendar_auto_apply_post"];
         delete?: never;
         options?: never;
@@ -513,6 +533,13 @@ export interface paths {
          *     subscriber connected arrived twice; and because a queue hands each item to
          *     exactly one consumer, two open tabs split the stream between them and both
          *     rendered an incomplete pipeline.
+         *
+         *     A stream opened against a stale mirror converges on the row rather than
+         *     trusting the signal. `waiting.wait()` alone assumed something in *this* process
+         *     would eventually fire it, which is true for an in-process job and not for a
+         *     worker-run one: if the relay died, nothing ever wakes the stream and the tab
+         *     spins on a job that finished ten minutes ago. For worker-owned jobs the wait is
+         *     bounded and the row is re-read on each timeout.
          */
         get: operations["stream_job_v1_jobs__job_id__events_get"];
         put?: never;
@@ -857,6 +884,11 @@ export interface components {
         /** AddModel */
         AddModel: {
             /**
+             * Api Key Env
+             * @default
+             */
+            api_key_env: string;
+            /**
              * Base Url
              * @default
              */
@@ -891,15 +923,15 @@ export interface components {
             /** Provider */
             provider: string;
         };
-        /** ApplyRequest */
-        ApplyRequest: {
+        /** Assignment */
+        Assignment: {
             /**
-             * Confirm Channel Created
-             * @default false
+             * At
+             * Format: date-time
              */
-            confirm_channel_created: boolean;
-            /** Launch Id */
-            launch_id: string;
+            at: string;
+            /** Video Id */
+            video_id: string;
         };
         /** AutoScheduleRequest */
         AutoScheduleRequest: {
@@ -919,9 +951,7 @@ export interface components {
              */
             shorts_per_week: number;
             /** Videos */
-            videos: {
-                [key: string]: unknown;
-            }[];
+            videos: components["schemas"]["PendingVideo"][];
         };
         /** BulkRoute */
         BulkRoute: {
@@ -1142,6 +1172,31 @@ export interface components {
             tasks: components["schemas"]["TaskRoute"][];
         };
         /**
+         * PendingVideo
+         * @description One video waiting for a slot.
+         *
+         *     Was `dict`, which meant a missing `id` reached `auto_schedule` and came back
+         *     as a 500 with a KeyError — four ordinary malformed payloads all did. Declaring
+         *     the shape turns each of them into a 422 naming the field.
+         */
+        PendingVideo: {
+            /**
+             * Format
+             * @default short
+             * @enum {string}
+             */
+            format: "short" | "long";
+            /** Id */
+            id: string;
+            /** Ready At */
+            ready_at?: string | null;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+        };
+        /**
          * PublishRequest
          * @description Choices the operator makes at the approval gate.
          *
@@ -1290,6 +1345,21 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** ApplyRequest */
+        engine__api__channels__ApplyRequest: {
+            /**
+             * Confirm Channel Created
+             * @default false
+             */
+            confirm_channel_created: boolean;
+            /** Launch Id */
+            launch_id: string;
+        };
+        /** ApplyRequest */
+        engine__api__publishing__ApplyRequest: {
+            /** Assignments */
+            assignments: components["schemas"]["Assignment"][];
         };
     };
     responses: never;
@@ -1528,9 +1598,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["engine__api__publishing__ApplyRequest"];
             };
         };
         responses: {
@@ -1723,7 +1791,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ApplyRequest"];
+                "application/json": components["schemas"]["engine__api__channels__ApplyRequest"];
             };
         };
         responses: {

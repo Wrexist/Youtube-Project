@@ -40,7 +40,14 @@ _MIN_DURATION_S = 3.0
 
 
 def _target_orientation(aspect: str) -> str:
-    return "portrait" if aspect == "9:16" else "landscape"
+    """What to ask Pexels for. It accepts landscape, portrait *and* square.
+
+    The two-way ternary this replaces asked for landscape on a 1:1 render, while
+    `_matches_orientation` then rejected anything wider than 1.45 — so every result
+    of a square job was thrown away on arrival and the beat logged "no footage
+    found" with a perfectly good API key. Request side and filter side have to agree.
+    """
+    return {"9:16": "portrait", "1:1": "square"}.get(aspect, "landscape")
 
 
 def _matches_orientation(width: int, height: int, aspect: str) -> bool:
@@ -186,7 +193,19 @@ async def _search_pixabay(
             f"pixabay returned {resp.headers.get('content-type', 'unknown')} "
             f"(status {resp.status_code}) — likely a Cloudflare challenge or a bad key"
         )
-    resp.raise_for_status()
+    # Not `raise_for_status()`. Pixabay takes its key as a *query parameter*, and
+    # httpx puts the full request URL into `HTTPStatusError`'s message — so a 429 or
+    # a 403 wrote `key=<the real key>` into the warning that `search()` logs. The
+    # message here is deliberately URL-free, matching the RuntimeError above.
+    # Nothing depends on the exception type: `search()` catches bare `Exception`.
+    #
+    # httpx's own "HTTP Request: GET <url>" line is a second, currently dormant copy
+    # of the same leak — it is emitted at INFO on the `httpx` logger, which this
+    # process does not forward, and it starts writing the key to the log the moment
+    # anyone lowers the root level. That is why `providers/images.py` keeps its key
+    # out of the URL entirely rather than relying on log configuration.
+    if resp.status_code >= 400:
+        raise RuntimeError(f"pixabay returned {resp.status_code}")
     return _parse_pixabay(resp.json(), query, aspect)
 
 
