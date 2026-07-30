@@ -6,9 +6,10 @@ import secrets
 import time
 from datetime import UTC, datetime
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from loguru import logger
 from pydantic import AwareDatetime, BaseModel, Field
 
@@ -231,7 +232,35 @@ async def begin_auth() -> dict:
 
 
 @router.get("/auth/google/callback")
-async def finish_auth(code: str = Query(...), state: str = Query(...)):
+async def finish_auth(
+    code: str | None = Query(None),
+    state: str | None = Query(None),
+    error: str | None = Query(None),
+):
+    web = get_settings().web_url.rstrip("/")
+
+    # Google's own refusal, which arrives here as a redirect carrying `error=` and no
+    # code. Overwhelmingly `access_denied`, which does not mean the operator declined
+    # — it means the Cloud project is still in Testing and the account that just
+    # signed in is not one of its test users. That distinction is the whole fix, so
+    # it is handed to the Setup screen, where the button they pressed is, rather than
+    # rendered as a bare error by the API.
+    if error:
+        return RedirectResponse(f"{web}/setup?connect_error={quote(error)}")
+
+    # Opened by hand rather than arrived at — someone following the redirect URI out
+    # of the setup instructions to see what is there. FastAPI's own answer to the
+    # missing query parameters is a validation dump
+    # (`{"detail":[{"type":"missing","loc":["query","code"]...`) which reads like a
+    # bug in Studio rather than a page that was never meant to be visited.
+    if not code or not state:
+        return PlainTextResponse(
+            "This address is not a page. It is where Google sends you back once you "
+            "have approved access, and it needs the parameters Google adds.\n\n"
+            f"Start the connection from Connect YouTube on {web}/setup.\n",
+            status_code=400,
+        )
+
     # Reject a callback we did not initiate — without this the endpoint accepts a
     # code from anywhere and binds someone else's channel to this install.
     if not _claim_state(state):

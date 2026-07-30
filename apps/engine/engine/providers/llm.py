@@ -30,6 +30,15 @@ from engine.settings import get_settings, named_credential
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
+#: Extra output budget handed to models that reason before answering.
+#:
+#: On those, `max_tokens` caps the reasoning *and* the answer together. A stage asking
+#: for 4,096 tokens of script would get a reasoning trace plus whatever was left —
+#: truncated mid-sentence, and truncated worse the harder the prompt. The reserve keeps
+#: the caller's number meaning what it says. It costs nothing unless the reasoning
+#: actually uses it, and output tokens are metered either way.
+THINKING_RESERVE = 8192
+
 
 class ProviderUnavailable(RuntimeError):
     """The provider could not be reached — distinct from it returning bad output."""
@@ -100,10 +109,15 @@ class LLM:
         )
         kwargs: dict[str, Any] = {
             "model": self.spec.model,
-            "max_tokens": max_tokens,
-            "temperature": temp,
+            "max_tokens": max_tokens + (THINKING_RESERVE if self.spec.thinks_by_default else 0),
             "messages": [{"role": "user", "content": prompt}],
         }
+        # `temperature` is not universally accepted any more, and the models that
+        # dropped it reject it with a 400 rather than ignoring it — so sending it
+        # unconditionally broke every stage routed to the strongest model available.
+        policy = self.spec.temperature_policy
+        if policy == "any" or (policy == "default-only" and temp == 1.0):
+            kwargs["temperature"] = temp
         if system:
             kwargs["system"] = system
         resp = await client.messages.create(**kwargs)

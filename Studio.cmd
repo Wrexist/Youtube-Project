@@ -1,6 +1,6 @@
 @echo off
 rem ===========================================================================
-rem  Studio — double-click this to start.
+rem  Studio - double-click this to start.
 rem
 rem  Deliberately at the repository root, so it is the first thing anyone sees,
 rem  and deliberately a .cmd rather than something cleverer. A VBScript wrapper
@@ -15,13 +15,13 @@ rem  already running just brings the browser back.
 rem ===========================================================================
 
 rem Work from the folder this file lives in, not from wherever Explorer left the
-rem working directory — a shortcut launched from the Desktop otherwise runs with
+rem working directory - a shortcut launched from the Desktop otherwise runs with
 rem the Desktop as its cwd and nothing resolves.
 cd /d "%~dp0"
 
 title Studio
 
-rem Both checks point at one place — "Install Studio.cmd" — rather than at the
+rem Both checks point at one place - "Install Studio.cmd" - rather than at the
 rem underlying cause. Whether Node is missing or node_modules is, the next action
 rem is identical, and the installer itself explains and offers to fix whichever
 rem prerequisite is actually absent.
@@ -51,7 +51,7 @@ if not exist "node_modules\" (
 
 call npm start -- --open
 
-rem Reached when Studio stops — normally because this window was closed, but
+rem Reached when Studio stops - normally because this window was closed, but
 rem also on a crash, and in that case the reason is above and worth reading.
 echo.
 echo   Studio has stopped.

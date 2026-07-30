@@ -1,7 +1,8 @@
-import { Header, Page, Card } from "@/components/ui";
+import { Header, Page } from "@/components/ui";
 import { getSetup, getDiagnostics } from "@/lib/engine";
 import { SetupView } from "./setup-view";
 import { DiagnosticsPanel } from "./diagnostics-panel";
+import { EngineWaiting } from "./engine-waiting";
 
 /** Setup — the screen that turns a fresh clone into a working install.
  *
@@ -28,32 +29,20 @@ export default async function SetupPage() {
   // In parallel: two independent reads, and the diagnostics call is the slower of
   // the two even with the network probe off. Awaiting them in sequence would add
   // its whole latency to a page someone is waiting on.
-  const [setup, checks] = await Promise.all([getSetup(), getDiagnostics(false)]);
+  const [setup, checks] = await Promise.all([
+    getSetup(),
+    getDiagnostics(false),
+  ]);
 
   if (!setup) {
     return (
       <>
         <Header title="Setup" />
         <Page>
-          <Card className="p-6">
-            <h2 className="text-[15px] font-semibold">The engine is not running</h2>
-            <p className="mt-2 max-w-[62ch] text-[13px] leading-relaxed text-[var(--color-muted)]">
-              This screen reads and writes the engine&apos;s configuration, so there
-              is nothing to show until it is up. Start it and reload.
-            </p>
-            <pre className="mono mt-4 overflow-x-auto rounded-[var(--radius-btn)] bg-[var(--color-raised)] p-3 text-[11px] leading-relaxed text-[var(--color-muted)]">
-              {`# from the repository root
-apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
-
-# on Windows
-.\\apps\\engine\\.venv\\Scripts\\python -m uvicorn engine.main:app --reload --port 8080`}
-            </pre>
-            <p className="mt-4 text-[12px] text-[var(--color-faint)]">
-              Never run the setup script? <span className="mono">scripts/setup.sh</span>{" "}
-              on macOS and Linux, <span className="mono">.\scripts\setup.ps1</span> on
-              Windows. It installs everything and starts nothing.
-            </p>
-          </Card>
+          {/* Which shell to name is decided here, on the server, where the
+              platform is actually known — `navigator.platform` in the browser is
+              both deprecated and, for a local app, a worse answer. */}
+          <EngineWaiting windows={process.platform === "win32"} />
         </Page>
       </>
     );

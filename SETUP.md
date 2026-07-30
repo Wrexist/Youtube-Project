@@ -12,6 +12,10 @@ no API for it.
 | **Python 3.11+** | runs the render engine | <https://www.python.org/downloads/> |
 | **Node.js 20+** | runs the web app | <https://nodejs.org> |
 
+3.11, 3.12 or 3.13 for preference: two dependencies publish compiled Windows wheels
+only for versions that have been out a while, and setup will offer to fetch 3.12
+alongside a newer Python rather than fight it.
+
 That is the whole list. **No Docker, no database server, no ffmpeg** — one ships
 with the engine's Python dependencies. Postgres and Redis are optional upgrades
 (see the bottom of this page), never prerequisites.
@@ -151,29 +155,90 @@ it: the verification step has a delay Google controls.
 
 ### 3. A Google Cloud OAuth client
 
-1. <https://console.cloud.google.com> → create a project.
-2. **APIs & Services → Library**: enable **YouTube Data API v3** and
-   **YouTube Analytics API**. Both.
-3. **OAuth consent screen**: External, add yourself as a test user. You do not
-   need to submit for verification while you are the only user.
-4. **Credentials → Create Credentials → OAuth client ID** → *Web application*.
-   Add this exact redirect URI:
+Every click, because the console renamed half of this in 2025 and most guides now
+describe menus that no longer exist. What used to be "OAuth consent screen" is now
+**Google Auth Platform**, and its Test users live under **Audience**.
+
+**Why it has to be your own project.** The two values are not a second login —
+they identify your copy of Studio to Google. The YouTube API's 10,000 units a day
+(≈ six uploads) are counted *per Cloud project*, so a client shipped inside Studio
+would mean everyone who installed it fighting over the same six.
+
+**3a. A project.** <https://console.cloud.google.com/projectcreate> → any name →
+**Create**. Nothing is billed. Wait for the notification, then make sure the
+project picker at the top shows it — every step below applies to the selected
+project, and the commonest way to lose an hour here is doing step 3c in a
+different project from step 3d.
+
+**3b. The two APIs.** Enable both, on that project:
+
+- <https://console.cloud.google.com/apis/library/youtube.googleapis.com> →
+  **Enable**. This is the one that uploads.
+- <https://console.cloud.google.com/apis/library/youtubeanalytics.googleapis.com> →
+  **Enable**. This is the one that measures.
+
+**3c. The consent screen** — <https://console.cloud.google.com/auth/overview>.
+If it offers **Get started**, take it. Then:
+
+1. **Branding**: App name (`Studio` is fine — only you ever see it), user support
+   email = your own, developer contact email = your own → **Save**.
+2. **Audience**: User type **External**. Under **Test users** → **+ Add users** →
+   your own Google address → **Save**. Only accounts listed here can authorise the
+   app while it is in Testing.
+3. **Data access** → **Add or remove scopes** → **Manually add scopes**, and paste
+   these four:
+   ```
+   https://www.googleapis.com/auth/youtube.upload
+   https://www.googleapis.com/auth/youtube.readonly
+   https://www.googleapis.com/auth/youtube.force-ssl
+   https://www.googleapis.com/auth/yt-analytics.readonly
+   ```
+   → **Update** → **Save**. (`force-ssl` is not optional — captions need it.)
+
+**3d. The client** — <https://console.cloud.google.com/auth/clients> →
+**+ Create client**:
+
+1. Application type: **Web application**. Not "Desktop app": the flow here is a
+   redirect back to a local HTTP server, which is the web-application shape.
+2. Name: anything.
+3. Leave **Authorised JavaScript origins** empty.
+4. **Authorised redirect URIs** → **+ Add URI** → paste exactly:
    ```
    http://localhost:8080/v1/auth/google/callback
    ```
-5. Put the two values in `.env`:
-   ```
-   GOOGLE_CLIENT_ID=...
-   GOOGLE_CLIENT_SECRET=...
-   ```
+   `http` not `https`, `8080` not `3000`, no trailing slash. Anything else is
+   `redirect_uri_mismatch` later, which is the least informative error Google
+   returns.
+5. **Create**. The dialog then shows both values. The client ID ends
+   `.apps.googleusercontent.com`; the secret starts `GOCSPX-`.
 
-Then visit <http://localhost:8080/v1/auth/google> and follow the link it returns.
-If the credentials are missing it says so plainly rather than handing you a broken
-URL.
+**3e. Into Studio.** Paste both into the Publishing fields on
+<http://localhost:3000/setup> → **Save** → **Connect YouTube**. Or put them in
+`.env` by hand:
 
-> If you change `GOOGLE_REDIRECT_URI`, it must match what you registered in step 4
-> **character for character**. A mismatch produces `redirect_uri_mismatch`, which
-> is the least informative error Google returns.
+```
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+```
+
+Google then asks which account, warns that the app is unverified — **Advanced →
+Go to Studio** — and shows the permissions. **Leave every checkbox ticked**: an
+unticked upload scope fails at the moment you publish a video, not here. Studio
+stores one refresh token, encrypted, and nothing else.
+
+> **Testing mode expires refresh tokens after seven days.** Once you have
+> confirmed the connection works, go back to **Audience** and press
+> **Publish app**. It stays unverified — the warning screen and the 100-user cap
+> remain, neither of which matters for your own channel — but the weekly
+> reconnect stops. This is the single most common reason a working connection
+> dies a week later for no visible reason.
+
+> If you change `GOOGLE_REDIRECT_URI`, or Studio reports the engine on a port
+> other than 8080 because something else held it, the registered URI must match
+> what Studio actually uses, character for character.
+
+The engine must be running when you press Connect: the redirect lands on
+`localhost:8080`, and nothing is listening otherwise.
 
 ### 4. A YouTube channel — manual, permanently
 
@@ -215,13 +280,30 @@ thing. From a terminal, `npm start` is the same thing again.
 
 All three run one process that starts both halves, labels their output so you can
 tell an engine traceback from a Next one, waits for the web app to actually
-answer, and then opens your browser. A window stays open while Studio runs — that
+answer, and then opens Studio. A window stays open while Studio runs — that
 is deliberate, it is where errors appear, and closing it is how you quit. Both
 halves go down together: a web app talking to a dead engine quietly falls back to
 demo data and looks like it is working, which is worse than stopping.
 
-Launching it again while it is already running just brings the browser back
-rather than starting a second copy.
+Launching it again while it is already running just brings the window back rather
+than starting a second copy.
+
+### The window it opens
+
+Studio opens in a window of its own — no tabs, no address bar, no bookmarks bar,
+its own taskbar entry. That is a Chromium app window (`--app=`), borrowed from
+whichever of Edge, Chrome or Brave is installed; Edge ships with Windows, so on
+Windows there is normally nothing to choose. It is the same app either way, and
+where none of those exist it opens a normal browser tab instead.
+
+Set `STUDIO_BROWSER=1` to always get an ordinary tab — worth it if you want
+devtools, your extensions, or your own profile.
+
+It is not an Electron app, and deliberately so: a real `.exe` would mean shipping
+a second browser engine, a build step and code signing, to change what the window
+frame looks like. If you want a Start-menu entry that behaves like an installed
+program, the browser will make you one — in Edge, **Settings and more (…) → Apps →
+Install this site as an app**, with Studio running.
 
 If something *else* holds the ports it says so, and suggests different ones,
 rather than letting uvicorn print `[Errno 98] Address already in use`.
@@ -326,6 +408,25 @@ given as a relative path. Prefix it with `.\`:
 
 **`The term '```bash' is not recognized`** — that line is markdown fencing from
 these docs, not a command. Copy the lines *between* the fences.
+
+**`NativeCommandError` during setup, naming a program that looks like it worked** —
+for example `py.exe : Python 3.14.6 ... NativeCommandError`. Windows PowerShell 5.1
+turns a single line written to stderr into a terminating error whenever the script
+captures output and `$ErrorActionPreference` is `Stop`, so a program that succeeded
+can still stop the install. Fixed in `setup.ps1`; if you see it, you are on an old
+copy — `git pull` and run `Install Studio.cmd` again.
+
+**`Unexpected token ')'` in `setup.ps1`, on a line that is plainly fine** — same
+cause, one layer down: a `.ps1` saved as UTF-8 with no BOM is read using the
+machine's ANSI code page, and a non-ASCII character in a string can swallow the
+closing quote. The file is ASCII-only for this reason, so again: `git pull`.
+
+**Setup offers to install Python 3.12 when you already have 3.14** — deliberate,
+and it installs alongside rather than replacing anything. Some dependencies
+(`ctranslate2`, `scipy`) publish compiled Windows wheels only for versions that
+have been out a while; on a newer Python pip tries to build them from source and
+fails on the absent C++ toolchain. Decline it and setup continues on 3.14 anyway.
+To point setup at a specific interpreter, set `STUDIO_PYTHON` to its full path.
 
 **Anything engine-side** — run the doctor; it names the single next action for
 whatever is missing.

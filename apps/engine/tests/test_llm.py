@@ -21,6 +21,7 @@ import respx
 from engine.models import ModelSpec
 from engine.providers.llm import (
     LLM,
+    THINKING_RESERVE,
     Completion,
     ProviderUnavailable,
     _extract_json,
@@ -386,7 +387,53 @@ class TestAnthropic:
         # Anthropic takes the system prompt as a top-level field, not a message.
         assert body["system"] == "be brief"
         assert body["messages"] == [{"role": "user", "content": "say hi"}]
-        assert body["max_tokens"] == 64
+        # Sonnet 5 reasons before answering, and `max_tokens` bounds the reasoning and
+        # the answer together — see `THINKING_RESERVE`.
+        assert body["max_tokens"] == 64 + THINKING_RESERVE
+
+    @respx.mock
+    async def test_temperature_is_not_sent_to_models_that_reject_it(self):
+        """The bug that broke every critical stage.
+
+        Opus 4.7 and up, and Fable 5, removed the sampling parameters: `temperature`
+        returns a 400 rather than being ignored. It was sent unconditionally, so the
+        default route for hook, draft, critique and titles failed on its first call.
+        """
+        route = respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(200, json=_anthropic_reply("x"))
+        )
+        for model in ("claude-opus-5", "claude-opus-4-8", "claude-fable-5"):
+            await LLM(spec("anthropic", model=model)).complete("hi")
+            body = _json(route.calls.last.request)
+            assert "temperature" not in body, model
+            assert body["max_tokens"] == 4096 + THINKING_RESERVE, model
+
+    @respx.mock
+    async def test_sonnet_5_keeps_the_default_temperature_and_drops_any_other(self):
+        """It accepts the field, but only at its default value."""
+        route = respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(200, json=_anthropic_reply("x"))
+        )
+        sonnet = spec("anthropic", model="claude-sonnet-5")
+
+        await LLM(sonnet).complete("hi")
+        assert _json(route.calls.last.request)["temperature"] == 1.0
+
+        await LLM(sonnet).complete("hi", temperature=0.3)
+        assert "temperature" not in _json(route.calls.last.request)
+
+    @respx.mock
+    async def test_a_model_with_sampling_still_gets_the_temperature_it_asked_for(self):
+        route = respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(200, json=_anthropic_reply("x"))
+        )
+        await LLM(spec("anthropic", model="claude-haiku-4-5-20251001")).complete(
+            "hi", temperature=0.2, max_tokens=100
+        )
+        body = _json(route.calls.last.request)
+        assert body["temperature"] == 0.2
+        # No reserve either: nothing is spent on reasoning here.
+        assert body["max_tokens"] == 100
 
     @respx.mock
     async def test_no_system_prompt_omits_the_field(self):

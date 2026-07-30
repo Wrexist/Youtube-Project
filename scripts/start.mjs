@@ -175,6 +175,94 @@ function openBrowser(url) {
 }
 
 /**
+ * The Chromium-based browser to borrow a window from, or null if there is none.
+ *
+ * Absolute paths rather than a PATH lookup: none of these put themselves on PATH
+ * on Windows, which is the platform this matters on.
+ */
+function chromiumBinary() {
+  const candidates = WINDOWS
+    ? [
+        `${process.env.ProgramFiles}\\Microsoft\\Edge\\Application\\msedge.exe`,
+        `${process.env["ProgramFiles(x86)"]}\\Microsoft\\Edge\\Application\\msedge.exe`,
+        `${process.env.ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe`,
+        `${process.env["ProgramFiles(x86)"]}\\Google\\Chrome\\Application\\chrome.exe`,
+        `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+        `${process.env.ProgramFiles}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`,
+      ]
+    : process.platform === "darwin"
+      ? [
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+          "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        ]
+      : [
+          "/usr/bin/google-chrome",
+          "/usr/bin/microsoft-edge",
+          // Brave is listed on the other two platforms, so leaving it out here
+          // meant a Linux machine with only Brave fell back to a tab for no
+          // reason. Its package names differ by channel; -stable is the usual one.
+          "/usr/bin/brave-browser-stable",
+          "/usr/bin/brave-browser",
+          "/usr/bin/brave",
+          "/usr/bin/chromium",
+          "/usr/bin/chromium-browser",
+          "/snap/bin/chromium",
+        ];
+
+  // `undefined` interpolates as the string "undefined" rather than vanishing, so
+  // an unset ProgramFiles(x86) on a 32-bit-free machine yields a path that simply
+  // does not exist. existsSync filters it either way.
+  return candidates.find((path) => existsSync(path)) ?? null;
+}
+
+/**
+ * Open the app in a window of its own: no tab strip, no address bar, no
+ * bookmarks - a taskbar entry that behaves like a program rather than a page.
+ *
+ * `--app=` is a Chromium flag, so this needs Edge, Chrome or Brave, any of which
+ * is present on the overwhelming majority of Windows machines (Edge ships with
+ * the OS). Returns false when there is none, and the caller falls back to a
+ * normal browser tab; Studio is the same app either way.
+ *
+ * Deliberately not Electron. Wrapping this in a real .exe means shipping a second
+ * browser engine, a build step and a signing story to change what the window
+ * frame looks like - and the app still has to work in a plain tab regardless,
+ * because that is what `npm run dev` gives you.
+ */
+function openAppWindow(url) {
+  const binary = chromiumBinary();
+  if (!binary) return false;
+
+  try {
+    const child = spawn(binary, [`--app=${url}`, "--window-size=1440,940"], {
+      stdio: "ignore",
+      detached: true,
+    });
+    // Same asynchronous-error trap as openBrowser, with the same remedy: report
+    // by falling back rather than letting an unhandled event kill the launcher
+    // and orphan both halves.
+    child.on("error", () => openBrowser(url));
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Show Studio, in its own window where that is possible.
+ *
+ * `STUDIO_BROWSER=1` forces an ordinary tab, for anyone who would rather have
+ * devtools, extensions and their own profile than a clean frame.
+ */
+function showStudio(url) {
+  if (process.env.STUDIO_BROWSER === "1" || !openAppWindow(url)) {
+    openBrowser(url);
+  }
+}
+
+/**
  * The first free port at or after `from`, or null if there is no room.
  *
  * `taken` covers ports this run has already claimed but not yet bound: the two
@@ -212,7 +300,7 @@ if (engineBusy || webBusy) {
       // report a failure. Naming the address means the window is useful even when
       // no browser could be launched.
       console.log(`\n  Studio is already running.\n  Opening ${url}\n`);
-      openBrowser(url);
+      showStudio(url);
       // Awaited, not a bare setTimeout: a timer would schedule the exit and let
       // execution fall straight through to the spawn calls below, which would then
       // fight the very instance this branch just found. The pause itself is for the
@@ -372,7 +460,7 @@ console.log(
     `  web     http://localhost:${WEB_PORT}\n` +
     `  engine  http://localhost:${ENGINE_PORT}\n` +
     (OPEN
-      ? `  ${paint(90, "starting — your browser will open in a moment")}\n` +
+      ? `  ${paint(90, "starting — the Studio window opens in a moment")}\n` +
         `  ${paint(90, "keep this window open; closing it stops Studio")}\n`
       : `  ${paint(90, `first run? open http://localhost:${WEB_PORT}/setup and paste your keys`)}\n`),
 );
@@ -428,8 +516,22 @@ if (OPEN) {
   const deadline = 90_000; // Cold `next dev` on a slow disk is genuinely slow.
   const started = Date.now();
 
+  // Two guards, and both are load-bearing, because the callback is `async` while
+  // `setInterval` is not: the timer keeps firing during an `await`, so ticks
+  // overlap. A probe waits up to 2s and the interval is 700ms, and the very first
+  // request to a cold `next dev` is the slow one — it compiles the page — so three
+  // or four ticks would be in flight together, all resolve within a moment of each
+  // other, and each open a window. `clearInterval` cannot fix that: by the time
+  // the first tick resumes after its `await`, the others are already past it.
+  //
+  // `probing` stops the pile-up; `opened` makes opening happen once even if one
+  // forms anyway. Observed as Studio opening three times from one double-click.
+  let probing = false;
+  let opened = false;
+
   const poll = setInterval(async () => {
     if (shuttingDown) return clearInterval(poll);
+    if (probing || opened) return;
 
     if (Date.now() - started > deadline) {
       clearInterval(poll);
@@ -441,10 +543,19 @@ if (OPEN) {
     // Any answer means the server is listening — a 404, a 500 or the 307 to
     // /welcome are all something a browser can usefully show, and all beat
     // waiting longer. 0 means it did not answer; the interval is the retry.
-    if ((await probe(WEB_PORT)) > 0) {
+    probing = true;
+    let status = 0;
+    try {
+      status = await probe(WEB_PORT);
+    } finally {
+      probing = false;
+    }
+
+    if (status > 0 && !opened) {
+      opened = true;
       clearInterval(poll);
       console.log(`\n  Opening ${url}\n`);
-      openBrowser(url);
+      showStudio(url);
     }
   }, 700);
   // Do not let the poll itself hold the process open past a shutdown.
