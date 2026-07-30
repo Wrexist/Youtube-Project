@@ -11,6 +11,8 @@ channel under the user's name.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -18,6 +20,28 @@ from engine.api import publishing
 from engine.main import JOBS, app
 from engine.workflows import video
 from engine.workflows.base import StageStatus
+
+
+@pytest.fixture(autouse=True)
+def no_background_work(monkeypatch):
+    """Creating a job must not start running one.
+
+    Every `POST /v1/jobs` below exists to produce a *record* — the list endpoint's
+    sort order, the rerun gate, the 400 on an unstartable workflow. None of them
+    wants the workflow itself, but `create_job` ends in `_dispatch`, which fires
+    `_run_job` as a detached task: research, an LLM call per stage, a stock search,
+    a render. Roughly 27 outbound requests per created job, all of which only ever
+    "passed" because this machine has no keys and no network to reach them with.
+
+    Autouse, and here rather than inside a helper, because the cost of a new test
+    forgetting is a suite that shells out to the internet without saying so.
+    """
+    from engine import main as main_mod
+
+    async def no_dispatch(job_id: str, start_from: str | None = None) -> None:
+        return None
+
+    monkeypatch.setattr(main_mod, "_dispatch", no_dispatch)
 
 
 @pytest.fixture
@@ -424,3 +448,153 @@ def test_the_startable_workflows_still_work():
         assert (
             client.post("/v1/jobs", json={"topic": "a topic", "workflow": name}).status_code == 202
         )
+
+
+# ── a published video cannot be published again by the back door ────────────
+#
+# The double-publish guard lives on `POST /publish` alone, and two other endpoints
+# reach the same `UploadStage` without going past it: `/rerun` with stage "upload",
+# and `/edit` on anything the upload depends on — description, tags, titles — which
+# invalidates the upload and re-runs it.
+#
+# It was covered only at helper level (`_existing_publish` in
+# test_cancel_and_double_publish.py). That is why a guard which never ran on either
+# endpoint could survive: the helper's tests pass whether or not anything calls it.
+# These go through HTTP, and count what the YouTube client was actually asked to do.
+
+
+class FakeYouTube:
+    """A YouTube client that records instead of spending.
+
+    Every method here is a real quota charge upstream — `upload` is 1,600 of the
+    day's 10,000 — so the counts are the assertion, not decoration.
+    """
+
+    def __init__(self) -> None:
+        self.uploads: list[str] = []
+        self.thumbnails: list[str] = []
+        self.captions: list[str] = []
+
+    async def upload(self, path, **kwargs) -> str:
+        self.uploads.append(kwargs.get("title", ""))
+        return f"yt-{len(self.uploads)}"
+
+    async def set_thumbnail(self, video_id, path) -> None:
+        self.thumbnails.append(video_id)
+
+    async def upload_captions(self, video_id, path) -> None:
+        self.captions.append(video_id)
+
+    async def add_to_playlist(self, video_id, playlist_id) -> None:  # pragma: no cover
+        pass
+
+
+@pytest.fixture
+def runs_for_real(monkeypatch, tmp_path):
+    """Let the workflow actually execute, somewhere harmless.
+
+    Overrides `no_background_work` for the re-run tests below, because the thing
+    being proved is what happens when the guard is *absent*, and "no upload was
+    attempted" proves nothing against a dispatch that never dispatches.
+
+    Awaited rather than spawned as a task: the assertion must not race the run.
+    `store._root` is redirected because `CaptionsStage` writes an SRT, and the test
+    suite has no business writing into `./storage`.
+    """
+    from engine import main as main_mod
+    from engine.storage import store
+
+    monkeypatch.setattr(store, "_root", tmp_path)
+
+    async def run_now(job_id: str, start_from: str | None = None) -> None:
+        await main_mod._run_job(job_id, start_from)
+
+    monkeypatch.setattr(main_mod, "_dispatch", run_now)
+
+
+def _published_job(publish_id: str = "pub", source_id: str = "src") -> tuple[dict, FakeYouTube]:
+    """A publish job that has already put the video on YouTube.
+
+    Shaped exactly as `publish_job` leaves it: the video stages seeded DONE from the
+    source job, the four publish stages DONE on top, and a live client in `inputs`.
+    """
+    from engine.workflows.base import Provenance, StageOutput
+
+    source = _finished_video_job(source_id)
+    wf = video.get("publish")
+    states = wf.initial_states()
+    for name, state in source["states"].items():
+        if name in states:
+            states[name] = state
+
+    for name, value in (
+        ("upload", "yt-original"),
+        ("thumbnail_set", "thumbnails/src-0.jpg"),
+        ("captions", "captions/pub.srt"),
+    ):
+        states[name].status = StageStatus.DONE
+        states[name].output = StageOutput(value=value, provenance=Provenance())
+    states["playlist"].status = StageStatus.SKIPPED
+
+    fake = FakeYouTube()
+    job = {
+        "id": publish_id,
+        "workflow": wf,
+        "inputs": {**source["inputs"], "youtube_client": fake, "source_job_id": source_id},
+        "states": states,
+        "wake": asyncio.Event(),
+        "events": [],
+        "status": "completed",
+    }
+    JOBS[publish_id] = job
+    return job, fake
+
+
+def test_rerunning_the_upload_of_a_published_video_is_refused(client, runs_for_real):
+    """`/rerun {"stage": "upload"}` on a finished publish job is a second upload.
+
+    Same 1,600 units and the same duplicate public video as a second click on
+    Publish, arriving through an endpoint that never asked `_existing_publish`.
+    """
+    job, fake = _published_job()
+
+    response = client.post("/v1/jobs/pub/rerun", json={"stage": "upload"})
+
+    assert response.status_code == 409, response.text
+    assert fake.uploads == [], "the video was uploaded a second time"
+    assert job["states"]["upload"].output.value == "yt-original", "the original id was discarded"
+
+
+def test_editing_upstream_of_a_published_upload_is_refused(client):
+    """`/edit` on the description invalidates the upload and re-runs it.
+
+    The refusal has to happen before `mark_edited`, which is why the assertion is on
+    the stage state: without the guard the upload is already STALE with its video id
+    thrown away by the time the response is written, whatever the re-run then does.
+    """
+    job, fake = _published_job()
+
+    response = client.post(
+        "/v1/jobs/pub/edit", json={"stage": "description", "value": "A better description."}
+    )
+
+    assert response.status_code == 409, response.text
+    assert job["states"]["upload"].status is StageStatus.DONE
+    assert job["states"]["upload"].output.value == "yt-original"
+    assert fake.uploads == []
+
+
+def test_rerunning_the_thumbnail_of_a_published_video_is_allowed(client, runs_for_real):
+    """The reason the guard is per-stage rather than per-job.
+
+    Swapping the thumbnail on a live video is the one publish stage worth re-running
+    by hand — it is 50 quota units against 1,600, and nothing downstream of `upload`
+    re-uploads anything. Refusing it would make the guard cost more than it saves.
+    """
+    _job, fake = _published_job()
+
+    response = client.post("/v1/jobs/pub/rerun", json={"stage": "thumbnail_set"})
+
+    assert response.status_code == 200, response.text
+    assert fake.thumbnails == ["yt-original"], "the thumbnail should have been set again"
+    assert fake.uploads == [], "re-running the thumbnail must not re-upload the video"

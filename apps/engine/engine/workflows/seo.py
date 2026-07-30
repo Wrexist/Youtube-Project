@@ -17,14 +17,51 @@ from dataclasses import dataclass, field
 from engine import feedback
 from engine.providers import llm
 from engine.research import keywords
-from engine.workflows.base import Provenance, Stage, StageOutput, WorkflowContext
+from engine.workflows.base import (
+    Provenance,
+    Stage,
+    StageOutput,
+    WorkflowContext,
+    WorkflowError,
+)
 
 # YouTube's actual limits. Enforced here so a package can never fail at upload time.
 TITLE_HARD_MAX = 100
 TITLE_TARGET_MAX = 60  # beyond this it truncates in search and suggested
+#: Bytes, not characters — that is how the API measures it, and this description is
+#: assembled with an em dash per source line and whatever punctuation the model
+#: reached for. 5,000 *characters* of that is comfortably over 5,000 bytes, and the
+#: rejection arrives after the render is already paid for.
 DESCRIPTION_MAX = 5000
 DESCRIPTION_VISIBLE = 150  # all most viewers ever read
 TAGS_TOTAL_MAX = 500
+
+
+def tag_cost(tag: str) -> int:
+    """What one tag spends of the 500-character budget.
+
+    A tag containing a space is serialised quoted — `foo,"bar baz"` — so it costs
+    its own length plus two quotes plus the comma. Charging every tag `len + 1`
+    under-counts by two for every multi-word tag, and long-tail phrases *are* the
+    multi-word ones: a realistic 22-tag list is ~40 characters over budget, and
+    YouTube rejects the whole `tags` field rather than trimming it.
+    """
+    return len(tag) + (3 if " " in tag else 1)
+
+
+def truncate_utf8(text: str, limit: int) -> str:
+    """Cut to at most `limit` UTF-8 bytes, never through the middle of a character.
+
+    `text[:limit]` counts characters, which is the wrong unit (see DESCRIPTION_MAX)
+    and can leave the field over the ceiling. Slicing the *bytes* has the opposite
+    hazard — a half-written codepoint — so the tail is decoded with `ignore`, which
+    drops exactly the partial character and nothing else.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
 
 STRATEGIES = (
     "curiosity_gap",
@@ -162,11 +199,40 @@ def validate_tags(
     out: list[str] = []
     used = 0
     for tag in pinned + rest:
-        cost = len(tag) + 1  # comma separator
+        cost = tag_cost(tag)
         if used + cost <= TAGS_TOTAL_MAX:
             out.append(tag)
             used += cost
     return out
+
+
+def assemble_description(hook: str, body: str, tail: list[str]) -> str:
+    """Fit hook + body + tail inside the ceiling by shortening the *body*.
+
+    This used to be `"\\n".join(parts)[:DESCRIPTION_MAX]`, which cuts from the end —
+    and the end is where the `Sources:` block and the three hashtags live. An
+    over-long body therefore silently deleted the citations (a monetisation
+    requirement under YouTube's inauthentic-content policy, not a nicety) and the
+    hashtags that appear above the title, while keeping every word of the prose that
+    caused the overflow. The body is the only part that can be lost from, so it is
+    the only part that is.
+    """
+
+    def joined(text: str) -> str:
+        return "\n".join([hook, "", text, *tail])
+
+    full = joined(body)
+    if len(full.encode("utf-8")) <= DESCRIPTION_MAX:
+        return full
+
+    # Everything except the body is fixed cost; what remains is the body's budget.
+    budget = DESCRIPTION_MAX - len(joined("").encode("utf-8"))
+    if budget <= 0:
+        # The hook, the sources and the hashtags overflow on their own. There is no
+        # structure left to protect at that point, so a byte-safe cut of the whole
+        # thing is the honest outcome.
+        return truncate_utf8(full, DESCRIPTION_MAX)
+    return joined(truncate_utf8(body, budget).rstrip())
 
 
 # ── stages ──────────────────────────────────────────────────────────────────
@@ -287,6 +353,22 @@ class DescriptionStage(Stage[str]):
     editable = True
     editable_type = str
 
+    def validate_edit(self, value: str) -> str:
+        """Refused rather than clamped, unlike tags.
+
+        A description is prose someone wrote, and quietly deleting the last two
+        thousand characters of it — including whatever they moved to the bottom —
+        is worse than telling them it did not fit. The number is in the message so
+        the fix is obvious.
+        """
+        size = len(value.encode("utf-8"))
+        if size > DESCRIPTION_MAX:
+            raise WorkflowError(
+                f"description is {size:,} bytes; YouTube's limit is {DESCRIPTION_MAX:,}. "
+                f"Remove about {size - DESCRIPTION_MAX:,}."
+            )
+        return value
+
     async def run(self, ctx: WorkflowContext) -> StageOutput[str]:
         variants: list[TitleVariant] = ctx.get("titles")
         evidence: keywords.KeywordEvidence = ctx.get("grounding")
@@ -316,12 +398,12 @@ Return: {{"hook": str, "body": str, "hashtags": [str]}}""",
         )
 
         sources = getattr(script, "sources", [])
-        parts = [result["hook"], "", result["body"]]
+        tail: list[str] = []
         if sources:
-            parts += ["", "Sources:", *[f"— {url}" for url in sources[:8]]]
-        parts += ["", " ".join(f"#{h.lstrip('#')}" for h in result["hashtags"][:3])]
+            tail += ["", "Sources:", *[f"— {url}" for url in sources[:8]]]
+        tail += ["", " ".join(f"#{h.lstrip('#')}" for h in result["hashtags"][:3])]
 
-        description = "\n".join(parts)[:DESCRIPTION_MAX]
+        description = assemble_description(result["hook"], result["body"], tail)
         return StageOutput(
             value=description,
             cost_usd=completion.cost_usd,
@@ -343,6 +425,16 @@ class TagsStage(Stage[list]):
     # cannot break anything downstream that a re-run would not also produce.
     editable = True
     editable_type = list
+
+    def validate_edit(self, value: list[str]) -> list[str]:
+        """Clamped rather than refused, unlike the description.
+
+        Nobody adding a tag is tracking a 500-character running total, and the
+        generated path already trims silently through the same function — so an
+        edit that goes over is trimmed the same way rather than bounced. Empty
+        strings are dropped first: YouTube rejects the whole field over one.
+        """
+        return validate_tags([t.strip() for t in value if t.strip()])
 
     async def run(self, ctx: WorkflowContext) -> StageOutput[list]:
         evidence: keywords.KeywordEvidence = ctx.get("grounding")
@@ -375,7 +467,7 @@ Return: {{"tags": [str]}}""",
             provenance=Provenance(
                 model=completion.model,
                 prompt=completion.prompt,
-                params={"total_chars": sum(len(t) + 1 for t in tags)},
+                params={"total_chars": sum(tag_cost(t) for t in tags)},
             ),
         )
 

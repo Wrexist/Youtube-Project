@@ -44,6 +44,11 @@ export default async function CalendarPage() {
           quotaByDay={quotaByDay}
           initialScheduled={initialScheduled}
           live={live}
+          // The engine's own ceiling, not the client's copy of it. An approved
+          // quota extension raises `limit`, and a screen still enforcing 10,000
+          // would refuse drops the engine would accept. Undefined when the engine
+          // is down, which falls back to the documented default.
+          dailyLimit={quota?.limit}
           // Rendered once on the server and handed down, so the grid and the
           // is-this-day-past test agree between the server pass and the client
           // pass. Calling `new Date()` in both is a hydration mismatch by

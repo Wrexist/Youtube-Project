@@ -97,7 +97,18 @@ class TestTrimKeywordsWithSuggestions:
 
 
 def _tag_cost(tag: str) -> int:
-    return len(tag) + 1  # comma separator
+    """Mirror the cost model used inside validate_tags — and Google's.
+
+    A tag containing a space is serialised quoted (`foo,"bar baz"`), so it costs two
+    characters more than its own length before the comma. This mirror charged every
+    tag `len + 1`, which agreed with `validate_tags` and disagreed with YouTube: a
+    list of long-tail phrases measured ~40 characters under what the API counted,
+    and the API rejects the whole `tags` field rather than trimming it.
+
+    Written out rather than imported from `seo.tag_cost` on purpose — a test that
+    calls the function it is checking asserts nothing.
+    """
+    return len(tag) + (3 if " " in tag else 1)
 
 
 class TestValidateTagsBasic:
@@ -125,6 +136,21 @@ class TestValidateTagsBasic:
             assert short in result
             assert after in result
             assert long not in result
+
+    def test_a_package_of_multi_word_tags_fits_the_count_google_does(self):
+        """The shape the generator actually produces: every tag a long-tail phrase.
+
+        Twenty 26-character phrases cost 580 by Google's count and 540 by the old
+        one, so the trimmer kept 18 of them, reported 486, and shipped 522 — over
+        the 500 ceiling, and `videos.insert` refuses the field whole rather than
+        dropping the overflow. The single-word tags every other test here uses cost
+        the same under both models, which is why nothing caught it.
+        """
+        tags = [f"bridge failure analysis {i:02d}" for i in range(20)]
+        result = validate_tags(tags)
+
+        assert result, "the trimmer must still return something"
+        assert sum(_tag_cost(t) for t in result) <= TAGS_TOTAL_MAX
 
 
 class TestValidateTagsExactTitle:

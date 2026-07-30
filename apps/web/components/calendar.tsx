@@ -4,7 +4,6 @@ import { useMemo, useState, useTransition } from "react";
 import { applyPlanToCalendar, scheduleAt, unscheduleAt } from "@/app/actions";
 import {
   DAILY_LIMIT,
-  MAX_PER_DAY,
   PUBLISH_COST,
   autoSchedule,
   bestHourOn,
@@ -12,6 +11,7 @@ import {
   fmtTime,
   slotReason,
   slotScore,
+  uploadsPerDay,
   validateMove,
   type Scheduled,
 } from "@/lib/schedule";
@@ -39,6 +39,7 @@ export function Calendar({
   initialScheduled = [],
   now,
   live = false,
+  dailyLimit = DAILY_LIMIT,
 }: {
   videos: CalendarVideo[];
   quotaByDay: Record<string, number>;
@@ -55,6 +56,10 @@ export function Calendar({
   now?: string;
   /** With no engine, drops are refused rather than silently kept in memory. */
   live?: boolean;
+  /** `quota.limit` from the engine. Hardcoding 10,000 here meant an install with an
+   *  approved quota extension had its drags refused by a ceiling only this screen
+   *  believed in. */
+  dailyLimit?: number;
 }) {
   const [scheduled, setScheduled] = useState<Scheduled[]>(initialScheduled);
   const [, startTransition] = useTransition();
@@ -101,7 +106,7 @@ export function Calendar({
       return;
     }
 
-    const { ok, message } = validateMove(at, others, quotaByDay);
+    const { ok, message } = validateMove(at, others, quotaByDay, dailyLimit);
     if (!ok) {
       setNotice({ tone: "bad", text: message });
       return;
@@ -163,7 +168,7 @@ export function Calendar({
 
   function proposePlan() {
     const pending = tray.map((v) => ({ id: v.id, format: v.format }));
-    setPlan(autoSchedule(pending, scheduled, quotaByDay));
+    setPlan(autoSchedule(pending, scheduled, quotaByDay, { dailyLimit }));
   }
 
   function applyPlan() {
@@ -293,8 +298,8 @@ export function Calendar({
                     const items = scheduled.filter((s) => dayKey(s.at) === key);
                     const proposed = proposedByDay.get(key) ?? [];
                     const used = quotaByDay[key] ?? 0;
-                    const budget = Math.floor((DAILY_LIMIT - used) / PUBLISH_COST);
-                    const full = items.length >= Math.min(budget, MAX_PER_DAY);
+                    const budget = Math.floor((dailyLimit - used) / PUBLISH_COST);
+                    const full = items.length >= Math.min(budget, uploadsPerDay(dailyLimit));
                     const past = day < startOfToday;
                     const active = hoverDay === key && !!dragging;
 
@@ -380,16 +385,16 @@ export function Calendar({
                     <div
                       className="h-full rounded-full transition-[width] duration-300"
                       style={{
-                        width: `${Math.min(100, (weekQuota / (DAILY_LIMIT * 7)) * 100)}%`,
+                        width: `${Math.min(100, (weekQuota / (dailyLimit * 7)) * 100)}%`,
                         background:
-                          weekQuota > DAILY_LIMIT * 5
+                          weekQuota > dailyLimit * 5
                             ? "var(--color-warn)"
                             : "var(--color-muted)",
                       }}
                     />
                   </div>
                   <span className="mono text-[11px] text-[var(--color-faint)]">
-                    {weekQuota.toLocaleString()} / {(DAILY_LIMIT * 7).toLocaleString()}{" "}
+                    {weekQuota.toLocaleString()} / {(dailyLimit * 7).toLocaleString()}{" "}
                     quota this week
                   </span>
                 </div>

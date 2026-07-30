@@ -14,6 +14,22 @@ from engine import main as main_mod
 from engine.main import JOBS
 
 
+@pytest.fixture(autouse=True)
+def no_background_work(monkeypatch):
+    """`create_job` and `/rerun` both end in `_dispatch`, which starts the real
+    workflow as a detached task — an LLM call per stage, a stock search, a render.
+
+    The rerun tests below only ever assert on what the *endpoint* returned, so the
+    work was pure cost: it survived only because there are no API keys here to make
+    the calls with. See the twin fixture in test_publish_endpoint.py.
+    """
+
+    async def no_dispatch(job_id: str, start_from: str | None = None) -> None:
+        return None
+
+    monkeypatch.setattr(main_mod, "_dispatch", no_dispatch)
+
+
 @pytest.fixture
 def job():
     JOBS.clear()

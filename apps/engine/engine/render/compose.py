@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,21 @@ from engine.storage import store
 ProgressFn = Callable[[float, str], Awaitable[None]]
 
 RESOLUTIONS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
+
+#: How many source clips may have an open reader at once before beats start being
+#: baked to intermediate files.
+#:
+#: Every `VideoFileClip` is an ffmpeg subprocess with its own buffers — measured at
+#: roughly 165MB resident each, and they were *all* held from the first beat until
+#: the encode finished, because the final composite still referenced them. A
+#: long-form render with forty-odd sources peaked at 6.7GB and was the dominant term
+#: in every OOM. Below this many sources the whole thing fits comfortably and the
+#: extra encode below is not worth paying for.
+MAX_OPEN_SOURCES = 8
+
+#: Cached rendered cues. Two, not one: a composite asks for the colour frame and the
+#: mask frame separately, and a cue on a boundary is asked for either side of it.
+_CUE_CACHE = 2
 
 
 async def compose_video(
@@ -74,7 +90,6 @@ def _render_sync(
         AudioFileClip,
         ColorClip,
         CompositeVideoClip,
-        TextClip,
         VideoFileClip,
         concatenate_videoclips,
     )
@@ -91,6 +106,67 @@ def _render_sync(
     beat_spans = _beat_spans(beats, total)
     groups: list[tuple[float, Any]] = []  # (start, clip covering that beat's span)
     segments: list[Any] = []  # every underlying clip, for close() at the end
+
+    # Beats are baked to intermediate files in windows once there are enough sources
+    # to matter — see MAX_OPEN_SOURCES. `baked_upto` is the boundary: everything
+    # before it is a single reader onto a file on disk, everything after it still
+    # holds its own sources open.
+    window = _window_size(sum(1 for c in clips if c.get("path")))
+    scratch: list[Path] = []
+    baked_upto = 0
+
+    def bake() -> None:
+        """Flatten the beats built since the last bake into one intermediate file.
+
+        The point is the `close()` at the end: an open `VideoFileClip` is an ffmpeg
+        subprocess that stays resident for as long as the final composite might read
+        from it, which used to be "until the encode finished". Writing the window out
+        and reopening it as one clip trades a second encode of that span for giving
+        every one of those subprocesses back.
+        """
+        nonlocal baked_upto
+        fresh = groups[baked_upto:]
+        if not fresh or not segments:
+            return
+
+        window_start = fresh[0][0]
+        window_end = max(start + clip.duration for start, clip in fresh)
+        composite = CompositeVideoClip(
+            [
+                ColorClip((width, height), color=(0, 0, 0), duration=window_end - window_start),
+                *[clip.with_start(start - window_start) for start, clip in fresh],
+            ],
+            size=(width, height),
+        ).with_duration(window_end - window_start)
+
+        path = output.parent / f"{output.stem}-w{len(scratch)}.mp4"
+        # Said out loud: a window encode is tens of seconds on a long-form render,
+        # and a progress view that sits on "beat 12" through all of it looks stuck.
+        report(
+            0.25 + 0.45 * len(groups) / max(len(beat_spans), 1),
+            f"consolidating beats {baked_upto + 1}-{len(groups)}",
+        )
+        # Fast and near-lossless: this file is read once by the final pass and then
+        # deleted, so encode time matters and a visually invisible generation loss
+        # does not. `medium`/default CRF here would roughly double the render.
+        composite.write_videofile(
+            str(path),
+            fps=30,
+            codec="libx264",
+            audio=False,
+            preset="ultrafast",
+            ffmpeg_params=["-crf", "18"],
+            threads=4,
+            logger=None,
+        )
+        composite.close()
+        for source in segments:
+            source.close()
+        segments.clear()
+        scratch.append(path)
+
+        groups[baked_upto:] = [(window_start, VideoFileClip(str(path)))]
+        baked_upto = len(groups)
 
     for index, (start, end) in enumerate(beat_spans):
         span = end - start
@@ -154,6 +230,16 @@ def _render_sync(
         groups.append((start, _cover_span(group, span)))
         report(0.25 + 0.45 * (index + 1) / max(len(beat_spans), 1), f"beat {index + 1}")
 
+        # At a beat boundary, never inside one: a beat's clips are concatenated with
+        # negative padding for the dissolve, and splitting that across two files
+        # would put a hard cut in the middle of a transition.
+        if window and len(segments) >= window:
+            bake()
+
+    # Whatever is left over after the last bake stays open, deliberately: it is
+    # fewer than `window` sources by construction, so it is already inside the
+    # budget, and baking it would pay for an encode that saves nothing.
+
     if not groups:
         raise RuntimeError("no usable clips after download")
 
@@ -181,9 +267,93 @@ def _render_sync(
     # MoviePy 2 requires an explicit font path for TextClip — it no longer falls back
     # to an ImageMagick-resolved family name, and omitting it raises at construction.
     font = fonts.cached_resolve(settings.subtitle_font)
-    overlays = [
-        TextClip(
-            text=cue["text"],
+    overlay = _subtitle_overlay(cues, width=width, height=height, font=font, duration=total)
+
+    final = CompositeVideoClip([video, overlay], size=(width, height)) if overlay else video
+
+    report(0.85, "encoding")
+    try:
+        final.write_videofile(
+            str(output),
+            fps=30,
+            codec="libx264",
+            audio_codec="aac",
+            threads=4,
+            preset="medium",
+            logger=None,
+        )
+    finally:
+        # `overlay` is deliberately absent: `Clip.close()` is a documented no-op for
+        # anything that is not backed by a reader, so adding it here would free
+        # nothing and only suggest that it did. What it holds — at most two rendered
+        # cues — is released with the clip itself.
+        #
+        # The baked windows are here because they *are* readers, and in a `finally`
+        # because their files have to go either way: a failed encode that leaves half
+        # a gigabyte of intermediates behind in `storage/tmp` is a slow disk leak
+        # nobody would connect back to this.
+        for clip in (*segments, *(g for _, g in groups[:baked_upto]), narration, final):
+            clip.close()
+        for path in scratch:
+            path.unlink(missing_ok=True)
+
+
+def _window_size(sources: int) -> int:
+    """How many source clips to hold open before baking a window, or 0 for never.
+
+    Balanced rather than fixed. Baking leaves one reader per completed window, so
+    peak readers is `max(window, sources / window)` and the minimum of that is at
+    the square root — 40 sources becomes about seven open readers instead of forty,
+    with seven intermediate encodes rather than thirty-nine.
+    """
+    if sources <= MAX_OPEN_SOURCES:
+        return 0
+    return max(2, math.ceil(math.sqrt(sources)))
+
+
+def _subtitle_overlay(cues: list[dict], *, width: int, height: int, font: str, duration: float):
+    """One clip that draws whichever cue is on screen, instead of one clip per cue.
+
+    This was a list comprehension building a `TextClip` per cue up front. A
+    `TextClip` rasterises at construction, so a 9:16 caption is about 3.6MB of
+    bitmap, and a full script is hundreds of cues — every one of them resident from
+    the moment the list was built until the encode finished, for a frame that is on
+    screen for two seconds. Measured at 1,227MB peak for 200 cues.
+
+    Here the bitmaps are built on demand and at most `_CUE_CACHE` are kept, so the
+    cost is bounded by the cache rather than by the length of the script. Frames are
+    cached already composited onto the full canvas: the composite asks for colour and
+    mask separately at the same `t`, and pasting twice per frame would undo the point.
+    """
+    import numpy as np
+    from moviepy import TextClip, VideoClip
+
+    if not cues:
+        return None
+
+    # Sorted so the lookup can stop early, and because a cue list assembled from two
+    # TTS backends is not guaranteed to arrive in order.
+    ordered = sorted(cues, key=lambda c: c["start"])
+    spans = [(c["start"], max(c["end"], c["start"] + 0.4), c["text"]) for c in ordered]
+    cache: dict[int, tuple[Any, Any]] = {}
+    blank_rgb = np.zeros((height, width, 3), dtype="uint8")
+    blank_mask = np.zeros((height, width), dtype="float64")
+
+    def active(t: float) -> int | None:
+        for index, (start, end, _) in enumerate(spans):
+            if start <= t < end:
+                return index
+            if start > t:
+                break
+        return None
+
+    def render(index: int) -> tuple[Any, Any]:
+        cached = cache.get(index)
+        if cached is not None:
+            return cached
+
+        text = TextClip(
+            text=spans[index][2],
             font=font,
             font_size=int(height * 0.045),
             color="white",
@@ -192,26 +362,44 @@ def _render_sync(
             method="caption",
             size=(int(width * 0.86), None),
         )
-        .with_start(cue["start"])
-        .with_duration(max(cue["end"] - cue["start"], 0.4))
-        .with_position(("center", int(height * 0.72)))
-        for cue in cues
-    ]
+        try:
+            bitmap = text.get_frame(0)
+            alpha = text.mask.get_frame(0) if text.mask is not None else None
+        finally:
+            text.close()
 
-    final = CompositeVideoClip([video, *overlays], size=(width, height))
+        rgb = blank_rgb.copy()
+        mask = blank_mask.copy()
+        box_h, box_w = bitmap.shape[0], bitmap.shape[1]
+        # Centred horizontally, 72% down the frame — the same placement the
+        # per-cue clips used via `.with_position(("center", height * 0.72))`.
+        left = max(0, (width - box_w) // 2)
+        top = max(0, min(int(height * 0.72), height - box_h))
+        box_h, box_w = min(box_h, height - top), min(box_w, width - left)
+        rgb[top : top + box_h, left : left + box_w] = bitmap[:box_h, :box_w]
+        if alpha is not None:
+            mask[top : top + box_h, left : left + box_w] = alpha[:box_h, :box_w]
+        else:
+            mask[top : top + box_h, left : left + box_w] = 1.0
 
-    report(0.85, "encoding")
-    final.write_videofile(
-        str(output),
-        fps=30,
-        codec="libx264",
-        audio_codec="aac",
-        threads=4,
-        preset="medium",
-        logger=None,
-    )
-    for clip in (*segments, narration, final):
-        clip.close()
+        # Bounded, and evicted oldest-first. Playback is sequential, so one entry
+        # would already be enough; two covers the frame that straddles a boundary.
+        while len(cache) >= _CUE_CACHE:
+            del cache[next(iter(cache))]
+        cache[index] = (rgb, mask)
+        return cache[index]
+
+    def frame(t: float):
+        index = active(t)
+        return blank_rgb if index is None else render(index)[0]
+
+    def mask_frame(t: float):
+        index = active(t)
+        return blank_mask if index is None else render(index)[1]
+
+    overlay = VideoClip(frame_function=frame, duration=duration)
+    overlay.mask = VideoClip(frame_function=mask_frame, duration=duration, is_mask=True)
+    return overlay
 
 
 def _cover_span(group, span: float):

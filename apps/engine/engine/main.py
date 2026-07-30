@@ -230,6 +230,10 @@ async def create_job(body: JobRequest) -> dict:
         "wake": wake,
         "events": [],
         "status": "running",
+        # Present from the start rather than only after a failure writes it. A
+        # restored job always carries the key, so a mirror that sometimes did not
+        # made `job["error"]` a landmine and `job.get("error")` the only safe read.
+        "error": None,
         # Carried on the mirror as well as the row: `GET /v1/jobs` sorts on it, and
         # reading it back from the database on every list would make a screen that
         # polls hit Postgres for something the process already knows.
@@ -299,6 +303,14 @@ async def _relay(job_id: str) -> None:
             if job_id in fresh:
                 job["status"] = fresh[job_id]["status"]
                 job["states"] = fresh[job_id]["states"]
+                # `error` too. Copying only the status meant every worker-run
+                # failure was served by `GET /v1/jobs` as
+                # `{status: "failed", error: null}` — the Queue showed a bare
+                # "failed" with no reason anywhere in the UI, while the reason sat
+                # in the row the whole time. `updated_at` comes with it so the list
+                # does not sort a finished job by when it started.
+                job["error"] = fresh[job_id].get("error")
+                job["updated_at"] = fresh[job_id].get("updated_at")
         _wake(job)
 
 
@@ -612,6 +624,7 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
         "wake": wake,
         "events": [],
         "status": "running",
+        "error": None,  # same reason as `create_job`
         # Same reason as `create_job`: `GET /v1/jobs` sorts on this. Without it a
         # publish job sorted to the very bottom of the Queue — the one job someone
         # is actively watching, filed underneath everything they finished last week.
@@ -696,6 +709,40 @@ def _video_state(job_id: str, job: dict) -> automation.VideoState:
 _PUBLISH_SERIES = automation.Series(id="", name="ad-hoc", niche="", monthly_budget_usd=float("inf"))
 
 
+def _refuse_ungated_upload(job: dict, stage: str) -> None:
+    """Refuse a re-run that would put `UploadStage` back on the wire.
+
+    `/edit` and `/rerun` re-execute a stage and everything downstream of it. On a
+    *publish* job that set can contain `upload`, and neither endpoint runs a single
+    one of the publish gate's checks — no `publish_blockers`, no `can_afford`, no
+    existing-publish check. Editing the description of a published video therefore
+    uploaded the whole thing to YouTube a second time: 1,600 more units, a duplicate
+    public video, and CLAUDE.md non-negotiable #3 bypassed entirely.
+
+    Deliberately keyed on the workflow and the invalidated set rather than on
+    `_existing_publish`: that helper looks for a *different* job publishing the same
+    source, and here the job re-running upload is its own publish job, so it never
+    fires. The other three publish stages stay individually re-runnable — a failed
+    thumbnail or caption is cheap, deterministic, and exactly what the Queue's
+    per-step retry is for.
+    """
+    if job["workflow"].name != "publish":
+        return
+    affected = [stage, *job["workflow"].dependents_of(stage)]
+    if "upload" not in affected:
+        return
+
+    source_job_id = job["inputs"].get("source_job_id", job["id"])
+    raise HTTPException(
+        409,
+        f"'{stage}' cannot be re-run here: it would re-execute the upload stage and "
+        "send this video to YouTube again, and this endpoint is not the approval "
+        "gate. Publish through "
+        f"POST /v1/jobs/{source_job_id}/publish?force=true, which checks the "
+        "quality blockers and the quota ledger first.",
+    )
+
+
 @app.post("/v1/jobs/{job_id}/edit")
 async def edit_stage(job_id: str, body: EditRequest) -> dict:
     """Accept a user edit and re-run from that point.
@@ -706,6 +753,11 @@ async def edit_stage(job_id: str, body: EditRequest) -> dict:
     job = _require(job_id)
     if job["status"] == "running":
         raise HTTPException(409, "job is still running; wait or cancel first")
+
+    # Before `mark_edited`, which writes the new value in place: refusing after it
+    # would leave the edit applied and its downstream stages STALE with nothing
+    # coming to re-run them.
+    _refuse_ungated_upload(job, body.stage)
 
     try:
         invalidated = job["workflow"].mark_edited(job["states"], body.stage, body.value)
@@ -745,6 +797,8 @@ async def rerun_stage(job_id: str, body: RerunRequest) -> dict:
         raise HTTPException(404, f"unknown stage '{body.stage}'")
     if states[body.stage].status is StageStatus.PENDING:
         raise HTTPException(409, f"stage '{body.stage}' has not run yet")
+
+    _refuse_ungated_upload(job, body.stage)
 
     invalidated = [body.stage, *job["workflow"].dependents_of(body.stage)]
     for name in invalidated:

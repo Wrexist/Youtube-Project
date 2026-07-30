@@ -33,21 +33,39 @@ export interface JobStream {
 
 type Action = { type: "event"; event: JobEvent } | { type: "error"; message: string };
 
-function reduce(state: JobStream, action: Action): JobStream {
+/**
+ * The whole of this hook's behaviour, as a pure function.
+ *
+ * Exported so it can be exercised without standing up an EventSource — every
+ * interesting case here (a failure that only ever arrives as `workflow.failed`, a
+ * `stage.progress` frame with no stage on it) is a fold over a captured event log.
+ */
+export function reduceJobStream(state: JobStream, action: Action): JobStream {
   if (action.type === "error") return { ...state, error: action.message };
 
   const event = action.event;
   const stages = [...state.stages];
-  const index = event.stage ? stages.findIndex((s) => s.name === event.stage) : -1;
+
+  // `stage.progress` is the one frame that carries no `stage` — `WorkflowContext.progress`
+  // in base.py sends only `message` and `fraction`. Attributing it to whichever stage
+  // is currently running is what makes it land at all; without this every "downloading
+  // 4/12" and every render percentage was dropped on the floor, and a twelve-minute
+  // render showed nothing but "working…" the whole way through.
+  const target =
+    event.stage ??
+    (event.type === "stage.progress"
+      ? stages.find((s) => s.status === "running")?.name
+      : undefined);
+  const index = target ? stages.findIndex((s) => s.name === target) : -1;
 
   const patch = (changes: Partial<Stage>) => {
     if (index === -1) {
-      if (!event.stage) return;
+      if (!target) return;
       // A stage the client has not seen — the engine added one, or this is a
       // resumed job whose graph the page never loaded. Append rather than drop it.
       stages.push({
-        name: event.stage,
-        title: event.title ?? event.stage,
+        name: target,
+        title: event.title ?? target,
         status: "pending",
         summary: null,
         cost_usd: 0,
@@ -71,7 +89,16 @@ function reduce(state: JobStream, action: Action): JobStream {
       patch({ summary: event.message ?? null });
       break;
     case "stage.completed":
-      patch({ status: "done", cost_usd: event.cost_usd ?? 0 });
+      // `summary` and `elapsed_ms` are both on the frame (base.py's `_run_stage`)
+      // and were both being dropped, so a finished row showed a blank line and no
+      // duration — the one-line collapse the Create screen is built around never
+      // had anything in it for a live job.
+      patch({
+        status: "done",
+        summary: event.summary ?? null,
+        cost_usd: event.cost_usd ?? 0,
+        elapsed_ms: event.elapsed_ms ?? 0,
+      });
       break;
     case "stage.replayed":
       // Already done in a previous run; the engine is skipping it, not redoing it.
@@ -92,6 +119,13 @@ function reduce(state: JobStream, action: Action): JobStream {
     case "workflow.completed":
       return { ...state, status: "completed", cost_usd: event.cost_usd ?? state.cost_usd, stages };
     case "workflow.failed":
+      // The engine emits no `stage.failed` when a stage exhausts its retries —
+      // `_run_stage` records the error on the state and returns, and `workflow.failed`,
+      // which carries both the stage name and the message, is the only frame that
+      // follows. Without patching it here the row pulsed "working…" under a job that
+      // had already died, and stayed un-expandable (`interactive` is done||failed),
+      // so neither the error text nor "Re-run from here" was ever reachable.
+      patch({ status: "failed", error: event.error ?? "failed" });
       return { ...state, status: "failed", stages };
     case "stream.closed":
       // The terminal frame carries the job's final status, and it is the only
@@ -125,7 +159,7 @@ export function useJobStream(
   initial: Stage[] = [],
   attempt = 0,
 ): JobStream {
-  const [state, dispatch] = useReducer(reduce, {
+  const [state, dispatch] = useReducer(reduceJobStream, {
     stages: initial,
     status: "connecting",
     error: null,

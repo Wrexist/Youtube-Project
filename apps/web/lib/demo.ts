@@ -6,6 +6,7 @@
  *  rewrite of the views.
  */
 
+import { dayKey } from "./schedule";
 import type { Job, Stage } from "./types";
 
 export const DEMO_STAGES: Stage[] = [
@@ -287,7 +288,9 @@ export const PENDING_VIDEOS = [
 ];
 
 /** Quota already consumed per day, mostly by competitor research.
- *  Keyed the same way `dayKey` in lib/schedule.ts keys days. */
+ *  Keyed by calling `dayKey` rather than by rebuilding its format here — the copy
+ *  below drifted from it (unpadded, so `2026-7-5` against the engine's `2026-07-05`)
+ *  and every demo day silently read as zero spent. */
 export const QUOTA_BY_DAY: Record<string, number> = (() => {
   const out: Record<string, number> = {};
   const today = new Date();
@@ -299,7 +302,7 @@ export const QUOTA_BY_DAY: Record<string, number> = (() => {
   spend.forEach((units, i) => {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
-    out[`${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`] = units;
+    out[dayKey(d)] = units;
   });
   return out;
 })();

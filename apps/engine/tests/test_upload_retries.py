@@ -91,18 +91,30 @@ def test_a_308_that_never_advances_gives_up_instead_of_spinning():
 # ── quota is booked when the session opens ──────────────────────────────────
 
 
+#: How the upload books its 1,600 units. `record` first, then `reserve` once the
+#: check and the write had to happen under one lock — the invariant this test is
+#: about survived the rename, so the pattern names both rather than pinning one.
+_BOOKS_THE_UPLOAD = r'ledger\.(record|reserve)\(\s*\n?\s*"videos\.insert"'
+
+
 def test_quota_is_recorded_before_the_first_chunk_not_after_the_last():
-    """The guard: `videos.insert` must not be recorded inside the success branch."""
+    """The guard: `videos.insert` must not be booked inside the success branch.
+
+    Google charges when the resumable session is created, whatever happens to the
+    upload afterwards, so booking on 200 meant every failed upload spent real quota
+    the ledger never saw — and enough of those wave through an upload there is no
+    budget left for.
+    """
     import re
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "engine/providers/youtube.py").read_text()
     upload = source[source.index("async def upload(") :]
 
-    booking = upload.index('ledger.record("videos.insert"')
+    booking = re.search(_BOOKS_THE_UPLOAD, upload)
+    assert booking, "the upload books no quota at all"
     loop = upload.index("while offset < size:")
-    assert booking < loop, "quota must be booked before the upload loop, not on success"
+    assert booking.start() < loop, "quota must be booked before the upload loop, not on success"
 
-    # And nothing re-records it on the way out.
-    after_loop = upload[loop:]
-    assert not re.search(r'ledger\.record\(\s*\n?\s*"videos\.insert"', after_loop)
+    # And nothing re-books it on the way out.
+    assert not re.search(_BOOKS_THE_UPLOAD, upload[loop:])

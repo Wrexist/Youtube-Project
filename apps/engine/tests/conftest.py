@@ -37,6 +37,52 @@ def _stub(name: str, **attrs: object) -> None:
 # credentials.
 
 
+# ── never the developer's database ──────────────────────────────────────────
+#
+# `Settings.database_url` defaults to `sqlite+aiosqlite:///./storage/studio.db`,
+# and `persist` defaults to True. Only CI set `STUDIO_PERSIST=false`, so a plain
+# `pytest` run locally wrote to the real file, and two things went wrong there —
+# both silently:
+#
+#   * Every `POST /v1/jobs` in the endpoint tests saved a row, and the *next* run's
+#     lifespan restored them. That is how `test_publishing_without_a_connected_
+#     channel_is_refused` came to fail with "already published as job pub": a `pub`
+#     job left behind by an earlier run, restored into JOBS, matching the `src` the
+#     test had just built. Six tests failed for reasons that were not in any of them.
+#   * SQLite serialises writers, so each of those writes sat out the 5s busy
+#     timeout. The two endpoint modules took 152s between them.
+#
+# Autouse rather than opt-in: the failure mode is a test that passes while quietly
+# corrupting the one after it, which is exactly what nobody remembers to opt into.
+
+
+@pytest.fixture(autouse=True)
+def scratch_state(tmp_path, monkeypatch):
+    """Persistence off, and pointed at a throwaway file even so.
+
+    Both, not either. `persist=false` skips the writes, but anything calling
+    `db.engine()` directly still resolves a URL — and the default one is the real
+    database. Tests that are *about* persistence (`database`, `fresh_sqlite`)
+    override both afterwards; a fixture set up later is torn down first, so their
+    values win for the test and this one is restored around it.
+    """
+    from engine import db
+    from engine.settings import get_settings
+
+    monkeypatch.setenv("STUDIO_PERSIST", "false")
+    monkeypatch.setenv("STUDIO_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'scratch.db'}")
+    # Both caches are read-through-once: `get_settings` for the URL, `db.engine` for
+    # the connection built from it. Leaving either warm would hand this test the
+    # previous one's database.
+    get_settings.cache_clear()
+    db.engine.cache_clear()
+    db.session_factory.cache_clear()
+
+    yield
+
+    get_settings.cache_clear()
+
+
 # ── a real database ─────────────────────────────────────────────────────────
 #
 # Lives here rather than in test_persistence.py because the quota tests in
@@ -64,8 +110,8 @@ async def database(tmp_path, monkeypatch):
     get_settings.cache_clear()
     await db.dispose()
     monkeypatch.setenv("STUDIO_DATABASE_URL", url)
-    # These tests are *about* persistence, so it has to be on. The suite runs with
-    # STUDIO_PERSIST=false ambiently, which really does skip writes.
+    # These tests are *about* persistence, so it has to be on — overriding the
+    # `scratch_state` fixture above, which turns it off for everything else.
     monkeypatch.setenv("STUDIO_PERSIST", "true")
 
     async with db.engine().begin() as conn:

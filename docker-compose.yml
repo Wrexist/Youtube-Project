@@ -44,6 +44,10 @@ services:
   engine:
     profiles: ["full"]
     build: ./apps/engine
+    # A Redis or Postgres bounce takes the client connection down with it, and
+    # neither process is written to survive that — see the worker below, which is
+    # the one that actually strands work.
+    restart: unless-stopped
     ports: ["127.0.0.1:8080:8080"]
     env_file: [.env]
     environment:
@@ -77,6 +81,13 @@ services:
     profiles: ["full"]
     build: ./apps/engine
     command: ["python", "-m", "arq", "engine.worker.WorkerSettings"]
+    # arq's poll loop talks to Redis whether or not a job is running, so a Redis
+    # restart kills an *idle* worker too — the job-level retry settings in
+    # `engine/worker.py` never get a chance to help, because there is no process
+    # left to retry in. Without this the container exits and the queue silently
+    # loses its only consumer: renders enqueue, nothing dequeues, and the UI shows
+    # jobs sitting at "queued" forever with no error anywhere.
+    restart: unless-stopped
     env_file: [.env]
     environment:
       STUDIO_DATABASE_URL: postgresql+asyncpg://studio:studio@postgres:5432/studio
@@ -91,7 +102,15 @@ services:
 
   web:
     profiles: ["full"]
-    build: ./apps/web
+    # Context is the repo root, not apps/web. The web image is a workspace build:
+    # its first stage copies `package-lock.json`, `apps/web/package.json` and
+    # `packages/contracts/package.json` so npm resolves the same tree CI did, and
+    # none of those paths exist under apps/web. With `build: ./apps/web` the very
+    # first COPY failed and `--profile full` could never bring the web app up.
+    # See the root `.dockerignore` for why the context stays small.
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
     ports: ["127.0.0.1:3000:3000"]
     environment:
       # Resolved by the browser, not inside the network, so it is the host address.

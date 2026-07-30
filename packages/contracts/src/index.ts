@@ -106,6 +106,11 @@ export interface JobEvent {
   error?: string;
   attempt?: number;
   cost_usd?: number;
+  /** Only on `stage.completed`: `summarize(output.value)` — the one line the
+   *  finished row collapses to. */
+  summary?: string;
+  /** Only on `stage.completed`: wall time for the stage, in milliseconds. */
+  elapsed_ms?: number;
   /** Only on `stream.closed`: the job's final status. */
   status?: JobStatus;
 }
