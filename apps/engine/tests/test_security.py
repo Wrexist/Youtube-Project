@@ -782,3 +782,67 @@ async def test_a_restored_channel_must_refresh_before_it_can_publish(database):
     assert restored.refresh_token_encrypted == "ENCRYPTED-REFRESH"
     assert restored.access_token == "", "the plaintext token came back out of the row"
     assert restored.is_fresh is False, "a restored credential must be refreshed before use"
+
+
+# ── which environment variables an API caller may name ──────────────────────
+#
+# `ModelSpec.api_key_env` is operator-supplied and reaches `named_credential`,
+# which reads it out of the process environment. Registering a model with a
+# `base_url` the caller also chooses turns "which variable may be named" into
+# "which secrets can be sent to an arbitrary host", so this predicate is the whole
+# boundary. It had no test until now — which is how the round-3 version of it
+# shipped admitting the app's own provider keys.
+
+
+class TestCredentialEnvNames:
+    def test_a_third_party_gateway_key_may_be_named(self):
+        """The case the field exists for: Groq, OpenRouter, Together, DeepSeek."""
+        from engine.settings import is_credential_env_name
+
+        for name in ("OPENROUTER_API_KEY", "GROQ_API_KEY", "TOGETHER_API_KEY"):
+            assert is_credential_env_name(name), name
+
+    def test_this_apps_own_provider_keys_may_not(self):
+        """The hole the suffix allowlist left open on its own.
+
+        `ANTHROPIC_API_KEY` ends in `_API_KEY` exactly like a gateway's, so the
+        suffix rule admitted it — and `api_key_env: ANTHROPIC_API_KEY` with a
+        perfectly public `base_url` then handed the operator's real key to that
+        endpoint. A spec that wants the provider's own key leaves the field empty;
+        naming one is only ever a way to route it somewhere else.
+        """
+        from engine.settings import is_credential_env_name
+
+        for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "PEXELS_API_KEY"):
+            assert not is_credential_env_name(name), f"{name} is reachable by name"
+
+    def test_secrets_that_are_not_shaped_like_a_provider_key_may_not(self):
+        from engine.settings import is_credential_env_name
+
+        for name in ("STUDIO_SECRET_KEY", "GOOGLE_CLIENT_SECRET", "AWS_SECRET_ACCESS_KEY", "PATH"):
+            assert not is_credential_env_name(name), f"{name} is reachable by name"
+
+    def test_every_declared_setting_is_covered_whatever_its_alias_shape(self):
+        """The deny-list must not fail open on an alias spelling it cannot read.
+
+        Walks `Settings` itself rather than a hardcoded list, so a field added later
+        is covered without anyone remembering this test exists — and asserts the
+        `AliasChoices` case explicitly, because `isinstance(alias, str)` silently
+        skips it and a skipped name becomes a nameable one.
+        """
+        from pydantic import AliasChoices
+
+        from engine.settings import Settings, _alias_spellings, is_credential_env_name
+
+        for field_name, field in Settings.model_fields.items():
+            alias = getattr(field, "validation_alias", None)
+            for spelling in _alias_spellings(alias):
+                assert not is_credential_env_name(spelling), (
+                    f"{field_name} is reachable as {spelling}"
+                )
+
+        assert _alias_spellings(AliasChoices("ANTHROPIC_API_KEY", "CLAUDE_API_KEY")) == {
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_API_KEY",
+        }
+        assert _alias_spellings(None) == set()

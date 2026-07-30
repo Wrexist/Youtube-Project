@@ -159,6 +159,30 @@ _CREDENTIAL_ENV_NAME = re.compile(r"\A[A-Z][A-Z0-9_]{0,63}\Z")
 CREDENTIAL_ENV_SUFFIXES = ("_API_KEY", "_TOKEN")
 
 
+def _alias_spellings(alias: object) -> set[str]:
+    """Every environment-variable name a `validation_alias` can be satisfied by.
+
+    Usually a plain string. But pydantic also accepts `AliasChoices`, which holds
+    several — `AliasChoices("ANTHROPIC_API_KEY", "CLAUDE_API_KEY")` means the field
+    answers to both. Nothing in `Settings` uses that today; the reason this walks
+    the choices anyway is that its caller builds a **deny**-list, so an alias shape
+    it does not understand fails *open*: the unrecognised spelling silently becomes
+    nameable, and naming a key is the whole exfiltration route. A deny-list that
+    quietly stops covering a new field is exactly the shape of the hole the
+    suffix allowlist already had once.
+
+    `AliasPath` is deliberately not walked — it addresses a position inside a
+    structured payload, not an environment variable, so it has no env spelling to
+    deny.
+    """
+    if isinstance(alias, str):
+        return {alias.upper()}
+    choices = getattr(alias, "choices", None)
+    if choices is None:
+        return set()
+    return {choice.upper() for choice in choices if isinstance(choice, str)}
+
+
 @lru_cache(maxsize=1)
 def _own_credential_names() -> frozenset[str]:
     """Every environment variable name this process reads into `Settings`.
@@ -169,9 +193,7 @@ def _own_credential_names() -> frozenset[str]:
     prefix = str(Settings.model_config.get("env_prefix") or "")
     names = set()
     for field_name, field in Settings.model_fields.items():
-        alias = getattr(field, "validation_alias", None)
-        if isinstance(alias, str):
-            names.add(alias.upper())
+        names |= _alias_spellings(getattr(field, "validation_alias", None))
         names.add(f"{prefix}{field_name}".upper())
     return frozenset(names)
 
