@@ -21,13 +21,15 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from engine import automation, db, models, repository, worker
+from engine import automation, db, feedback, models, repository, worker
 from engine.api import publishing as channels
 from engine.api.channels import router as channels_router
+from engine.api.insights import RECORDS
 from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
 from engine.api.setup import router as setup_router
+from engine.insights import analyze
 from engine.providers import youtube
 from engine.quota import QuotaExceeded, ledger
 from engine.settings import get_settings
@@ -231,10 +233,24 @@ async def create_job(body: JobRequest) -> dict:
 
     job_id = uuid.uuid4().hex[:12]
     wake = asyncio.Event()
+    inputs = body.model_dump()
+    # Feed confirmed channel learnings into every new generation automatically.
+    # The Create screen should not need a hidden toggle for the core promise of the
+    # product: each researched, published and measured video improves the next one.
+    try:
+        report = analyze(list(RECORDS.values()))
+        inputs["insight_guidance"] = {
+            "hook": feedback.guidance_for(report, "hook"),
+            "titles": feedback.guidance_for(report, "titles"),
+            "thumbnail": feedback.guidance_for(report, "thumbnail"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not attach insight guidance to {}: {}", job_id, exc)
+
     JOBS[job_id] = {
         "id": job_id,
         "workflow": wf,
-        "inputs": body.model_dump(),
+        "inputs": inputs,
         "states": wf.initial_states(),
         "wake": wake,
         "events": [],

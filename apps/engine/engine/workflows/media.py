@@ -339,6 +339,7 @@ class ThumbnailStage(Stage[list]):
         titles = ctx.get("titles")
         script = ctx.try_get("revision") or ctx.get("draft")
         model = llm.for_task("thumbnail")
+        learned = ctx.inputs.get("insight_guidance", {}).get("thumbnail", "")
 
         concepts, completion = await model.json(
             f"""{self._brief(titles, script)}
@@ -363,7 +364,7 @@ Pick a different template for each of the 3 concepts:
 
 Accent colours available: {", ".join(templates.ACCENTS)}. Pick one per concept that
 will contrast with its own image, not one that blends into it.
-
+{learned}
 Return: {{"concepts": [{{"template": str, "image_prompt": str, "overlay_text": str,
                         "accent": str, "focal_point": str, "rationale": str}}]}}""",
             max_tokens=2000,
