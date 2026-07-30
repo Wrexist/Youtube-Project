@@ -111,7 +111,9 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
           <h2 className="pb-1 text-[13px] font-semibold text-[var(--color-muted)]">
             {group}
           </h2>
-          <p className="pb-3 text-[12px] text-[var(--color-faint)]">{GROUP_NOTE[group]}</p>
+          <p className="pb-3 text-[12px] text-[var(--color-faint)]">
+            {GROUP_NOTE[group]}
+          </p>
           <div className="grid gap-2.5">
             {credentials.map((c) => (
               <Field
@@ -125,7 +127,14 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
           </div>
 
           {group === "Publishing" && (
-            <YouTubeConnection setup={setup} pending={pending} onConnect={connect} />
+            <>
+              <GoogleCloudSteps />
+              <YouTubeConnection
+                setup={setup}
+                pending={pending}
+                onConnect={connect}
+              />
+            </>
           )}
         </section>
       ))}
@@ -137,7 +146,10 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
           <Button onClick={save} disabled={!dirty || pending}>
             {pending ? "Saving…" : "Save"}
           </Button>
-          <p aria-live="polite" className="text-[12px] text-[var(--color-muted)]">
+          <p
+            aria-live="polite"
+            className="text-[12px] text-[var(--color-muted)]"
+          >
             {saved
               ? "Saved. They take effect immediately."
               : dirty
@@ -157,9 +169,9 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
 
       <p className="mt-6 text-[12px] leading-relaxed text-[var(--color-faint)]">
         Written to <span className="mono">{setup.env_path}</span>, which is
-        gitignored and readable only by you. Keys are never sent anywhere but this
-        machine, and this screen cannot read one back — it only ever shows the last
-        four characters.{" "}
+        gitignored and readable only by you. Keys are never sent anywhere but
+        this machine, and this screen cannot read one back — it only ever shows
+        the last four characters.{" "}
         <Link
           href="/welcome"
           className="underline decoration-[var(--color-line-hover)] underline-offset-4 hover:text-[var(--color-muted)]"
@@ -173,14 +185,22 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
 }
 
 const GROUP_NOTE: Record<string, string> = {
-  Required: "Without these, nothing renders. Both are free and take under five minutes.",
-  Recommended: "Each one makes the output better. None of them is needed to start.",
+  Required:
+    "Without these, nothing renders. Both are free and take under five minutes.",
+  Recommended:
+    "Each one makes the output better. None of them is needed to start.",
   Publishing:
     "Only needed to upload to YouTube. Everything else works without it — you download the file instead.",
 };
 
 /** The headline: can this install do the thing, and if not, what is missing. */
-function Status({ setup, justConnected }: { setup: SetupStatus; justConnected: boolean }) {
+function Status({
+  setup,
+  justConnected,
+}: {
+  setup: SetupStatus;
+  justConnected: boolean;
+}) {
   if (justConnected && setup.can_publish) {
     return (
       <Card className="mb-6 border-[var(--color-ok)]/40 p-5">
@@ -188,8 +208,8 @@ function Status({ setup, justConnected }: { setup: SetupStatus; justConnected: b
           YouTube connected
         </h2>
         <p className="mt-1.5 text-[13px] text-[var(--color-muted)]">
-          {setup.channels.join(", ")} — publishing is available from the approval
-          gate on any finished video.
+          {setup.channels.join(", ")} — publishing is available from the
+          approval gate on any finished video.
         </p>
       </Card>
     );
@@ -212,7 +232,9 @@ function Status({ setup, justConnected }: { setup: SetupStatus; justConnected: b
 
   // Counted, not hardcoded. "Two keys away" stayed on screen after one of the two
   // had been saved, which reads as a save that did not take.
-  const outstanding = setup.credentials.filter((c) => c.required && !c.configured);
+  const outstanding = setup.credentials.filter(
+    (c) => c.required && !c.configured,
+  );
   const one = outstanding.length === 1;
 
   return (
@@ -226,7 +248,8 @@ function Status({ setup, justConnected }: { setup: SetupStatus; justConnected: b
         {one
           ? outstanding[0].unlocks
           : "A model writes the script and a stock-footage provider sources what it is cut against."}{" "}
-        Free, and below. Nothing else on this page is needed to generate a video.
+        Free, and below. Nothing else on this page is needed to generate a
+        video.
       </p>
     </Card>
   );
@@ -251,13 +274,17 @@ function Field({
           {credential.label}
         </label>
         {credential.configured ? (
-          <span className="text-[11px] font-semibold text-[var(--color-ok)]">Set</span>
+          <span className="text-[11px] font-semibold text-[var(--color-ok)]">
+            Set
+          </span>
         ) : credential.required ? (
           <span className="text-[11px] font-semibold text-[var(--color-warn)]">
             Required
           </span>
         ) : (
-          <span className="text-[11px] text-[var(--color-faint)]">Optional</span>
+          <span className="text-[11px] text-[var(--color-faint)]">
+            Optional
+          </span>
         )}
         <span className="mono ml-auto text-[11px] text-[var(--color-faint)]">
           {credential.env}
@@ -267,7 +294,9 @@ function Field({
       <p className="mt-1.5 max-w-[70ch] text-[12px] leading-relaxed text-[var(--color-muted)]">
         {credential.unlocks}{" "}
         {!credential.configured && (
-          <span className="text-[var(--color-faint)]">{credential.without_it}</span>
+          <span className="text-[var(--color-faint)]">
+            {credential.without_it}
+          </span>
         )}
       </p>
 
@@ -295,9 +324,145 @@ function Field({
         >
           Get one
         </a>
-        <span className="text-[11px] text-[var(--color-faint)]">{credential.effort}</span>
+        <span className="text-[11px] text-[var(--color-faint)]">
+          {credential.effort}
+        </span>
       </div>
     </Card>
+  );
+}
+
+/**
+ * Where the two Google values come from, in the order you click them.
+ *
+ * Collapsed, because it is five steps of someone else's console and it is dead
+ * weight to anyone already connected. But *present*, and on this screen rather
+ * than only in the guided flow — skipping the welcome screen once should not be
+ * the thing that permanently hides the instructions. That was the report: "I
+ * skipped the link to Google Cloud APIs and now I can't go back."
+ *
+ * Every link goes straight to the page the step is about, so nobody has to find
+ * "APIs & Services" in a console they have never seen.
+ */
+function GoogleCloudSteps() {
+  const steps = [
+    {
+      body: "Create a Google Cloud project. Any name; nothing is billed.",
+      href: "https://console.cloud.google.com/projectcreate",
+      link: "New project",
+    },
+    {
+      body: "Enable YouTube Data API v3 — this is the one that uploads.",
+      href: "https://console.cloud.google.com/apis/library/youtube.googleapis.com",
+      link: "Enable Data API",
+    },
+    {
+      body: "Enable YouTube Analytics API — this is the one that measures.",
+      href: "https://console.cloud.google.com/apis/library/youtubeanalytics.googleapis.com",
+      link: "Enable Analytics API",
+    },
+    {
+      body:
+        "OAuth consent screen: pick External, fill in a name and your email, " +
+        "then add your own Google account under Test users. No verification is " +
+        "needed while you are the only user.",
+      href: "https://console.cloud.google.com/apis/credentials/consent",
+      link: "Consent screen",
+    },
+    {
+      body:
+        "Create Credentials → OAuth client ID → Web application, and add the " +
+        "redirect URI below. Google then shows the client ID and secret: paste " +
+        "them into the two fields above and press Save.",
+      href: "https://console.cloud.google.com/apis/credentials/oauthclient",
+      link: "Create client",
+    },
+  ];
+
+  return (
+    <details className="group mt-2.5">
+      <summary className="cursor-pointer list-none text-[13px] font-semibold text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+        Where these two values come from
+        <span className="ml-2 text-[11px] font-normal text-[var(--color-faint)] group-open:hidden">
+          5 steps, about ten minutes, once
+        </span>
+      </summary>
+
+      <Card className="mt-3 p-5">
+        <p className="max-w-[70ch] text-[12px] leading-relaxed text-[var(--color-muted)]">
+          These are not a second login. They identify your copy of Studio to
+          Google, and they have to be yours because the API&apos;s 10,000 units
+          a day — about six uploads — are counted per Google Cloud project. A
+          key shipped with Studio would mean sharing those six with everyone who
+          installed it.
+        </p>
+
+        <ol className="mt-4 grid gap-3">
+          {steps.map((step, index) => (
+            <li key={step.href} className="flex gap-3">
+              <span className="mono mt-px text-[11px] text-[var(--color-faint)]">
+                {index + 1}
+              </span>
+              <p className="max-w-[64ch] text-[12px] leading-relaxed text-[var(--color-muted)]">
+                {step.body}{" "}
+                <a
+                  href={step.href}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="whitespace-nowrap text-[var(--color-ink)] underline decoration-[var(--color-line-hover)] underline-offset-4"
+                >
+                  {step.link}
+                </a>
+              </p>
+            </li>
+          ))}
+        </ol>
+
+        <div className="mt-4 border-t border-[var(--color-line)] pt-4">
+          <p className="text-[12px] text-[var(--color-muted)]">
+            The redirect URI for step 5 — it must match character for character,
+            or Google answers{" "}
+            <span className="mono">redirect_uri_mismatch</span>:
+          </p>
+          <CopyLine value="http://localhost:8080/v1/auth/google/callback" />
+          <p className="mt-3 max-w-[70ch] text-[12px] leading-relaxed text-[var(--color-faint)]">
+            On the &ldquo;Google hasn&apos;t verified this app&rdquo; screen,
+            choose Advanced, then continue. That is what your own unverified
+            test app looks like, and it is expected.
+          </p>
+        </div>
+      </Card>
+    </details>
+  );
+}
+
+/** A value whose whole purpose is to be pasted somewhere else, so it copies. */
+function CopyLine({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-3">
+      <code className="mono flex-1 rounded-[var(--radius-btn)] border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 text-[12px] break-all">
+        {value}
+      </code>
+      <Button
+        variant="ghost"
+        onClick={() => {
+          // Best-effort: the clipboard API needs a secure context, and http on a
+          // hostname other than localhost is not one. The value is on screen and
+          // selectable either way, so a failure changes nothing but the label.
+          navigator.clipboard?.writeText(value).then(
+            () => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            },
+            () => undefined,
+          );
+        }}
+      >
+        {copied ? "Copied" : "Copy"}
+      </Button>
+    </div>
   );
 }
 

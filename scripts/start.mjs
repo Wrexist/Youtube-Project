@@ -510,8 +510,22 @@ if (OPEN) {
   const deadline = 90_000; // Cold `next dev` on a slow disk is genuinely slow.
   const started = Date.now();
 
+  // Two guards, and both are load-bearing, because the callback is `async` while
+  // `setInterval` is not: the timer keeps firing during an `await`, so ticks
+  // overlap. A probe waits up to 2s and the interval is 700ms, and the very first
+  // request to a cold `next dev` is the slow one — it compiles the page — so three
+  // or four ticks would be in flight together, all resolve within a moment of each
+  // other, and each open a window. `clearInterval` cannot fix that: by the time
+  // the first tick resumes after its `await`, the others are already past it.
+  //
+  // `probing` stops the pile-up; `opened` makes opening happen once even if one
+  // forms anyway. Observed as Studio opening three times from one double-click.
+  let probing = false;
+  let opened = false;
+
   const poll = setInterval(async () => {
     if (shuttingDown) return clearInterval(poll);
+    if (probing || opened) return;
 
     if (Date.now() - started > deadline) {
       clearInterval(poll);
@@ -523,7 +537,16 @@ if (OPEN) {
     // Any answer means the server is listening — a 404, a 500 or the 307 to
     // /welcome are all something a browser can usefully show, and all beat
     // waiting longer. 0 means it did not answer; the interval is the retry.
-    if ((await probe(WEB_PORT)) > 0) {
+    probing = true;
+    let status = 0;
+    try {
+      status = await probe(WEB_PORT);
+    } finally {
+      probing = false;
+    }
+
+    if (status > 0 && !opened) {
+      opened = true;
       clearInterval(poll);
       console.log(`\n  Opening ${url}\n`);
       showStudio(url);
