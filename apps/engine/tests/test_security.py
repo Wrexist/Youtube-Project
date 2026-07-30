@@ -385,6 +385,41 @@ def test_a_replayed_callback_is_refused_the_second_time(callback):
     assert exchanges == ["4/real-code"], "the replay was exchanged a second time"
 
 
+def test_googles_refusal_lands_on_setup_rather_than_an_api_error(callback):
+    """`error=access_denied` is a redirect back to the screen with the button on it.
+
+    The name is a lie in the commonest case — it means the Cloud project is still in
+    Testing and the signed-in account is not one of its test users — so the fix has
+    to be shown next to Connect YouTube, not rendered as a bare API error on an
+    otherwise blank page. Observed in the wild twice before this existed.
+    """
+    client, exchanges = callback
+    response = client.get(
+        "/v1/auth/google/callback",
+        params={"error": "access_denied"},
+        follow_redirects=False,
+    )
+    assert response.status_code in (302, 307), response.text
+    assert "/setup?connect_error=access_denied" in response.headers["location"]
+    assert exchanges == [], "a refusal must not reach the token exchange"
+
+
+def test_the_callback_opened_by_hand_explains_itself(callback):
+    """No code, no state: someone followed the redirect URI to see what was there.
+
+    FastAPI's own answer is a validation dump about missing query parameters, which
+    reads like a bug in Studio rather than a page that was never a page.
+    """
+    client, exchanges = callback
+    response = client.get("/v1/auth/google/callback", follow_redirects=False)
+
+    assert response.status_code == 400
+    assert "not a page" in response.text
+    assert "/setup" in response.text
+    assert "detail" not in response.text, "still the raw validation body"
+    assert exchanges == []
+
+
 def test_the_channel_list_carries_no_tokens(callback):
     """Deliberate and permanent, per the comment on the endpoint — so pinned.
 

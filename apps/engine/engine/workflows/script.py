@@ -81,8 +81,15 @@ class ResearchStage(Stage[dict]):
         if not findings["sources"]:
             # A script with no sources is exactly the "inauthentic content" YouTube
             # demonetises. Failing here is the correct behaviour, not a nuisance.
+            #
+            # But the message has to name the cause. On its own, "no usable sources
+            # found" reads as a judgement on the topic, and the operator rewrites a
+            # perfectly researchable one while the actual answer is that a scraped
+            # search endpoint refused the request or changed its markup.
+            problem = findings.get("problem") or "no reason reported"
             raise RuntimeError(
-                "no usable sources found — refusing to generate an ungrounded script"
+                f"no usable sources found — refusing to generate an ungrounded "
+                f"script. Search: {problem}"
             )
 
         await ctx.progress("extracting facts", 0.6)

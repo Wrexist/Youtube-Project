@@ -33,6 +33,10 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
   // Google sends the operator back here after consent. Without something saying
   // so, a successful connection looked identical to a cancelled one.
   const justConnected = params.get("connected") === "1";
+  // Google's refusal, handed here by the engine's callback rather than rendered as
+  // an API error on a blank page. See `ConnectError` for why `access_denied` gets
+  // a paragraph of its own.
+  const connectError = params.get("connect_error");
 
   const groups = useMemo(() => {
     const out: Record<string, CredentialStatus[]> = {};
@@ -105,6 +109,8 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
           <p className="text-[13px] text-[var(--color-bad)]">{error}</p>
         </div>
       )}
+
+      {connectError && <ConnectError code={connectError} />}
 
       {Object.entries(groups).map(([group, credentials]) => (
         <section key={group} className="mb-8">
@@ -192,6 +198,68 @@ const GROUP_NOTE: Record<string, string> = {
   Publishing:
     "Only needed to upload to YouTube. Everything else works without it — you download the file instead.",
 };
+
+/**
+ * Google refused the connection, and what to do about it.
+ *
+ * `access_denied` is worth this much space because its name is a lie in the
+ * commonest case: it is not "you clicked cancel", it is "this Cloud project is
+ * still in Testing and the account that just signed in is not on its test-user
+ * list". Google's own page says so in a paragraph that reads like a dead end, and
+ * the fix is one button on a console page most people have never opened.
+ */
+function ConnectError({ code }: { code: string }) {
+  const denied = code === "access_denied";
+
+  return (
+    <div
+      role="alert"
+      className="mb-6 rounded-[var(--radius-card)] border border-[var(--color-warn)]/40 bg-[var(--color-surface)] p-5"
+    >
+      <p className="text-[14px] font-semibold text-[var(--color-warn)]">
+        Google did not complete the connection
+        <span className="mono ml-2 text-[11px] font-normal text-[var(--color-faint)]">
+          {code}
+        </span>
+      </p>
+
+      {denied ? (
+        <>
+          <p className="mt-2 max-w-[70ch] text-[13px] leading-relaxed text-[var(--color-muted)]">
+            Despite the name, this is almost never someone pressing cancel. It
+            means the Google Cloud project is still in <em>Testing</em>, and the
+            account you signed in with is not one of its test users.
+          </p>
+          <p className="mt-3 max-w-[70ch] text-[13px] leading-relaxed text-[var(--color-muted)]">
+            Fix it on the{" "}
+            <a
+              href="https://console.cloud.google.com/auth/audience"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="text-[var(--color-ink)] underline decoration-[var(--color-line-hover)] underline-offset-4"
+            >
+              Audience page
+            </a>{" "}
+            — check the project name at the top is the one your client ID came
+            from, then either press <strong>Publish app</strong> (recommended:
+            it drops the test-user list entirely, and stops Testing mode
+            expiring your refresh token every seven days) or add the exact
+            address you signed in with under <strong>Test users</strong>. Then
+            press Connect YouTube again.
+          </p>
+        </>
+      ) : (
+        <p className="mt-2 max-w-[70ch] text-[13px] leading-relaxed text-[var(--color-muted)]">
+          That is Google&apos;s own error code, returned instead of an
+          authorisation. Nothing was changed here. If it is{" "}
+          <span className="mono">redirect_uri_mismatch</span>, the URI
+          registered on the OAuth client does not match the one below, character
+          for character.
+        </p>
+      )}
+    </div>
+  );
+}
 
 /** The headline: can this install do the thing, and if not, what is missing. */
 function Status({

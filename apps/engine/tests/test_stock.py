@@ -8,6 +8,8 @@ portrait render and crops the subject out of frame.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -283,3 +285,76 @@ async def test_an_empty_clip_list_makes_no_client(monkeypatch):
 
     monkeypatch.setattr(stock.httpx, "AsyncClient", explode)
     await stock.download_all([])
+
+
+# ── broadening a query that returned nothing ────────────────────────────────
+
+
+def test_a_shot_list_phrase_is_reduced_to_what_a_library_indexes_on():
+    """Beat visual directions are written for a human, not for a tag search."""
+    from engine.services import stock
+
+    assert (
+        stock._shorten("wide aerial shot of a bustling city skyline at dusk, neon reflections")
+        == "aerial bustling city"
+    )
+    assert stock._shorten("close up shot of hands") == "hands"
+
+
+def test_the_query_ladder_is_ordered_and_deduplicated():
+    from engine.services import stock
+
+    ladder = stock._queries("wide shot of a rocket launching at night", "spaceflight")
+    assert ladder[0] == "wide shot of a rocket launching at night"
+    assert ladder[1] == "rocket launching night"
+    assert ladder[2] == "spaceflight"
+
+    # No duplicates when shortening changes nothing, and no empty fallback entry.
+    assert stock._queries("rocket launching night", "") == ["rocket launching night"]
+
+
+@pytest.mark.asyncio
+async def test_a_beat_with_no_footage_retries_broader_before_giving_up(monkeypatch):
+    """The failure this prevents is a hole in the timeline, or worse, a dead render.
+
+    Previously one pass, one query: an LLM's shot-list phrasing returned nothing and
+    the beat simply had no footage — and if every beat did that, the render failed
+    with "no footage found for any beat" on a working API key.
+    """
+    from engine.services import stock
+
+    monkeypatch.setattr(
+        stock, "get_settings", lambda: SimpleNamespace(pexels_api_key="k", pixabay_api_key="")
+    )
+
+    asked: list[str] = []
+
+    async def fake_pexels(client, query, aspect, limit):
+        asked.append(query)
+        if query != "rocket launching night":
+            return []
+        return [
+            {
+                "id": "1",
+                "url": "https://x/1.mp4",
+                "duration": 9.0,
+                "query": query,
+                "provider": "pexels",
+            }
+        ]
+
+    monkeypatch.setattr(stock, "_search_pexels", fake_pexels)
+
+    clips = await stock.search(
+        "wide shot of a rocket launching at night",
+        aspect="16:9",
+        count=1,
+        exclude=set(),
+        fallback="spaceflight",
+    )
+
+    assert [c["id"] for c in clips] == ["1"]
+    assert asked == [
+        "wide shot of a rocket launching at night",
+        "rocket launching night",
+    ], "it should stop as soon as a broader query works, and never reach the fallback"

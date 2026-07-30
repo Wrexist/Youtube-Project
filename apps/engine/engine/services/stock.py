@@ -23,6 +23,7 @@ Three deliberate differences from upstream:
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,52 @@ def _matches_orientation(width: int, height: int, aspect: str) -> bool:
     return ratio >= 0.95
 
 
+def _shorten(query: str) -> str:
+    """A stock-library query, out of a sentence written for a human.
+
+    Beat visual directions come from an LLM and read like a shot list - "wide aerial
+    shot of a bustling city skyline at dusk, neon reflections in wet asphalt". Stock
+    APIs match that against tags and return nothing at all, so the beat silently got
+    no footage and a whole render could reach "no footage found for any beat" with a
+    working API key. Three content words is what these libraries actually index on.
+    """
+    words = [
+        w for w in re.findall(r"[a-zA-Z']+", query) if len(w) > 3 and w.lower() not in _STOPWORDS
+    ]
+    return " ".join(words[:3])
+
+
+#: Shot-language and filler that no stock library indexes on.
+_STOPWORDS = frozenset(
+    {
+        "shot",
+        "shots",
+        "wide",
+        "close",
+        "closeup",
+        "angle",
+        "view",
+        "footage",
+        "scene",
+        "camera",
+        "showing",
+        "with",
+        "over",
+        "from",
+        "into",
+        "that",
+        "this",
+        "their",
+        "there",
+        "while",
+        "very",
+        "some",
+        "then",
+        "than",
+    }
+)
+
+
 async def search(
     query: str,
     *,
@@ -75,11 +122,16 @@ async def search(
     count: int,
     exclude: set[str],
     client: httpx.AsyncClient | None = None,
+    fallback: str = "",
 ) -> list[dict]:
     """Find up to `count` clips for `query`, skipping ids in `exclude`.
 
     Returns `{id, url, duration, query, provider}` dicts. Never raises: a failed
     search for one beat should cost that beat its footage, not the whole render.
+
+    Tries progressively broader queries rather than accepting nothing: the phrase as
+    written, then its three strongest content words, then `fallback` (the video's
+    topic). Generic footage on a beat is worth having; a gap in the timeline is not.
     """
     settings = get_settings()
     seen = set(exclude)
@@ -97,28 +149,46 @@ async def search(
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=30.0)
     try:
-        for name, fn in providers:
-            if len(results) >= count:
-                break
-            try:
-                found = await fn(client, query, aspect, (count - len(results)) * _OVERSAMPLE)
-            except Exception as exc:  # noqa: BLE001 — one provider must not sink the beat
-                logger.warning("{} search failed for {!r}: {}", name, query, exc)
-                continue
-            for clip in found:
-                if clip["id"] in seen:
-                    continue
-                seen.add(clip["id"])
-                results.append(clip)
+        # Each attempt is a whole pass over the providers, and the first one to
+        # return anything wins. Inside the `try`, not after it: the retry needs the
+        # client, and `finally` has closed it by then when this call owns it.
+        for attempt in _queries(query, fallback):
+            for name, fn in providers:
                 if len(results) >= count:
                     break
+                try:
+                    wanted = (count - len(results)) * _OVERSAMPLE
+                    found = await fn(client, attempt, aspect, wanted)
+                except Exception as exc:  # noqa: BLE001 — one provider must not sink the beat
+                    logger.warning("{} search failed for {!r}: {}", name, attempt, exc)
+                    continue
+                for clip in found:
+                    if clip["id"] in seen:
+                        continue
+                    seen.add(clip["id"])
+                    results.append(clip)
+                    if len(results) >= count:
+                        break
+            if results:
+                if attempt != query:
+                    logger.info("beat footage found on the broader query {!r}", attempt)
+                break
+            logger.warning("no footage for {!r} across {} provider(s)", attempt, len(providers))
     finally:
         if owns_client:
             await client.aclose()
 
-    if not results:
-        logger.warning("no footage found for {!r} across {} provider(s)", query, len(providers))
     return results
+
+
+def _queries(query: str, fallback: str) -> list[str]:
+    """The phrase as written, then broader, then broadest — de-duplicated."""
+    out: list[str] = []
+    for candidate in (query, _shorten(query), fallback):
+        cleaned = candidate.strip()
+        if cleaned and cleaned.lower() not in {q.lower() for q in out}:
+            out.append(cleaned)
+    return out
 
 
 async def _search_pexels(

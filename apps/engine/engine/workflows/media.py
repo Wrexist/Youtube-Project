@@ -143,6 +143,10 @@ class MaterialsStage(Stage[Materials]):
                     count=needed,
                     exclude=seen_ids,
                     client=client,
+                    # The broadest query worth trying before giving the beat no
+                    # footage at all. A gap in the timeline is worse than generic
+                    # footage of the right subject.
+                    fallback=ctx.inputs.get("topic", ""),
                 )
                 for clip in clips:
                     clip["beat_index"] = index
