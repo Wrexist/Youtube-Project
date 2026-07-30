@@ -28,12 +28,60 @@ def test_critical_tasks_default_to_the_strongest_model():
     """Hook, draft, critique and titles decide whether a video works."""
     for task, meta in TASKS.items():
         if meta["quality"] == "critical":
-            assert DEFAULT_ROUTES[task] == "anthropic:claude-opus-4-8", task
+            assert DEFAULT_ROUTES[task] == "anthropic:claude-opus-5", task
 
 
 def test_mechanical_tasks_default_to_a_cheap_model():
     assert "haiku" in DEFAULT_ROUTES["tags"]
     assert "haiku" in DEFAULT_ROUTES["chapters"]
+
+
+def test_the_previous_default_is_still_in_the_catalogue():
+    """Routes naming it are saved on people's machines already.
+
+    Dropping a catalogue entry does not raise anything — `spec_for` falls back — so a
+    stage someone deliberately pinned would quietly move to a different model.
+    """
+    assert "anthropic:claude-opus-4-8" in CATALOGUE
+
+
+def test_temperature_is_withheld_from_the_models_that_reject_it():
+    """The routing table's half of a live 400.
+
+    Opus 4.7 and up and Fable 5 removed the sampling parameters; sending
+    `temperature` is a 400 on every call, which is what the default route for every
+    critical task was doing.
+    """
+    for key in ("anthropic:claude-opus-5", "anthropic:claude-opus-4-8", "anthropic:claude-fable-5"):
+        assert CATALOGUE[key].temperature_policy == "none", key
+        assert CATALOGUE[key].thinks_by_default, key
+
+    assert CATALOGUE["anthropic:claude-sonnet-5"].temperature_policy == "default-only"
+    assert CATALOGUE["anthropic:claude-sonnet-5"].thinks_by_default
+
+    haiku = CATALOGUE["anthropic:claude-haiku-4-5-20251001"]
+    assert haiku.temperature_policy == "any"
+    assert not haiku.thinks_by_default
+
+    assert local().temperature_policy == "any"
+    assert not local().thinks_by_default
+
+
+def test_a_persisted_route_to_a_no_sampling_model_is_fixed_by_upgrading():
+    """The capability is derived, not stored — old `routing.json` files predate it."""
+    restored = Routing.from_dict(
+        {
+            "routes": {"draft": "anthropic:claude-opus-4-8"},
+            "catalogue": {
+                "anthropic:claude-opus-4-8": {
+                    "provider": "anthropic",
+                    "model": "claude-opus-4-8",
+                    "label": "Claude Opus 4.8",
+                }
+            },
+        }
+    )
+    assert restored.spec_for("draft").temperature_policy == "none"
 
 
 def test_routing_a_single_task_leaves_the_rest_alone():

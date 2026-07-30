@@ -200,6 +200,6 @@ Phases 0→2 give a working system fast. Then **4 (SEO) and 5 (thumbnails) befor
 ## Immediate next steps
 
 1. Confirm the phase order and cut anything you don't want.
-2. Decide which LLM provider is primary (Claude via `claude-opus-4-8` recommended for the script/SEO chains; a cheap fast model for bulk work).
+2. Decide which LLM provider is primary (Claude via `claude-opus-5` recommended for the script/SEO chains; a cheap fast model for bulk work).
 3. Get Google Cloud project + YouTube Data API credentials started — approval can take days, so it should be in flight before Phase 7.
 4. Begin Phase 0.

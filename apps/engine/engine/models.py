@@ -31,6 +31,18 @@ from loguru import logger
 
 Provider = Literal["anthropic", "openai", "gemini", "ollama", "openai_compatible"]
 
+#: Anthropic models that removed the sampling parameters. Sending `temperature` to
+#: one of these is a 400 on every call, not a value the provider quietly ignores.
+_NO_SAMPLING = ("claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7")
+
+#: Models that keep `temperature` but reject any value other than the default.
+_DEFAULT_SAMPLING_ONLY = ("claude-sonnet-5",)
+
+#: Models that reason before answering unless told otherwise. On these `max_tokens`
+#: is the ceiling for thinking *and* answer together, which is why `providers/llm.py`
+#: adds head-room rather than handing the caller's number straight to the API.
+_THINKS_BY_DEFAULT = _NO_SAMPLING + _DEFAULT_SAMPLING_ONLY
+
 # Every routable task, with what it actually demands. `quality` is the honest
 # guidance shown next to the picker — some of these genuinely do not need a big model.
 TASKS: dict[str, dict] = {
@@ -92,6 +104,32 @@ class ModelSpec:
         return self.provider == "ollama"
 
     @property
+    def temperature_policy(self) -> str:
+        """What this model will accept for `temperature`: any value, the default, or none.
+
+        The frontier Anthropic models dropped the sampling parameters, and dropped
+        them loudly: `temperature` comes back as a 400 rather than being ignored, so
+        a route to one of them fails on its first call. Sonnet 5 is in between — the
+        field is still accepted, but only at its default.
+
+        Derived from the model id rather than stored as a field, so a `routing.json`
+        written before this existed is fixed by upgrading rather than by re-saving it.
+        Persisted catalogues are exactly where the stale entries live.
+        """
+        if self.provider != "anthropic":
+            return "any"
+        if self.model.startswith(_NO_SAMPLING):
+            return "none"
+        if self.model.startswith(_DEFAULT_SAMPLING_ONLY):
+            return "default-only"
+        return "any"
+
+    @property
+    def thinks_by_default(self) -> bool:
+        """Whether this model reasons before answering with no prompting to do so."""
+        return self.provider == "anthropic" and self.model.startswith(_THINKS_BY_DEFAULT)
+
+    @property
     def is_free(self) -> bool:
         return self.input_per_m == 0.0 and self.output_per_m == 0.0
 
@@ -107,11 +145,24 @@ class ModelSpec:
 CATALOGUE: dict[str, ModelSpec] = {
     spec.key(): spec
     for spec in [
+        # Anthropic, best first. The three defaults are Opus 5 / Sonnet 5 / Haiku 4.5;
+        # the other two are here because someone will want them, not because the
+        # pipeline needs them.
         ModelSpec(
-            "anthropic", "claude-opus-4-8", "Claude Opus 4.8", input_per_m=5, output_per_m=25
+            "anthropic",
+            "claude-opus-5",
+            "Claude Opus 5",
+            input_per_m=5,
+            output_per_m=25,
+            context=1_000_000,
         ),
         ModelSpec(
-            "anthropic", "claude-sonnet-5", "Claude Sonnet 5", input_per_m=3, output_per_m=15
+            "anthropic",
+            "claude-sonnet-5",
+            "Claude Sonnet 5",
+            input_per_m=3,
+            output_per_m=15,
+            context=1_000_000,
         ),
         ModelSpec(
             "anthropic",
@@ -119,6 +170,27 @@ CATALOGUE: dict[str, ModelSpec] = {
             "Claude Haiku 4.5",
             input_per_m=1,
             output_per_m=5,
+            context=200_000,
+        ),
+        # Twice the price of Opus 5 for the hardest reasoning there is. Not a default:
+        # a script pipeline is not where that money buys the most.
+        ModelSpec(
+            "anthropic",
+            "claude-fable-5",
+            "Claude Fable 5",
+            input_per_m=10,
+            output_per_m=50,
+            context=1_000_000,
+        ),
+        # The previous default. Kept because routes that name it are already saved on
+        # people's machines, and a missing catalogue entry silently re-routes a stage.
+        ModelSpec(
+            "anthropic",
+            "claude-opus-4-8",
+            "Claude Opus 4.8",
+            input_per_m=5,
+            output_per_m=25,
+            context=1_000_000,
         ),
         ModelSpec("openai", "gpt-4o", "GPT-4o", input_per_m=2.5, output_per_m=10),
         ModelSpec("openai", "gpt-4o-mini", "GPT-4o mini", input_per_m=0.15, output_per_m=0.6),
@@ -135,11 +207,24 @@ CATALOGUE: dict[str, ModelSpec] = {
     ]
 }
 
-# Sensible defaults: the best model on the three tasks that decide whether a video
-# works, a cheap one on the mechanical tasks.
+# Sensible defaults: the best model on the tasks that decide whether a video works,
+# a cheap one on the mechanical tasks.
+#
+# The picks, and why they are these and not the tier above or below:
+#
+#   * **critical → Opus 5.** Hook, draft, critique and titles are the whole product.
+#     Opus 5 reasons before answering by default, which is exactly what a critique
+#     pass is, and it is the strongest model at Opus pricing. Fable 5 is stronger
+#     still and twice the price; on a 2,000-word script that difference is cents, but
+#     it buys the least here of anywhere in the pipeline — the ceiling on a hook is
+#     the research behind it, not the model's reasoning depth.
+#   * **high / medium → Sonnet 5.** Near-Opus quality on structure and prose at 60%
+#     of the input price. Research and beats are shape-following, not judgement.
+#   * **low → Haiku 4.5.** Tags and chapters are extraction. Paying Opus rates to
+#     turn a transcript into timestamps is money set on fire.
 DEFAULT_ROUTES: dict[str, str] = {
     task: (
-        "anthropic:claude-opus-4-8"
+        "anthropic:claude-opus-5"
         if meta["quality"] == "critical"
         else "anthropic:claude-haiku-4-5-20251001"
         if meta["quality"] == "low"
