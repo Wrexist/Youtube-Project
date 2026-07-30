@@ -25,6 +25,7 @@ what makes stages independently testable and re-runnable.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -180,6 +181,9 @@ class Stage(Generic[T]):
     optional: bool = False
     #: Rough pre-flight cost estimate, used to refuse a run that can't afford to finish.
     estimated_cost_usd: float = 0.0
+    #: How often to emit a keepalive progress message while a stage is running.
+    heartbeat_interval_s: float = 10.0
+
     #: May an operator replace this stage's value by hand?
     #:
     #: Off by default, and that default is the point. `mark_edited` writes the
@@ -448,10 +452,28 @@ class Workflow:
         for attempt in range(1, stage.max_attempts + 1):
             state.attempts = attempt
             try:
-                coro = stage.run(ctx)
-                output = (
-                    await asyncio.wait_for(coro, stage.timeout_s) if stage.timeout_s else await coro
-                )
+                async def _heartbeat() -> None:
+                    # Some providers do not stream partial tokens, and some research
+                    # sources are slow. A stage can therefore be healthy while the UI
+                    # appears frozen. Emit a low-rate heartbeat so the Create screen
+                    # says what is happening instead of looking stuck.
+                    while True:
+                        await asyncio.sleep(stage.heartbeat_interval_s)
+                        elapsed = int(time.monotonic() - (state.started_at or time.monotonic()))
+                        await ctx.progress(f"still working — {elapsed}s elapsed")
+
+                heartbeat = asyncio.create_task(_heartbeat())
+                try:
+                    coro = stage.run(ctx)
+                    output = (
+                        await asyncio.wait_for(coro, stage.timeout_s)
+                        if stage.timeout_s
+                        else await coro
+                    )
+                finally:
+                    heartbeat.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await heartbeat
 
                 # Provenance is not optional. A stage that forgets it silently breaks
                 # the analytics feedback loop months later, so fail loudly now.

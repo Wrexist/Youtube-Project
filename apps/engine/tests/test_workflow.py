@@ -7,6 +7,8 @@ a confusing failure three stages downstream rather than as an obvious one here.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from engine.workflows.base import (
@@ -313,3 +315,27 @@ def test_dependency_order_is_validated_at_construction():
 
     with pytest.raises(ValueError, match="depends on"):
         Workflow("t", [Late()])
+
+
+class SlowStage(Stage[str]):
+    name = "slow"
+    title = "Slow"
+    timeout_s = 1.0
+    heartbeat_interval_s = 0.01
+
+    async def run(self, ctx: WorkflowContext) -> StageOutput[str]:
+        await asyncio.sleep(0.03)
+        return StageOutput(value="done", provenance=Provenance(model="test"))
+
+
+async def test_long_running_stage_emits_heartbeat_progress():
+    """The Create screen must not look frozen while a provider is still working."""
+    wf = Workflow("t", [SlowStage()])
+    events: list = []
+
+    await wf.run("job1", {}, await collect(events), budget_usd=10)
+
+    progress = [e for e in events if e["type"] == "stage.progress"]
+    assert progress
+    assert progress[0]["stage"] == "slow"
+    assert "still working" in progress[0]["message"]

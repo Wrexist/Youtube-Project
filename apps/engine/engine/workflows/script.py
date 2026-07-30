@@ -172,11 +172,9 @@ class HookStage(Stage[dict]):
 
         # Confirmed findings from this channel's own performance, if there are any.
         # Empty for a new channel, which is correct — nine videos teach nothing.
-        learned = (
-            feedback.guidance_for(ctx.inputs["insights"], "hook")
-            if ctx.inputs.get("insights")
-            else ""
-        )
+        learned = ctx.inputs.get("insight_guidance", {}).get("hook", "")
+        if not learned and ctx.inputs.get("insights"):
+            learned = feedback.guidance_for(ctx.inputs["insights"], "hook")
         learned += feedback.retention_guidance(ctx.inputs.get("last_retention_map", []))
 
         result, completion = await model.json(
