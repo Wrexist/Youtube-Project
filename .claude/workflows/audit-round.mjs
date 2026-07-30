@@ -14,8 +14,25 @@ export const meta = {
   ],
 };
 
-const ROUND = (args && args.round) || 1;
-const EXTRA = (args && args.focus) || "";
+// `args` is meant to arrive as an object, but it can reach the script as the
+// JSON *string* of that object depending on how the invocation serialises it.
+// That failure is silent and expensive: `args.round` and `args.focus` are both
+// undefined on a string, so round 2 labelled itself round 1 and ran with an
+// empty focus — the whole per-round steer was dropped and nothing said so.
+// Parse defensively, and shout if the steer went missing.
+const INPUT = (() => {
+  if (typeof args === "string") {
+    try {
+      return JSON.parse(args);
+    } catch {
+      return {};
+    }
+  }
+  return args || {};
+})();
+
+const ROUND = INPUT.round || 1;
+const EXTRA = INPUT.focus || "";
 
 const REPO = "/home/user/Youtube-Project";
 
@@ -318,6 +335,7 @@ Measure rather than estimate where you can — run a render and watch RSS.`,
 
 phase("Find");
 log(`Round ${ROUND}: ${DIMENSIONS.length} auditors across disjoint dimensions`);
+log(EXTRA ? `focus: ${EXTRA.slice(0, 160)}…` : "focus: NONE — the per-round steer did not arrive");
 
 const reports = await parallel(
   DIMENSIONS.map((d) => () =>
