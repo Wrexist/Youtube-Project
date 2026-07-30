@@ -22,6 +22,7 @@ import {
   cancelJob,
   createJob,
   getDiagnostics,
+  isLive,
   publishJob,
   saveKeys,
   applySchedulePlan,
@@ -374,4 +375,16 @@ export async function runDiagnostics(
     return { ok: false, error: "The engine did not answer. Is it still running?" };
   }
   return { ok: true, data };
+}
+
+/**
+ * Is the engine answering yet?
+ *
+ * An action rather than a read, because the caller is a client component that has
+ * to ask repeatedly — the engine's state changes underneath a page that has
+ * already rendered, which is exactly what a Server Component cannot express. The
+ * browser still never talks to the engine directly.
+ */
+export async function engineReady(): Promise<ActionResult<{ live: boolean }>> {
+  return { ok: true, data: { live: await isLive() } };
 }
