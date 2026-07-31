@@ -21,13 +21,15 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from engine import automation, db, models, repository, worker
+from engine import automation, db, feedback, models, repository, worker
 from engine.api import publishing as channels
 from engine.api.channels import router as channels_router
+from engine.api.insights import RECORDS
 from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
 from engine.api.setup import router as setup_router
+from engine.insights import VideoRecord, analyze
 from engine.providers import youtube
 from engine.quota import QuotaExceeded, ledger
 from engine.settings import get_settings
@@ -59,6 +61,7 @@ async def lifespan(_: FastAPI):
             JOBS.update(await repository.load_jobs(video.get))
             channels.CHANNELS.update(await repository.load_channels())
             channels.SCHEDULE.update(await repository.load_schedule())
+            RECORDS.update(await repository.load_performance_records())
         except Exception:
             # A missing migration must not look like an empty database — starting
             # with a blank quota ledger is exactly how the ceiling gets overrun.
@@ -231,10 +234,24 @@ async def create_job(body: JobRequest) -> dict:
 
     job_id = uuid.uuid4().hex[:12]
     wake = asyncio.Event()
+    inputs = body.model_dump()
+    # Feed confirmed channel learnings into every new generation automatically.
+    # The Create screen should not need a hidden toggle for the core promise of the
+    # product: each researched, published and measured video improves the next one.
+    try:
+        report = analyze(list(RECORDS.values()))
+        inputs["insight_guidance"] = {
+            "hook": feedback.guidance_for(report, "hook"),
+            "titles": feedback.guidance_for(report, "titles"),
+            "thumbnail": feedback.guidance_for(report, "thumbnail"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not attach insight guidance to {}: {}", job_id, exc)
+
     JOBS[job_id] = {
         "id": job_id,
         "workflow": wf,
-        "inputs": body.model_dump(),
+        "inputs": inputs,
         "states": wf.initial_states(),
         "wake": wake,
         "events": [],
@@ -463,6 +480,8 @@ async def _relay(job_id: str) -> None:
                 # The row is authoritative again, so the projection would only add
                 # a second, staler answer to the same question.
                 job["relayed"] = {}
+                if job.get("status") == "completed":
+                    await _capture_published_record(job)
         _wake(job)
 
 
@@ -604,6 +623,7 @@ async def _run_job(job_id: str, start_from: str | None = None) -> None:
             start_from=start_from,
         )
         job["status"] = "completed"
+        await _capture_published_record(job)
     except WorkflowError as exc:
         job["status"] = "failed"
         # Recorded, not just logged. `GET /v1/jobs` reads this, and without it
@@ -622,6 +642,76 @@ async def _run_job(job_id: str, start_from: str | None = None) -> None:
         # and closes its stream rather than waiting for an event that never comes.
         await _persist(job)
         _wake(job)
+
+
+def _output_value(job: dict, stage: str) -> Any:
+    state = job.get("states", {}).get(stage)
+    return state.output.value if state is not None and state.output is not None else None
+
+
+def _output_model(job: dict, *stages: str) -> str:
+    for stage in stages:
+        state = job.get("states", {}).get(stage)
+        if state is not None and state.output is not None and state.output.provenance.model:
+            return state.output.provenance.model
+    return ""
+
+
+def _published_record(job: dict) -> VideoRecord | None:
+    if job.get("workflow").name != "publish" or job.get("status") != "completed":
+        return None
+
+    video_id = _output_value(job, "upload")
+    titles = _output_value(job, "titles") or []
+    title_index = int(job.get("inputs", {}).get("chosen_title_index", 0) or 0)
+    title = titles[title_index].text if 0 <= title_index < len(titles) else ""
+    strategy = titles[title_index].strategy if 0 <= title_index < len(titles) else ""
+
+    hook = _output_value(job, "hook") or {}
+    hook_variants = hook.get("variants") if isinstance(hook, dict) else None
+    hook_index = int(hook.get("chosen", 0) if isinstance(hook, dict) else 0)
+    hook_device = ""
+    if isinstance(hook_variants, list) and 0 <= hook_index < len(hook_variants):
+        hook_device = str(hook_variants[hook_index].get("device", ""))
+
+    thumbnails = _output_value(job, "thumbnail") or []
+    thumb_index = int(job.get("inputs", {}).get("chosen_thumbnail_index", 0) or 0)
+    thumbnail_concept = ""
+    if 0 <= thumb_index < len(thumbnails) and isinstance(thumbnails[thumb_index], dict):
+        thumbnail_concept = str(thumbnails[thumb_index].get("template", ""))
+
+    if not video_id:
+        return None
+
+    publish_at = job.get("inputs", {}).get("publish_at")
+    published_at = (
+        publish_at.isoformat()
+        if isinstance(publish_at, datetime)
+        else str(publish_at or datetime.now(UTC).isoformat())
+    )
+    return VideoRecord(
+        video_id=str(video_id),
+        title=title,
+        published_at=published_at,
+        title_strategy=strategy,
+        hook_device=hook_device,
+        thumbnail_concept=thumbnail_concept,
+        script_model=_output_model(job, "revision", "draft"),
+        format=str(job.get("inputs", {}).get("format", "short")),
+    )
+
+
+async def _capture_published_record(job: dict) -> None:
+    """Seed the analytics feedback loop as soon as a publish lands."""
+    record = _published_record(job)
+    if record is None:
+        return
+    RECORDS[record.video_id] = record
+    if get_settings().persist:
+        try:
+            await repository.save_performance_record(record, job_id=job["id"])
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to persist performance record for {}", record.video_id)
 
 
 async def _persist(job: dict) -> None:

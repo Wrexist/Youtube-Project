@@ -130,6 +130,16 @@ export function CreateView({ ready }: { ready: Readiness }) {
           }
         />
         <Page>
+          {stream.status === "running" && !demo && (
+            <div className="mb-4 rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3">
+              <p className="text-[13px] font-semibold">Generation is running</p>
+              <p className="mt-1 text-[12px] leading-relaxed text-[var(--color-faint)]">
+                Research and model calls can be quiet for a moment; Studio now sends
+                keepalive progress so a healthy job does not look frozen.
+              </p>
+            </div>
+          )}
+
           <Pipeline
             stages={stages}
             chosen={chosen}

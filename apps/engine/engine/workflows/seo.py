@@ -282,11 +282,9 @@ class TitlesStage(Stage[list]):
 
         # Only confirmed findings reach the prompt; suggestive ones are shown to the
         # user and withheld from the generator.
-        learned = (
-            feedback.guidance_for(ctx.inputs["insights"], "titles")
-            if ctx.inputs.get("insights")
-            else ""
-        )
+        learned = ctx.inputs.get("insight_guidance", {}).get("titles", "")
+        if not learned and ctx.inputs.get("insights"):
+            learned = feedback.guidance_for(ctx.inputs["insights"], "titles")
 
         result, completion = await model.json(
             f"""Topic: {evidence.seed}

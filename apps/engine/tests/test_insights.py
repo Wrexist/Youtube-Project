@@ -191,3 +191,50 @@ def test_drop_rate_normalises_for_beat_length():
 def test_empty_inputs_do_not_explode():
     assert map_retention_to_beats([], [], 0) == []
     assert map_retention_to_beats([100, 50], [], 10) == []
+
+
+def test_completed_publish_job_seeds_feedback_record():
+    """Publishing must create the provenance row that later analytics can measure."""
+    from types import SimpleNamespace
+
+    from engine.main import _published_record
+    from engine.workflows.base import Provenance, StageOutput, StageState, StageStatus
+    from engine.workflows.seo import TitleVariant
+
+    def done(name: str, value, model: str | None = None) -> StageState:
+        state = StageState(name=name, status=StageStatus.DONE)
+        state.output = StageOutput(value=value, provenance=Provenance(model=model))
+        return state
+
+    job = {
+        "workflow": SimpleNamespace(name="publish"),
+        "status": "completed",
+        "inputs": {"format": "long", "chosen_title_index": 1, "chosen_thumbnail_index": 0},
+        "states": {
+            "upload": done("upload", "yt-123"),
+            "titles": done(
+                "titles",
+                [
+                    TitleVariant(text="Backup", strategy="question"),
+                    TitleVariant(text="The Real Bridge Failure", strategy="curiosity_gap"),
+                ],
+            ),
+            "hook": done(
+                "hook",
+                {"chosen": 0, "variants": [{"text": "x", "device": "contradiction"}]},
+            ),
+            "thumbnail": done("thumbnail", [{"template": "split_reveal"}]),
+            "revision": done("revision", "script", model="anthropic:claude-sonnet-5"),
+        },
+    }
+
+    record = _published_record(job)
+
+    assert record is not None
+    assert record.video_id == "yt-123"
+    assert record.title == "The Real Bridge Failure"
+    assert record.title_strategy == "curiosity_gap"
+    assert record.hook_device == "contradiction"
+    assert record.thumbnail_concept == "split_reveal"
+    assert record.script_model == "anthropic:claude-sonnet-5"
+    assert record.format == "long"

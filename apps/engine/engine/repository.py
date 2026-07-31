@@ -24,6 +24,7 @@ startup so a job that was mid-render when the process died comes back as
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
@@ -32,7 +33,8 @@ from loguru import logger
 from sqlalchemy import delete, select
 
 from engine.db import session
-from engine.tables import Channel, ChannelLaunch, Job, ScheduleSlot
+from engine.insights import VideoRecord
+from engine.tables import Channel, ChannelLaunch, Job, PerformanceRecord, ScheduleSlot
 from engine.workflows.base import StageState, StageStatus
 
 # ── stage state (de)serialisation ───────────────────────────────────────────
@@ -373,6 +375,42 @@ def jsonable(inputs: dict) -> dict:
         elif _is_json_safe(value):
             out[key] = value
     return out
+
+
+# ── performance records ─────────────────────────────────────────────────────
+
+
+def _record_from_payload(payload: dict) -> VideoRecord | None:
+    try:
+        return VideoRecord(**payload)
+    except TypeError as exc:
+        logger.warning("dropping malformed performance record: {}", exc)
+        return None
+
+
+async def save_performance_record(record: VideoRecord, *, job_id: str | None = None) -> None:
+    """Persist one published video's attribution seed for the feedback loop."""
+    async with session() as db:
+        existing = await db.get(PerformanceRecord, record.video_id)
+        payload = asdict(record)
+        if existing is None:
+            db.add(PerformanceRecord(video_id=record.video_id, job_id=job_id, payload=payload))
+        else:
+            existing.job_id = job_id or existing.job_id
+            existing.payload = payload
+            existing.measured_at = datetime.now(UTC)
+
+
+async def load_performance_records() -> dict[str, VideoRecord]:
+    """Load published-video records used by /v1/insights and new generations."""
+    async with session() as db:
+        rows = (await db.execute(select(PerformanceRecord))).scalars().all()
+    records: dict[str, VideoRecord] = {}
+    for row in rows:
+        record = _record_from_payload(row.payload or {})
+        if record is not None:
+            records[record.video_id] = record
+    return records
 
 
 # The old private name, kept because save_job and the tests both use it.
