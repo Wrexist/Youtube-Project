@@ -452,6 +452,7 @@ class Workflow:
         for attempt in range(1, stage.max_attempts + 1):
             state.attempts = attempt
             try:
+
                 async def _heartbeat() -> None:
                     # Some providers do not stream partial tokens, and some research
                     # sources are slow. A stage can therefore be healthy while the UI

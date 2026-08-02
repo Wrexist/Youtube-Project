@@ -230,9 +230,12 @@ def test_a_thin_backlog_produces_fewer_videos_and_says_so():
 
 def test_budget_caps_the_cadence_and_explains_itself():
     ledger = SpendLedger()
-    # Earlier in the month, so the monthly budget is what bites rather than the
-    # daily ceiling — those are different brakes and this test is about the former.
-    ledger.record("s1", 45.0, at=datetime.now(UTC) - timedelta(days=5))
+    # `BudgetPolicy()` leaves the daily ceiling at infinity, so the monthly budget is
+    # the only brake here — the daily one gets its own test below. Recorded *now*
+    # rather than five days ago: `spent_this_month` compares calendar months, so on
+    # any of a month's first five days the spend landed in the previous one and this
+    # test failed for reasons that had nothing to do with budgets.
+    ledger.record("s1", 45.0)
     plan = plan_week(series(), backlog(20), ledger, BudgetPolicy())
     assert len(plan.to_generate) == 2  # $5 left at $2.50 each
     assert any(b.code == "budget_limits_cadence" for b in plan.blocked)
