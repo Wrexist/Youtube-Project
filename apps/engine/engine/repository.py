@@ -24,7 +24,7 @@ startup so a job that was mid-render when the process died comes back as
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
@@ -387,10 +387,41 @@ def jsonable(inputs: dict) -> dict:
 # ── performance records ─────────────────────────────────────────────────────
 
 
+#: Fields renamed since rows were first written, old name -> new name.
+#:
+#: `retention_30s` only ever held `averageViewPercentage`, so it was renamed to
+#: say so. The rename alone silently destroyed history: `VideoRecord(**payload)`
+#: raises TypeError on the unknown key, `_record_from_payload` caught it, and
+#: every performance record written before the rename was dropped at startup with
+#: one warning line. The attribution loop's entire sample, gone on upgrade.
+_RENAMED_FIELDS = {"retention_30s": "avd_percent"}
+
+
 def _record_from_payload(payload: dict) -> VideoRecord | None:
+    """Rebuild a stored record, tolerating the shapes older rows were written in.
+
+    Unknown keys are dropped rather than fatal. A field removed in a later version
+    should cost that field, not the row — losing the row loses the provenance that
+    is the only reason this table exists, and it does so quietly.
+    """
+    known = {f.name for f in fields(VideoRecord)}
+    migrated: dict[str, Any] = {}
+    unknown: list[str] = []
+
+    for key, value in payload.items():
+        name = _RENAMED_FIELDS.get(key, key)
+        if name in known:
+            migrated.setdefault(name, value)
+        else:
+            unknown.append(key)
+
+    if unknown:
+        logger.info("ignoring {} unknown field(s) on a stored record: {}", len(unknown), unknown)
+
     try:
-        return VideoRecord(**payload)
+        return VideoRecord(**migrated)
     except TypeError as exc:
+        # Only a *missing required* field reaches here now.
         logger.warning("dropping malformed performance record: {}", exc)
         return None
 

@@ -260,6 +260,12 @@ async def run() -> Review:
     from engine.providers.analytics import Analytics
     from engine.repository import latest_review_snapshot, save_review_snapshot
 
+    # Hydrated once, up front. Calling `current_records()` a second time after the
+    # mutations below re-read the database and `update()`s the freshly-refreshed
+    # objects straight back out of the mapping — so the review analysed the stale
+    # numbers while persisting the new ones. Same trap the reload was added to fix,
+    # one line further down.
+    existing = await insights_api.current_records()
     refreshed: list = []
     creds = insights_api.CHANNELS.get("default")
     if creds is None:
@@ -272,7 +278,6 @@ async def run() -> Review:
         except Exception as exc:  # noqa: BLE001 — a dead API must not kill the review
             logger.warning("weekly review could not refresh metrics: {}", exc)
         else:
-            existing = await insights_api.current_records()
             for row in rows:
                 record = existing.get(row["video_id"])
                 if record is None:
@@ -283,8 +288,6 @@ async def run() -> Review:
                 record.avd_percent = row["avd_percent"]
                 refreshed.append(record)
 
-    records = list((await insights_api.current_records()).values())
-
     # Persist what the refresh just changed. The mutations above are on worker-local
     # objects; without this the fresh CTR and view counts die with the process and
     # the API keeps serving the older row.
@@ -294,6 +297,7 @@ async def run() -> Review:
         except Exception:  # noqa: BLE001 — a review is still worth producing
             logger.warning("could not persist refreshed metrics for {}", record.video_id)
 
+    records = list(existing.values())
     report = analyze(records)
 
     previous = await latest_review_snapshot()

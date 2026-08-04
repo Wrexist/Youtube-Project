@@ -243,6 +243,79 @@ class TestRun:
         assert len(stored["saved"]) == 1
 
     @pytest.mark.asyncio
+    async def test_the_report_is_built_from_the_refreshed_metrics(
+        self, stored, records, monkeypatch
+    ):
+        """The fix for "the refresh was not persisted" introduced this one.
+
+        Hydrating a second time after mutating re-reads the database and `update()`s
+        the freshly-refreshed objects straight back out of the mapping, so the review
+        analysed last week's numbers while writing this week's.
+        """
+        from engine import review as review_mod
+        from engine.api import insights as insights_api
+        from engine.insights import VideoRecord
+
+        record = VideoRecord(video_id="v1", title="t", published_at="2026-01-01T00:00:00+00:00")
+        records["v1"] = record
+        monkeypatch.setattr(insights_api, "CHANNELS", {"default": object()}, raising=False)
+
+        class Rows:
+            def __init__(self, creds):
+                pass
+
+            async def per_video(self, days=90):
+                return [
+                    {
+                        "video_id": "v1",
+                        "ctr": 9.9,
+                        "avd_seconds": 120.0,
+                        "views": 5000,
+                        "avd_percent": 71.0,
+                    }
+                ]
+
+        monkeypatch.setattr("engine.providers.analytics.Analytics", Rows)
+
+        # `current_records` re-reads in production. Simulate that faithfully: a
+        # second call hands back a *different, stale* object for the same id.
+        calls = {"n": 0}
+        original = insights_api.current_records
+
+        async def counting():
+            calls["n"] += 1
+            if calls["n"] > 1:
+                records["v1"] = VideoRecord(
+                    video_id="v1", title="t", published_at="2026-01-01T00:00:00+00:00"
+                )
+            return await original()
+
+        monkeypatch.setattr(insights_api, "current_records", counting)
+
+        # What `analyze` is *handed* is the only thing that decides the report.
+        # Asserting on the local `record` reference proves nothing: the reload
+        # replaces the entry in the mapping while that reference keeps the
+        # mutation, so the check passes either way.
+        seen: list = []
+        import engine.insights as insights_mod
+
+        original_analyze = insights_mod.analyze
+
+        def capturing(videos, **kw):
+            seen.extend(videos)
+            return original_analyze(videos, **kw)
+
+        monkeypatch.setattr(insights_mod, "analyze", capturing)
+
+        await review_mod.run()
+
+        assert seen, "analyze was never called"
+        assert [v.ctr for v in seen] == [9.9], (
+            "the report was built from records reloaded *after* the refresh, so it "
+            "analysed last week's numbers while persisting this week's"
+        )
+
+    @pytest.mark.asyncio
     async def test_a_manual_run_becomes_the_baseline_for_the_next_diff(self, stored, records):
         """Otherwise Monday re-reports everything an ad-hoc run already showed."""
         from engine import review as review_mod

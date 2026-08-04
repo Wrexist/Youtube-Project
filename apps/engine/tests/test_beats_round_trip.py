@@ -107,6 +107,53 @@ class TestRoundTrip:
         assert restored.beats == []
 
 
+class TestFieldRenames:
+    """A rename must not destroy the rows written before it.
+
+    `retention_30s` became `avd_percent` because that is the only thing it ever
+    held. The rename on its own dropped every historical record at startup:
+    `VideoRecord(**payload)` raises on the unknown key, the caller caught it, and
+    the attribution loop's entire sample went with one warning line.
+    """
+
+    def test_a_row_written_before_the_rename_still_loads(self):
+        legacy = {
+            "video_id": "v1",
+            "title": "t",
+            "published_at": "2026-01-01T00:00:00+00:00",
+            "ctr": 4.2,
+            "avd_seconds": 95.0,
+            "retention_30s": 61.5,
+            "views": 1200,
+            "title_strategy": "question",
+            "hook_device": "loop",
+            "thumbnail_concept": "face",
+            "script_model": "claude",
+            "format": "short",
+        }
+        restored = repository._record_from_payload(legacy)
+
+        assert restored is not None, "the row was dropped, taking its provenance with it"
+        assert restored.avd_percent == 61.5, "the old value did not follow the rename"
+        assert restored.title_strategy == "question"
+
+    def test_a_field_removed_in_a_later_version_costs_the_field_not_the_row(self):
+        """A row is provenance that cannot be regenerated. Losing one because it
+        carries a key nobody reads any more is the wrong trade."""
+        payload = {
+            "video_id": "v1",
+            "title": "t",
+            "published_at": "2026-01-01T00:00:00+00:00",
+            "some_field_we_deleted": 1,
+        }
+        restored = repository._record_from_payload(payload)
+        assert restored is not None
+        assert restored.video_id == "v1"
+
+    def test_a_row_missing_a_required_field_is_still_refused(self):
+        assert repository._record_from_payload({"title": "t"}) is None
+
+
 class TestReadersSeeThem:
     """Both readers, driven from a stored record rather than hand-built beats."""
 
