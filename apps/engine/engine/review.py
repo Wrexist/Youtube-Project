@@ -243,13 +243,16 @@ def diff(previous: Snapshot | None, report: InsightReport) -> tuple[list[Change]
         if key in was:
             if was[key] == verdict:
                 continue
-            kind = (
-                "promoted"
-                if verdict == str(Verdict.CONFIRMED)
-                else "demoted"
-                if was[key] == str(Verdict.CONFIRMED)
-                else "appeared"
-            )
+            if str(Verdict.CONFIRMED) not in (verdict, was[key]):
+                # suggestive ↔ insufficient. The finding was already here and is
+                # still not believed, so nothing about the generator's behaviour
+                # changed — this is the sample size moving by a video or two, the
+                # same non-news that keeps an `insufficient` finding from being
+                # reported as `disappeared`. It used to fall through to
+                # `appeared`, which both read as a discovery and, through
+                # `worth_reading`, sent a notification about drift.
+                continue
+            kind = "promoted" if verdict == str(Verdict.CONFIRMED) else "demoted"
             changes.append(Change(kind=kind, finding=finding, was=was[key]))
             continue
 

@@ -98,12 +98,27 @@ class TestVerdictMovement:
         assert [c.kind for c in changes] == ["demoted"]
         assert "no longer fed back" in changes[0].sentence()
 
-    def test_insufficient_becoming_suggestive_is_neither(self):
+    def test_movement_between_two_unbelieved_verdicts_is_not_reported(self):
         """Movement between two verdicts that both mean "not acted on" is not a
-        promotion or a demotion; nothing about the generator changed."""
-        before = snapshot(report(finding(verdict=Verdict.INSUFFICIENT)))
-        changes, _ = diff(before, report(finding(verdict=Verdict.SUGGESTIVE)))
-        assert [c.kind for c in changes] == ["appeared"]
+        promotion or a demotion; nothing about the generator changed.
+
+        This asserted `appeared` — contradicting its own docstring. A finding that
+        was already in last week's snapshot has not appeared, and reporting it made
+        `worth_reading` true, so a week of pure sample-size drift sent a
+        notification claiming a discovery.
+        """
+        for was, now in (
+            (Verdict.INSUFFICIENT, Verdict.SUGGESTIVE),
+            (Verdict.SUGGESTIVE, Verdict.INSUFFICIENT),
+        ):
+            before = snapshot(report(finding(verdict=was)))
+            changes, _ = diff(before, report(finding(verdict=now)))
+            assert changes == [], f"{was} -> {now} was reported as a change"
+
+    def test_drift_between_unbelieved_verdicts_does_not_trigger_a_notification(self):
+        before = snapshot(report(finding(verdict=Verdict.SUGGESTIVE)))
+        review = build(report(finding(verdict=Verdict.INSUFFICIENT)), before, video_count=12)
+        assert review.worth_reading is False
 
 
 class TestReversal:
@@ -310,6 +325,10 @@ class TestRun:
         await review_mod.run()
 
         assert seen, "analyze was never called"
+        # Stated directly, because the assertion below only catches a second
+        # hydration when the reload happens to hand back a different object. The
+        # invariant being protected is that there is exactly one.
+        assert calls["n"] == 1, "run() hydrated the records more than once"
         assert [v.ctr for v in seen] == [9.9], (
             "the report was built from records reloaded *after* the refresh, so it "
             "analysed last week's numbers while persisting this week's"
