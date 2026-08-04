@@ -36,6 +36,24 @@ SEMANTIC_EMBEDDING_THRESHOLD = 0.90  # cosine similarity that confirms a duplica
 
 _DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 
+#: How long a trend signal keeps half its value. Three weeks: long enough that an
+#: idea captured on a Friday is still worth something at the next planning session,
+#: short enough that a month-old trend stops outranking a fresh one. The `next_up`
+#: cutoff sits at 45 days, by which point this has already decayed to ~23%, so the
+#: hard floor removes ideas the ranking had mostly given up on anyway.
+FRESHNESS_HALF_LIFE_DAYS = 21.0
+
+
+def _aware(moment: datetime) -> datetime:
+    """Treat a naive timestamp as UTC.
+
+    `created_at` round-trips through any store without a timezone type — SQLite is
+    the one in the box — and comparing naive with aware raises `TypeError`, which
+    would surface as a crash in scoring rather than as a stale idea.
+    """
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
 # Words that carry no topical meaning and would inflate every similarity score.
 STOPWORDS = frozenset(
     """a an the and or but of for to in on at by with from is are was were be been
@@ -68,22 +86,49 @@ class Idea:
     similarity: float = 0.0
     notes: str = ""
 
-    @property
-    def score(self) -> float:
+    def freshness_at(self, now: datetime | None = None) -> float:
+        """Trend match, decayed by how long ago the idea was scored.
+
+        `freshness` is what the trend data said on the day this idea was written
+        down, and it does not stay true. A topic that was moving six weeks ago is
+        not still moving; treating the stored value as current is how a backlog
+        ends up recommending last quarter's news at full confidence.
+
+        Exponential rather than linear, and expressed as a half-life, because that
+        is the shape attention actually has and the one parameter anybody can
+        reason about: at `FRESHNESS_HALF_LIFE_DAYS` old it is worth half as much,
+        at twice that a quarter.
+        """
+        now = now or datetime.now(UTC)
+        age_days = max((now - _aware(self.created_at)).total_seconds() / 86400.0, 0.0)
+        return round(self.freshness * 0.5 ** (age_days / FRESHNESS_HALF_LIFE_DAYS), 4)
+
+    def score_at(self, now: datetime | None = None) -> float:
         """Weighted, and weighted toward demand — a perfectly-fitting idea nobody
         searches for is still a video nobody watches."""
         return round(
             0.40 * self.demand
             + 0.25 * (1.0 - self.competition)
             + 0.20 * self.fit
-            + 0.15 * self.freshness,
+            + 0.15 * self.freshness_at(now),
             3,
         )
+
+    @property
+    def score(self) -> float:
+        """The score as of now. Takes a clock, so it moves — see `freshness_at`."""
+        return self.score_at()
 
     def summary(self) -> str:
         if self.duplicate_of:
             return f"duplicate of “{self.duplicate_of}” ({self.similarity:.0%})"
-        return f"{self.score:.2f} · demand {self.demand:.2f} · fit {self.fit:.2f}"
+        line = f"{self.score:.2f} · demand {self.demand:.2f} · fit {self.fit:.2f}"
+        # Only when there is a trend signal to report. Shown because it is the one
+        # component that changes on its own: an idea sliding down the backlog with
+        # no edit and no new data is otherwise unexplainable from the card.
+        if self.freshness:
+            line += f" · trend {self.freshness_at():.2f}"
+        return line
 
 
 def tokenize(text: str) -> set[str]:
@@ -154,10 +199,32 @@ def score_idea(
         idea.fit = round(max((similarity(topic, t) for t in channel_topics), default=0.0) * 2, 3)
         idea.fit = min(idea.fit, 1.0)
 
+    # Freshness: how strongly the topic overlaps whatever is currently moving.
+    #
+    # Graded, not a coin flip. This used to be 1.0 for any single shared token and
+    # 0.0 otherwise, which put "why bridges collapse" and "bridges" on exactly the
+    # same footing against a trend for "bridge collapse baltimore" — one is the
+    # trend, the other shares a word with it. `overlap` is against the *trend's*
+    # tokens rather than the topic's: the question is how much of the trend this
+    # idea covers, and dividing by the topic's length would reward short topics for
+    # being short.
     if trending_terms:
-        idea.freshness = 1.0 if any(tokens & tokenize(t) for t in trending_terms) else 0.0
+        idea.freshness = round(
+            max(
+                (_overlap(tokens, tokenize(term)) for term in trending_terms),
+                default=0.0,
+            ),
+            3,
+        )
 
     return idea
+
+
+def _overlap(tokens: set[str], trend_tokens: set[str]) -> float:
+    """The fraction of a trend's content words that a topic covers."""
+    if not trend_tokens:
+        return 0.0
+    return len(tokens & trend_tokens) / len(trend_tokens)
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -337,14 +404,27 @@ def build_backlog(
     return out
 
 
-def next_up(backlog: list[Idea], count: int, *, max_age_days: int = 45) -> list[Idea]:
+def next_up(
+    backlog: list[Idea],
+    count: int,
+    *,
+    max_age_days: int = 45,
+    now: datetime | None = None,
+) -> list[Idea]:
     """Pull the next ideas to produce.
 
-    Stale ideas are skipped: a topic that has sat in the backlog for six weeks was
-    scored against search data that has since moved.
+    `max_age_days` stays a hard floor — past six weeks a topic was scored against
+    search data that has genuinely moved, and no amount of ranking rescues it. But
+    it is only the floor now, not the whole story: ranking uses `score_at`, so an
+    idea's trend component fades continuously as it sits rather than counting for
+    full value on day 44 and vanishing on day 46. The cliff was doing two jobs, and
+    only one of them was a cliff.
     """
-    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(days=max_age_days)
     fresh = [
-        idea for idea in backlog if idea.status is IdeaStatus.BACKLOG and idea.created_at >= cutoff
+        idea
+        for idea in backlog
+        if idea.status is IdeaStatus.BACKLOG and _aware(idea.created_at) >= cutoff
     ]
-    return sorted(fresh, key=lambda i: -i.score)[:count]
+    return sorted(fresh, key=lambda i: -i.score_at(now))[:count]

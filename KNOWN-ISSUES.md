@@ -336,7 +336,9 @@ pointing at cues that no longer existed.
   sparse.
 - **No thumbnail A/B swapping**, which Phase 8's attribution is otherwise ready for.
 - **No trend monitoring.** The idea backlog accepts a `trending_terms` argument that
-  nothing currently supplies.
+  nothing currently supplies, so `freshness` is zero on every real idea and its
+  decay curve has nothing to decay. The scoring is ready for a supplier; there
+  isn't one.
 - **The weekly review has no screen and sends no notification.** The cron job runs
   Monday 06:00 UTC and `POST /v1/insights/review` runs it on demand, but the only
   way to read the result is the API or the worker log. `Review.worth_reading` is
