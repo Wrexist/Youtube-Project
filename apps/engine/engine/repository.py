@@ -408,12 +408,20 @@ def _record_from_payload(payload: dict) -> VideoRecord | None:
     migrated: dict[str, Any] = {}
     unknown: list[str] = []
 
+    # Canonical names first, then the renamed ones fill what is still missing.
+    # A single pass with `setdefault` let key *order* decide: a payload carrying
+    # both `retention_30s` and `avd_percent` took whichever came first, so a
+    # migrated legacy value could silently beat the real one. Rare, but the rule
+    # should be stated rather than fall out of dict ordering.
     for key, value in payload.items():
-        name = _RENAMED_FIELDS.get(key, key)
-        if name in known:
-            migrated.setdefault(name, value)
-        else:
+        if key in known:
+            migrated[key] = value
+        elif key not in _RENAMED_FIELDS:
             unknown.append(key)
+
+    for old, new in _RENAMED_FIELDS.items():
+        if old in payload and new not in migrated:
+            migrated[new] = payload[old]
 
     if unknown:
         logger.info("ignoring {} unknown field(s) on a stored record: {}", len(unknown), unknown)

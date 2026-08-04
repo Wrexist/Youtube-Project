@@ -150,6 +150,29 @@ class TestFieldRenames:
         assert restored is not None
         assert restored.video_id == "v1"
 
+    def test_the_canonical_name_wins_when_a_row_carries_both(self):
+        """Order must not decide. A single `setdefault` pass took whichever key
+        came first, so the migrated legacy value could beat the real one."""
+        for payload in (
+            {
+                "video_id": "v",
+                "title": "t",
+                "published_at": "x",
+                "retention_30s": 11.0,
+                "avd_percent": 99.0,
+            },
+            {
+                "video_id": "v",
+                "title": "t",
+                "published_at": "x",
+                "avd_percent": 99.0,
+                "retention_30s": 11.0,
+            },
+        ):
+            restored = repository._record_from_payload(payload)
+            assert restored is not None
+            assert restored.avd_percent == 99.0
+
     def test_a_row_missing_a_required_field_is_still_refused(self):
         assert repository._record_from_payload({"title": "t"}) is None
 
