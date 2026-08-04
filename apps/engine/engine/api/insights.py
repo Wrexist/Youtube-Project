@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
+from engine import monetisation as monetisation_progress
 from engine.api.publishing import CHANNELS
 from engine.insights import VideoRecord, analyze, map_retention_to_beats
+from engine.providers import youtube
 from engine.providers.analytics import Analytics
 
 router = APIRouter(prefix="/v1", tags=["insights"])
@@ -106,3 +109,63 @@ async def audience() -> dict:
             "hour-of-day shape remains an estimate even once weekday data is measured."
         ),
     }
+
+
+class ThresholdOut(BaseModel):
+    """One bar. `fraction` is already clamped to 0..1, so the UI multiplies by 100
+    and stops there — nothing downstream re-derives it from current/target."""
+
+    name: str
+    current: float
+    target: float
+    unit: str
+    met: bool
+    remaining: float
+    fraction: float
+    window_days: int
+    covers_full_window: bool
+    days_remaining: int | None
+
+
+class MonetisationOut(BaseModel):
+    eligible: bool
+    route: str
+    blocking: str | None
+    caveat: str | None
+    subscribers: ThresholdOut
+    watch_hours: ThresholdOut
+    shorts_views: ThresholdOut
+    subscriber_count_hidden: bool
+
+
+@router.get("/analytics/monetisation")
+async def monetisation() -> MonetisationOut:
+    """How close the channel is to the Partner Programme, on either route.
+
+    The number the whole product is aimed at, and the one no screen showed. Three
+    calls: the subscriber total from the Data API (one quota unit — Analytics
+    reports a delta, not a count), a year of daily watch minutes, and 90 days of
+    Shorts views.
+
+    A year of dailies is one Analytics query, and Analytics has its own far larger
+    quota pool (KNOWN-ISSUES §3.2b), so the cost of this endpoint is the single
+    Data API unit.
+    """
+    creds = CHANNELS.get("default")
+    if creds is None:
+        raise HTTPException(409, "no channel connected")
+
+    analytics = Analytics(creds)
+    subscribers = await youtube.YouTube(creds).subscriber_count()
+    daily = await analytics.daily(days=monetisation_progress.WATCH_HOURS_WINDOW_DAYS)
+    shorts = await analytics.shorts_views()
+
+    # A hidden subscriber count reads as zero rather than failing the request. The
+    # response says which it was, so the UI can show "hidden" instead of a bar
+    # sitting at 0% that looks like a channel with no subscribers at all.
+    report = monetisation_progress.progress(
+        subscriber_count=subscribers or 0,
+        watch_minutes_by_day={d.day: d.watch_minutes for d in daily},
+        shorts_views_by_day=shorts,
+    )
+    return MonetisationOut(**report.as_dict(), subscriber_count_hidden=subscribers is None)

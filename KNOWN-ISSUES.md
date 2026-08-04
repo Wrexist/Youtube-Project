@@ -267,7 +267,8 @@ right. Per screen, as of today:
 | Queue, Library, Models | live, falling back to `demo.ts` when the engine is unreachable |
 | Setup, Welcome | live only — no fallback, deliberately. They show "the engine is not running" instead of plausible fiction, because a setup screen that invents its own state is worse than one that admits it is blind |
 | Calendar | mixed even when live: quota and bookings come from the engine, the draggable video tray is always `PENDING_VIDEOS` |
-| Analytics, Series, New channel | demo only, **no network call at all** — there is no series table, the Analytics API is unwired, and the channel-launch endpoint has no caller |
+| Analytics | partly live: the monetisation card reads `GET /v1/analytics/monetisation` and hides itself when the engine is unreachable or no channel is connected. Everything below it is still demo — the per-video and retention panels remain unwired |
+| Series, New channel | demo only, **no network call at all** — there is no series table, and the channel-launch endpoint has no caller |
 
 Series and New channel used to ship five buttons wired to nothing, including both
 screens' single primary action: pressing the one prominent control did nothing at

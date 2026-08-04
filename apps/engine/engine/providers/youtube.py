@@ -299,6 +299,34 @@ class YouTube:
         )
         return resp.json().get("items", [])
 
+    async def subscriber_count(self) -> int | None:
+        """The channel's subscriber total. One quota unit.
+
+        Analytics reports `subscribersGained`, which is a *delta* — summing it over
+        a window gives you the change, not the count, and it ignores both losses and
+        every subscriber the channel had before the window opened. The Partner
+        Programme threshold is a total, so it has to come from the Data API.
+
+        Returns None rather than raising when the channel has hidden its subscriber
+        count: `hiddenSubscriberCount` is a setting an operator can turn on, and a
+        dashboard that 500s because of a privacy preference is worse than one that
+        says the number is unavailable.
+        """
+        resp = await self._call(
+            "GET",
+            f"{API}/channels",
+            "channels.list",
+            params={"part": "statistics", "mine": "true"},
+        )
+        items = resp.json().get("items", [])
+        if not items:
+            return None
+        stats = items[0].get("statistics", {})
+        if stats.get("hiddenSubscriberCount"):
+            return None
+        raw = stats.get("subscriberCount")
+        return int(raw) if raw is not None else None
+
     async def upload(
         self,
         video_path: Path,

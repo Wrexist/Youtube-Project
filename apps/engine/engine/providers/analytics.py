@@ -24,6 +24,7 @@ from datetime import date, timedelta
 import httpx
 from loguru import logger
 
+from engine.monetisation import SHORTS_VIEWS_WINDOW_DAYS
 from engine.providers.youtube import Credentials, refresh
 from engine.scheduling import AudienceProfile
 
@@ -41,6 +42,13 @@ class DailyMetrics:
     ctr: float = 0.0
     avd_seconds: float = 0.0
     subscribers_gained: int = 0
+    #: Minutes, as Google reports them — `engine.monetisation` converts to hours.
+    #:
+    #: `daily()` has always *asked* for `estimatedMinutesWatched` and then read
+    #: columns 1, 3 and 4 of the four it paid for, dropping this one. It is half of
+    #: the Partner Programme threshold the whole product is aimed at, so it was the
+    #: one number worth keeping.
+    watch_minutes: float = 0.0
 
     @property
     def is_provisional(self) -> bool:
@@ -81,11 +89,43 @@ class Analytics:
             DailyMetrics(
                 day=date.fromisoformat(row[0]),
                 views=int(row[1]),
+                watch_minutes=float(row[2]),
                 avd_seconds=float(row[3]),
                 subscribers_gained=int(row[4]),
             )
             for row in rows
         ]
+
+    async def shorts_views(self, days: int = SHORTS_VIEWS_WINDOW_DAYS) -> dict[date, int]:
+        """Daily Shorts views — the other route to the Partner Programme.
+
+        Separate from `daily()` because it needs a filter the rest of the daily pull
+        must not have: `creatorContentType==shortsVideo` would silently narrow every
+        other metric to Shorts alone if it were added there.
+
+        Returns an empty mapping rather than raising when the dimension is refused.
+        Not every channel and not every API version answers this filter, and a
+        channel with no Shorts is the overwhelmingly common case here — neither is
+        an error worth failing a dashboard over, and the long-form route is
+        unaffected either way.
+        """
+        end = date.today()
+        start = end - timedelta(days=days)
+        try:
+            payload = await self._query(
+                {
+                    "startDate": start.isoformat(),
+                    "endDate": end.isoformat(),
+                    "metrics": "views",
+                    "dimensions": "day",
+                    "filters": "creatorContentType==shortsVideo",
+                    "sort": "day",
+                }
+            )
+        except RuntimeError as exc:
+            logger.info("no Shorts breakdown available ({}); the long-form route stands", exc)
+            return {}
+        return {date.fromisoformat(row[0]): int(row[1]) for row in payload.get("rows", [])}
 
     async def per_video(self, days: int = 90) -> list[dict]:
         """Per-video CTR and duration — the input to attribution.

@@ -63,6 +63,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/analytics/monetisation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Monetisation
+         * @description How close the channel is to the Partner Programme, on either route.
+         *
+         *     The number the whole product is aimed at, and the one no screen showed. Three
+         *     calls: the subscriber total from the Data API (one quota unit — Analytics
+         *     reports a delta, not a count), a year of daily watch minutes, and 90 days of
+         *     Shorts views.
+         *
+         *     A year of dailies is one Analytics query, and Analytics has its own far larger
+         *     quota pool (KNOWN-ISSUES §3.2b), so the cost of this endpoint is the single
+         *     Data API unit.
+         */
+        get: operations["monetisation_v1_analytics_monetisation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/analytics/retention/{video_id}": {
         parameters: {
             query?: never;
@@ -1171,6 +1200,22 @@ export interface components {
             /** Tasks */
             tasks: components["schemas"]["TaskRoute"][];
         };
+        /** MonetisationOut */
+        MonetisationOut: {
+            /** Blocking */
+            blocking: string | null;
+            /** Caveat */
+            caveat: string | null;
+            /** Eligible */
+            eligible: boolean;
+            /** Route */
+            route: string;
+            shorts_views: components["schemas"]["ThresholdOut"];
+            /** Subscriber Count Hidden */
+            subscriber_count_hidden: boolean;
+            subscribers: components["schemas"]["ThresholdOut"];
+            watch_hours: components["schemas"]["ThresholdOut"];
+        };
         /**
          * PendingVideo
          * @description One video waiting for a slot.
@@ -1333,6 +1378,33 @@ export interface components {
             /** Task */
             task: string;
         };
+        /**
+         * ThresholdOut
+         * @description One bar. `fraction` is already clamped to 0..1, so the UI multiplies by 100
+         *     and stops there — nothing downstream re-derives it from current/target.
+         */
+        ThresholdOut: {
+            /** Covers Full Window */
+            covers_full_window: boolean;
+            /** Current */
+            current: number;
+            /** Days Remaining */
+            days_remaining: number | null;
+            /** Fraction */
+            fraction: number;
+            /** Met */
+            met: boolean;
+            /** Name */
+            name: string;
+            /** Remaining */
+            remaining: number;
+            /** Target */
+            target: number;
+            /** Unit */
+            unit: string;
+            /** Window Days */
+            window_days: number;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -1443,6 +1515,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    monetisation_v1_analytics_monetisation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonetisationOut"];
                 };
             };
         };

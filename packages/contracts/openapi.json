@@ -617,6 +617,65 @@
         "title": "ModelsResponse",
         "type": "object"
       },
+      "MonetisationOut": {
+        "properties": {
+          "blocking": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocking"
+          },
+          "caveat": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caveat"
+          },
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "route": {
+            "title": "Route",
+            "type": "string"
+          },
+          "shorts_views": {
+            "$ref": "#/components/schemas/ThresholdOut"
+          },
+          "subscriber_count_hidden": {
+            "title": "Subscriber Count Hidden",
+            "type": "boolean"
+          },
+          "subscribers": {
+            "$ref": "#/components/schemas/ThresholdOut"
+          },
+          "watch_hours": {
+            "$ref": "#/components/schemas/ThresholdOut"
+          }
+        },
+        "required": [
+          "eligible",
+          "route",
+          "blocking",
+          "caveat",
+          "subscribers",
+          "watch_hours",
+          "shorts_views",
+          "subscriber_count_hidden"
+        ],
+        "title": "MonetisationOut",
+        "type": "object"
+      },
       "PendingVideo": {
         "description": "One video waiting for a slot.\n\nWas `dict`, which meant a missing `id` reached `auto_schedule` and came back\nas a 500 with a KeyError \u2014 four ordinary malformed payloads all did. Declaring\nthe shape turns each of them into a 422 naming the field.",
         "properties": {
@@ -947,6 +1006,72 @@
         "title": "TaskRoute",
         "type": "object"
       },
+      "ThresholdOut": {
+        "description": "One bar. `fraction` is already clamped to 0..1, so the UI multiplies by 100\nand stops there \u2014 nothing downstream re-derives it from current/target.",
+        "properties": {
+          "covers_full_window": {
+            "title": "Covers Full Window",
+            "type": "boolean"
+          },
+          "current": {
+            "title": "Current",
+            "type": "number"
+          },
+          "days_remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Remaining"
+          },
+          "fraction": {
+            "title": "Fraction",
+            "type": "number"
+          },
+          "met": {
+            "title": "Met",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "number"
+          },
+          "target": {
+            "title": "Target",
+            "type": "number"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "current",
+          "target",
+          "unit",
+          "met",
+          "remaining",
+          "fraction",
+          "window_days",
+          "covers_full_window",
+          "days_remaining"
+        ],
+        "title": "ThresholdOut",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -1113,6 +1238,28 @@
           }
         },
         "summary": "Daily",
+        "tags": [
+          "insights"
+        ]
+      }
+    },
+    "/v1/analytics/monetisation": {
+      "get": {
+        "description": "How close the channel is to the Partner Programme, on either route.\n\nThe number the whole product is aimed at, and the one no screen showed. Three\ncalls: the subscriber total from the Data API (one quota unit \u2014 Analytics\nreports a delta, not a count), a year of daily watch minutes, and 90 days of\nShorts views.\n\nA year of dailies is one Analytics query, and Analytics has its own far larger\nquota pool (KNOWN-ISSUES \u00a73.2b), so the cost of this endpoint is the single\nData API unit.",
+        "operationId": "monetisation_v1_analytics_monetisation_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonetisationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Monetisation",
         "tags": [
           "insights"
         ]

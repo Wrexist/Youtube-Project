@@ -1,5 +1,7 @@
 import { Header, Page, Card } from "@/components/ui";
 import { LiveBadge } from "@/components/live-badge";
+import { MonetisationCard } from "@/components/monetisation";
+import { getMonetisation } from "@/lib/engine";
 import { BigNumber, StatTile, RetentionMap } from "@/components/charts";
 import {
   VIEWS_28D,
@@ -23,7 +25,12 @@ import {
  *  look like a finding from 90, because only the confirmed ones actually change what
  *  the generator does.
  */
-export default function AnalyticsPage() {
+export default async function AnalyticsPage() {
+  // The one figure on this screen that is real. Everything below it is still
+  // `lib/demo.ts` — the per-video metrics need published videos to attribute, and
+  // this needs only a connected channel, so the two arrive at different times and
+  // the badges have to say so separately. KNOWN-ISSUES §5.5.
+  const monetisation = await getMonetisation();
   const total = VIEWS_28D.reduce((a, b) => a + b, 0);
   const confirmed = FINDINGS.filter((f) => f.verdict === "confirmed");
 
@@ -42,6 +49,12 @@ export default function AnalyticsPage() {
         }
       />
       <Page>
+        {monetisation && (
+          <section className="pb-10">
+            <MonetisationCard data={monetisation} />
+          </section>
+        )}
+
         <section className="pb-10">
           <BigNumber
             label="Views"
