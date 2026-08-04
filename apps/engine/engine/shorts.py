@@ -20,10 +20,31 @@ mean; the residual above it is the signal.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from statistics import fmean
+from typing import TypedDict
 
-from engine.insights import as_beats
+from engine.insights import BeatLike, as_beats
+
+
+class CandidatePayload(TypedDict):
+    """A candidate as the Shorts endpoint serialises it.
+
+    Named because `api/insights.py` builds its response with
+    `ShortCandidateOut(**c.as_dict())` — producer and response model have to agree
+    field for field, and a bare `dict` is exactly where that agreement goes unchecked.
+    """
+
+    start_s: float
+    end_s: float
+    duration_s: float
+    label: str
+    lift: float
+    hold: float
+    score: float
+    reason: str
+
 
 # YouTube accepts Shorts up to three minutes, but the format's own conventions —
 # and every study of them — sit far below that. Under 15s reads as a fragment
@@ -72,7 +93,7 @@ class Candidate:
     def duration_s(self) -> float:
         return self.end_s - self.start_s
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> CandidatePayload:
         return {
             "start_s": round(self.start_s, 2),
             "end_s": round(self.end_s, 2),
@@ -126,7 +147,7 @@ def detrend(curve: list[float]) -> list[float]:
     return out
 
 
-def _windows(beats: list, duration_s: float) -> list[tuple[float, float, str]]:
+def _windows(beats: Sequence[BeatLike], duration_s: float) -> list[tuple[float, float, str]]:
     """Candidate (start, end, label) spans, aligned to beats wherever possible.
 
     Beats are used as the cut points because a beat is a complete thought by
@@ -240,7 +261,7 @@ def _overlaps(a: Candidate, b: Candidate) -> bool:
 
 def find_candidates(
     curve: list[float],
-    beats: list,
+    beats: Sequence[BeatLike],
     duration_s: float,
     *,
     count: int = 3,

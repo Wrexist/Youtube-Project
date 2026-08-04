@@ -17,9 +17,10 @@ whole reason this module is careful.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal, Protocol, TypedDict
 
 from engine.stats import Comparison, summarize, welch_t_test
 
@@ -84,7 +85,7 @@ class VideoRecord:
     #: `getattr` default is what made it silent. Anything reading beats now goes
     #: through `as_beats()` below, which raises on a shape it does not understand
     #: rather than quietly returning nothing.
-    beats: list[dict] = field(default_factory=list)
+    beats: list[BeatPayload] = field(default_factory=list)
 
     def dimension(self, name: str) -> str:
         return str(getattr(self, name, "") or "")
@@ -251,7 +252,31 @@ class ScriptBeat:
     est_seconds: float = 1.0
 
 
-def as_beats(items: list) -> list[ScriptBeat]:
+class BeatShaped(Protocol):
+    """Anything with a beat's two readable attributes.
+
+    A `Protocol` rather than an import of `workflows.script.Beat`: the match here
+    is structural on purpose, and importing the workflow would pull the whole
+    generation chain into a module that only does arithmetic.
+    """
+
+    purpose: str
+    est_seconds: float
+
+
+class BeatPayload(TypedDict):
+    """A beat as it is stored on a `VideoRecord` and read back by `as_beats`."""
+
+    purpose: str
+    est_seconds: float
+
+
+#: Every shape `as_beats` accepts: already normalised, loaded from storage, or
+#: handed straight over from a workflow.
+BeatLike = ScriptBeat | BeatShaped | dict[str, Any]
+
+
+def as_beats(items: Sequence[BeatLike]) -> list[ScriptBeat]:
     """Normalise beats arriving as dicts (from storage) or objects (from a workflow).
 
     Deliberately strict. The previous readers used `getattr(b, "est_seconds", 1.0)`,
@@ -287,12 +312,14 @@ def as_beats(items: list) -> list[ScriptBeat]:
     return out
 
 
-def beats_to_payload(items: list) -> list[dict]:
+def beats_to_payload(items: Sequence[BeatLike]) -> list[BeatPayload]:
     """The stored form: what `as_beats` will read back."""
     return [{"purpose": b.purpose, "est_seconds": b.est_seconds} for b in as_beats(items)]
 
 
-def map_retention_to_beats(curve: list[float], beats: list, duration_s: float) -> list[dict]:
+def map_retention_to_beats(
+    curve: list[float], beats: Sequence[BeatLike], duration_s: float
+) -> list[dict[str, Any]]:
     """Locate each script beat on the retention curve and find the steepest drop.
 
     This is what turns "retention falls at 20%" into "retention falls at the first
