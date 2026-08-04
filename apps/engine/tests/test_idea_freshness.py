@@ -53,6 +53,14 @@ class TestDecayShape:
         clock outrank every real idea."""
         assert idea(age_days=-30).freshness_at(NOW) == pytest.approx(1.0)
 
+    def test_a_naive_now_is_accepted_too(self):
+        """`created_at` was normalised and the *argument* was not, so an aware
+        record against a naive clock raised TypeError — not "stale", and nowhere
+        near any handler that expects one."""
+        from datetime import datetime as dt
+
+        assert idea(freshness=1.0).freshness_at(dt(2026, 8, 4, 12, 0)) == pytest.approx(1.0)
+
     def test_a_naive_timestamp_is_read_as_utc_rather_than_crashing(self):
         stale = Idea(topic="x", created_at=NOW.replace(tzinfo=None), freshness=1.0)
         assert stale.freshness_at(NOW) == pytest.approx(1.0)
@@ -180,6 +188,19 @@ class TestNextUp:
         )
         weak = Idea(topic="weak", created_at=NOW, freshness=1.0)
         assert next_up([weak, strong], 1, now=NOW)[0].topic == "strong"
+
+    def test_a_future_dated_idea_is_not_offered(self):
+        """Zero age means full trend weight, and every future timestamp clears the
+        cutoff — so a record dated a year ahead outranked everything real for a
+        year. Clock skew and hand-edited rows both produce one."""
+        ahead = Idea(topic="ahead", created_at=NOW + timedelta(days=365), freshness=1.0)
+        here = Idea(topic="here", created_at=NOW)
+        assert [i.topic for i in next_up([ahead, here], 5, now=NOW)] == ["here"]
+
+    def test_next_up_accepts_a_naive_clock(self):
+        from datetime import datetime as dt
+
+        assert next_up([Idea(topic="x", created_at=NOW)], 1, now=dt(2026, 8, 4, 12, 0))
 
     def test_only_backlog_ideas_are_offered(self):
         done = Idea(topic="done", created_at=NOW, status=IdeaStatus.PUBLISHED)

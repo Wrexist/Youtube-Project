@@ -56,9 +56,23 @@ class Change:
     was: str | None = None
     """The previous verdict, where there was one."""
 
+    key: Key | None = None
+    """What the change is *about*, for the one kind that has no `finding`.
+
+    A `disappeared` change serialised to "No longer supported by the data" and
+    nothing else — no dimension, no metric, no winner. Unreadable: the reader could
+    not tell which confirmed finding had gone.
+    """
+
     def sentence(self) -> str:
         if self.kind == "disappeared":
-            return "No longer supported by the data."
+            if self.key is None:
+                return "No longer supported by the data."
+            dimension, metric, winner, loser = self.key
+            return (
+                f"{winner} beating {loser} on {metric} ({dimension}) is no longer "
+                "supported by the data."
+            )
         if self.finding is None:
             # Not an assert: `python -O` strips those, and this would then be an
             # AttributeError on None inside a scheduled job nobody is watching.
@@ -114,6 +128,16 @@ class Review:
                 {
                     "kind": c.kind,
                     "was": c.was,
+                    "about": (
+                        None
+                        if c.key is None
+                        else {
+                            "dimension": c.key[0],
+                            "metric": c.key[1],
+                            "winner": c.key[2],
+                            "loser": c.key[3],
+                        }
+                    ),
                     "sentence": c.sentence(),
                     "finding": c.finding.as_dict() if c.finding else None,
                 }
@@ -179,7 +203,15 @@ def diff(previous: dict | None, report: InsightReport) -> tuple[list[Change], bo
         # Not seen before under this identity — but the same comparison pointing the
         # other way is a contradiction, not a new discovery.
         flipped = _reversal_of(key)
-        if flipped in was:
+        # Both sides must be confirmed. A previously confirmed finding followed by
+        # an *insufficient* flip is not the system contradicting itself — it is the
+        # sample thinning out. Calling it a reversal also marked the old key seen,
+        # so the confirmed finding was never reported as disappeared either.
+        if (
+            flipped in was
+            and verdict == str(Verdict.CONFIRMED)
+            and was[flipped] == str(Verdict.CONFIRMED)
+        ):
             seen.add(flipped)
             changes.append(Change(kind="reversed", finding=finding, was=was[flipped]))
         else:
@@ -192,7 +224,7 @@ def diff(previous: dict | None, report: InsightReport) -> tuple[list[Change], bo
         # An `insufficient` finding dropping out is the sample size moving by one
         # video, which is not news.
         if verdict == str(Verdict.CONFIRMED):
-            changes.append(Change(kind="disappeared", finding=None, was=verdict))
+            changes.append(Change(kind="disappeared", finding=None, was=verdict, key=key))
 
     return changes, False
 
@@ -222,11 +254,13 @@ async def run() -> Review:
     today's numbers arrived — so the review is produced either way and says which
     it was.
     """
+    from engine import repository
     from engine.api import insights as insights_api
     from engine.insights import analyze
     from engine.providers.analytics import Analytics
     from engine.repository import latest_review_snapshot, save_review_snapshot
 
+    refreshed: list = []
     creds = insights_api.CHANNELS.get("default")
     if creds is None:
         # Silence here was the failure: with no channel the review still produced a
@@ -238,16 +272,28 @@ async def run() -> Review:
         except Exception as exc:  # noqa: BLE001 — a dead API must not kill the review
             logger.warning("weekly review could not refresh metrics: {}", exc)
         else:
+            existing = await insights_api.current_records()
             for row in rows:
-                record = insights_api.RECORDS.get(row["video_id"])
+                record = existing.get(row["video_id"])
                 if record is None:
                     continue  # published outside Studio; no provenance to attribute
                 record.ctr = row["ctr"]
                 record.avd_seconds = row["avd_seconds"]
                 record.views = row["views"]
-                record.retention_30s = row["avd_percent"]
+                record.avd_percent = row["avd_percent"]
+                refreshed.append(record)
 
     records = list((await insights_api.current_records()).values())
+
+    # Persist what the refresh just changed. The mutations above are on worker-local
+    # objects; without this the fresh CTR and view counts die with the process and
+    # the API keeps serving the older row.
+    for record in refreshed:
+        try:
+            await repository.save_performance_record(record)
+        except Exception:  # noqa: BLE001 — a review is still worth producing
+            logger.warning("could not persist refreshed metrics for {}", record.video_id)
+
     report = analyze(records)
 
     previous = await latest_review_snapshot()

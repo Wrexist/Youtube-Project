@@ -39,12 +39,17 @@ class Verdict(StrEnum):
     INSUFFICIENT = "insufficient"
 
 
-Metric = Literal["ctr", "avd_seconds", "retention_30s", "views"]
+Metric = Literal["ctr", "avd_seconds", "avd_percent", "views"]
 
 METRIC_LABELS = {
     "ctr": "click-through rate",
     "avd_seconds": "average view duration",
-    "retention_30s": "30-second retention",
+    # Named for what the API actually returns. This field was called
+    # `retention_30s` and labelled "30-second retention", but the only thing ever
+    # written into it is `averageViewPercentage` — a different measurement over the
+    # whole video. Every finding sentence about it was therefore mislabelled, and
+    # the number fed attribution under a name that did not describe it.
+    "avd_percent": "average view percentage",
     "views": "views",
 }
 
@@ -60,7 +65,7 @@ class VideoRecord:
     # Metrics from the Analytics API.
     ctr: float = 0.0
     avd_seconds: float = 0.0
-    retention_30s: float = 0.0
+    avd_percent: float = 0.0
     views: int = 0
 
     # Provenance, carried through from the workflow that produced it.
@@ -162,7 +167,7 @@ def analyze(
         "thumbnail_concept",
         "script_model",
     ),
-    metrics: tuple[Metric, ...] = ("ctr", "retention_30s", "avd_seconds"),
+    metrics: tuple[Metric, ...] = ("ctr", "avd_percent", "avd_seconds"),
 ) -> InsightReport:
     """Compare the best and worst group within each dimension, per metric.
 
@@ -227,7 +232,7 @@ def _verdict(comparison: Comparison) -> Verdict:
 def _formatter(metric: Metric):
     if metric == "ctr":
         return lambda v: f"{v:.1f}%"
-    if metric == "retention_30s":
+    if metric == "avd_percent":
         return lambda v: f"{v:.0f}%"
     if metric == "avd_seconds":
         return lambda v: f"{int(v) // 60}:{int(v) % 60:02d}"
@@ -259,17 +264,22 @@ def as_beats(items: list) -> list[ScriptBeat]:
         if isinstance(item, ScriptBeat):
             out.append(item)
         elif isinstance(item, dict):
+            # Presence, not truthiness. `x or 1.0` turns a stored 0.0 into a
+            # fabricated 1.0 — the same silent substitution this function exists to
+            # remove. The readers already floor it at 0.5 where that matters.
+            raw = item.get("est_seconds")
             out.append(
                 ScriptBeat(
                     purpose=str(item.get("purpose", "")),
-                    est_seconds=float(item.get("est_seconds", 1.0) or 1.0),
+                    est_seconds=1.0 if raw is None else float(raw),
                 )
             )
         elif hasattr(item, "purpose") or hasattr(item, "est_seconds"):
+            raw = getattr(item, "est_seconds", None)
             out.append(
                 ScriptBeat(
                     purpose=str(getattr(item, "purpose", "")),
-                    est_seconds=float(getattr(item, "est_seconds", 1.0) or 1.0),
+                    est_seconds=1.0 if raw is None else float(raw),
                 )
             )
         else:

@@ -108,8 +108,15 @@ export async function get<T>(path: string): Promise<T | null> {
     }
     return (await response.json()) as T;
   } catch (error) {
-    // Unreachable, timed out, or serving nonsense. The caller falls back.
-    console.warn(`engine unreachable for ${path}: ${(error as Error).message}`);
+    // `response.json()` is inside this try, so a *reachable* engine serving
+    // malformed JSON lands here too. Labelling that "unreachable" sends whoever
+    // reads the log to check whether the process is running.
+    const name = (error as Error).name;
+    const reachable = name !== "TimeoutError" && name !== "TypeError";
+    console.warn(
+      `engine ${reachable ? "returned an unreadable response" : "unreachable"} ` +
+        `for ${path}: ${(error as Error).message}`,
+    );
     return null;
   }
 }

@@ -137,7 +137,7 @@ class Analytics:
                     "sort": "day",
                 }
             )
-        except RuntimeError as exc:
+        except Exception as exc:  # noqa: BLE001 — the long-form route must still answer
             logger.info("no Shorts breakdown available ({}); the long-form route stands", exc)
             return {}
         return {date.fromisoformat(row[0]): int(row[1]) for row in payload.get("rows", [])}

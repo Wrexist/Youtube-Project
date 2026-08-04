@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel
 
@@ -84,7 +84,7 @@ async def refresh_insights() -> dict:
         record.ctr = row["ctr"]
         record.avd_seconds = row["avd_seconds"]
         record.views = row["views"]
-        record.retention_30s = row["avd_percent"]
+        record.avd_percent = row["avd_percent"]
         updated += 1
 
     return {"pulled": len(rows), "matched": updated, "unmatched": len(rows) - updated}
@@ -174,7 +174,7 @@ class ShortsOut(BaseModel):
 
 
 @router.get("/analytics/shorts/{video_id}")
-async def shorts(video_id: str, count: int = 3) -> ShortsOut:
+async def shorts(video_id: str, count: int = Query(3, ge=1, le=10)) -> ShortsOut:
     """Moments in a long-form video worth cutting into a Short.
 
     Reads the retention curve the retention map already pulls, and the beats the
@@ -247,7 +247,16 @@ class ThresholdOut(BaseModel):
 class MonetisationOut(BaseModel):
     eligible: bool
     route: str
-    blocking: str | None
+    blocking: list[str]
+    """What is still in the way, most-limiting first; empty once eligible.
+
+    A list, because both halves of a route can be outstanding at once. This was
+    `str | None`, which Pydantic refuses a list for — so the endpoint returned a
+    500 for every channel that was *not* already monetised, which is every channel
+    the feature exists for. Neither the 20 tests on `progress()` nor the 7 on the
+    card caught it: nothing exercised the seam between them.
+    """
+
     caveat: str | None
     subscribers: ThresholdOut
     watch_hours: ThresholdOut

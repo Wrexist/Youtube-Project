@@ -16,6 +16,7 @@ from engine.shorts import (
     MAX_SECONDS,
     MIN_SECONDS,
     Candidate,
+    _windows,
     detrend,
     find_candidates,
 )
@@ -157,6 +158,22 @@ class TestSelection:
         for pick in picks:
             assert pick.score <= pick.lift + 1e-9
 
+    @pytest.mark.parametrize("count", [0, -1, -100])
+    def test_a_non_positive_count_returns_nothing(self, count):
+        """The loop tested `len(picked) == count` only *after* appending, so zero
+        returned every non-overlapping candidate — the parameter meant the opposite
+        of a limit, and the endpoint forwarded an unbounded integer to it."""
+        curve = with_bump(decaying(), at=0.5, width=0.15, height=25.0)
+        assert find_candidates(curve, beats(30, 10.0), duration_s=300.0, count=count) == []
+
+    def test_the_end_of_an_overlong_beat_is_reachable(self):
+        """One 100s beat strides 30-90 and 60-120 and stops, so a rewatch at 125s
+        could not be scored at all. An end-anchored window closes the tail."""
+        long_beat = [FakeBeat("intro", 20.0), FakeBeat("body", 100.0), FakeBeat("outro", 30.0)]
+        spans = _windows(long_beat, duration_s=150.0)
+        body_end = 20.0 / 150.0 * 150.0 + 100.0
+        assert any(abs(end - body_end) < 1e-6 for _, end, _ in spans)
+
     def test_count_is_respected(self):
         curve = decaying()
         for at in (0.2, 0.4, 0.6, 0.75):
@@ -253,13 +270,10 @@ class TestReporting:
         assert pick.reason.endswith(".")
 
     def test_a_window_that_bleeds_viewers_says_so(self):
-        candidate = Candidate(
-            start_s=0.0,
-            end_s=30.0,
-            label="x",
-            lift=0.2,
-            hold=0.5,
-            score=0.3,
-            reason="",
-        )
-        assert candidate.duration_s == 30.0
+        """Was asserting `duration_s` on a hand-built Candidate with an empty
+        reason — it passed whether or not viewer loss was ever reported."""
+        from engine.shorts import _reason
+
+        assert "lose viewers" in _reason(lift=1.2, hold=0.5, start_s=90.0, duration_s=300.0)
+        assert "holds steady" in _reason(lift=1.2, hold=1.0, start_s=90.0, duration_s=300.0)
+        assert Candidate(0.0, 30.0, "x", 0.2, 0.5, 0.3, "").duration_s == 30.0

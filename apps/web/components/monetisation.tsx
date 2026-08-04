@@ -88,13 +88,22 @@ export function MonetisationCard({ data }: { data: Monetisation }) {
       </div>
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <Bar threshold={data.subscribers} />
+        {/* Not a Bar. The engine sends 0 as a placeholder for a hidden count, and
+            a bar reading "0 / 1,000" states a fact about the channel that nobody
+            knows — directly contradicting the note below it. */}
+        {data.subscriber_count_hidden ? (
+          <p className="self-center text-[13px] text-[var(--color-dim)]">
+            Subscriber count unavailable
+          </p>
+        ) : (
+          <Bar threshold={data.subscribers} />
+        )}
         <Bar threshold={content} />
       </div>
 
-      {!data.eligible && data.blocking && (
+      {!data.eligible && data.blocking.length > 0 && (
         <p className="mt-4 text-[13px] text-[var(--color-dim)]">
-          Held up by {data.blocking}.
+          Held up by {data.blocking.join(" and ")}.
         </p>
       )}
 

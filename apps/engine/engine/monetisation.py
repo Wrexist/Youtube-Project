@@ -31,6 +31,7 @@ implied nowhere.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
@@ -111,8 +112,6 @@ class Threshold:
         rate = self.per_day
         if rate <= 0:
             return None
-        import math
-
         return math.ceil(self.remaining / rate)
 
     def as_dict(self) -> dict:

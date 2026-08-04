@@ -428,11 +428,17 @@ class YouTube:
 
         session_url = init.headers.get("Location")
         if not session_url:
-            # A 200 with no Location is not a session. Without this the next line
-            # raised a bare KeyError *after* the units were booked, which reads in
-            # the log like a bug in our code rather than a refusal from Google.
-            await ledger.refund(entry)
-            raise YouTubeError("upload session opened without a Location header")
+            # A 200 with no Location is not a usable session — but Google answered
+            # 2xx, so it processed the request and the units are plausibly spent.
+            # Deliberately *not* refunded: the two ways to be wrong here are not
+            # symmetric. Over-reporting spend delays an upload until midnight
+            # Pacific; under-reporting it overruns the ceiling, which cannot be
+            # undone. The bare `KeyError` this replaces did neither and read like a
+            # bug in our own code.
+            raise YouTubeError(
+                "upload session opened without a Location header; "
+                "the quota entry is kept because Google answered 2xx"
+            )
 
         # 2. Push chunks, resuming from the last byte the server confirmed.
         offset = 0

@@ -1257,7 +1257,7 @@ export interface components {
         /** MonetisationOut */
         MonetisationOut: {
             /** Blocking */
-            blocking: string | null;
+            blocking: string[];
             /** Caveat */
             caveat: string | null;
             /** Eligible */

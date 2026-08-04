@@ -14,18 +14,19 @@
  *  nothing is worse than no button.
  */
 
-type Cut = {
-  start_s: number;
-  end_s: number;
-  duration_s: number;
-  label: string;
-  reason: string;
-};
+import type { ShortCut } from "@studio/contracts";
+
+/** Only the fields this component draws. Derived from the generated contract
+ *  rather than restated, per CLAUDE.md: "Never hand-write a type that mirrors an
+ *  API response." */
+type Cut = Pick<ShortCut, "start_s" | "end_s" | "duration_s" | "label" | "reason">;
 
 function timestamp(seconds: number) {
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
+  // Rounded first, then split. Flooring the minutes before rounding the remainder
+  // renders 59.6 as "0:60" and 119.6 as "1:60".
+  const total = Math.round(seconds);
+  const m = Math.floor(total / 60);
+  return `${m}:${String(total % 60).padStart(2, "0")}`;
 }
 
 export function ShortCuts({ cuts, note }: { cuts: Cut[]; note?: string | null }) {

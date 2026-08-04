@@ -34,7 +34,7 @@ function data(over: Partial<Monetisation> = {}): Monetisation {
   return {
     eligible: false,
     route: "watch_hours",
-    blocking: null,
+    blocking: [],
     caveat: null,
     subscriber_count_hidden: false,
     subscribers: threshold({ name: "subscribers", current: 50, target: 1000 }),
@@ -61,7 +61,7 @@ describe("MonetisationCard", () => {
             window_days: 365,
             days_remaining: 60,
           }),
-          blocking: "subscribers",
+          blocking: ["subscribers"],
         })}
       />,
     );
@@ -88,8 +88,20 @@ describe("MonetisationCard", () => {
   });
 
   it("names what is holding monetisation up", () => {
-    render(<MonetisationCard data={data({ blocking: "subscribers" })} />);
+    render(<MonetisationCard data={data({ blocking: ["subscribers"] })} />);
     expect(screen.getByText(/Held up by subscribers/)).toBeInTheDocument();
+  });
+
+  it("names both blockers when both are outstanding", () => {
+    // `blocking` is a list because both halves of a route can be outstanding at
+    // once. It was typed `str | None` on the engine, which made the endpoint 500
+    // for every channel that was not already monetised.
+    render(
+      <MonetisationCard data={data({ blocking: ["subscribers", "watch hours"] })} />,
+    );
+    expect(
+      screen.getByText(/Held up by subscribers and watch hours/),
+    ).toBeInTheDocument();
   });
 
   it("draws only the route in play, never both", () => {
@@ -110,6 +122,9 @@ describe("MonetisationCard", () => {
   it("says so when the subscriber count is hidden rather than drawing a zero", () => {
     render(<MonetisationCard data={data({ subscriber_count_hidden: true })} />);
     expect(screen.getByText(/hides its subscriber count/)).toBeInTheDocument();
+    // The engine sends 0 as the placeholder. Drawn as a bar it reads as a fact.
+    expect(screen.getAllByRole("progressbar")).toHaveLength(1);
+    expect(screen.getByText(/Subscriber count unavailable/)).toBeInTheDocument();
   });
 
   it("shows the caveat when the window is incomplete", () => {

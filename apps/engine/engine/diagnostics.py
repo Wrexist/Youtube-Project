@@ -140,9 +140,33 @@ def _check_tts_trust(report: Report) -> None:
     the research and the whole script chain have already been paid for. Saying so
     up front costs nothing.
     """
-    from engine.workflows.media import _trust_extra_cas
+    import os
 
+    from engine.workflows.media import _CA_BUNDLE_VARS, _trust_extra_cas
+
+    configured = next((os.environ[v] for v in _CA_BUNDLE_VARS if os.environ.get(v)), None)
     bundle = _trust_extra_cas()
+
+    if configured and not bundle:
+        # The three "no bundle applied" outcomes are not the same thing.
+        # `_trust_extra_cas()` returns None for *no bundle configured* and also for
+        # a configured path that is missing or that upstream's private `_SSL_CTX`
+        # no longer exists to receive — and reporting all three as healthy meant a
+        # proxy-dependent install passed diagnostics and then failed at voiceover.
+        report.add(
+            Check(
+                key="tts_trust",
+                name="Voiceover TLS",
+                level="fail",
+                detail=f"{configured} is configured but was not applied",
+                fix=(
+                    "Check the path exists and is readable. If it does, edge-tts has "
+                    "moved its SSL context and `_trust_extra_cas` needs updating."
+                ),
+            )
+        )
+        return
+
     if bundle:
         report.add(
             Check(

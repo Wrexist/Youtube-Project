@@ -94,7 +94,7 @@ class TestRoundTrip:
             "published_at": "2026-01-01T00:00:00+00:00",
             "ctr": 0.0,
             "avd_seconds": 0.0,
-            "retention_30s": 0.0,
+            "avd_percent": 0.0,
             "views": 0,
             "title_strategy": "",
             "hook_device": "",

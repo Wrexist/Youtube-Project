@@ -176,9 +176,17 @@ def _windows(beats: list, duration_s: float) -> list[tuple[float, float, str]]:
         label = beat.purpose[:60]
         step = MAX_SECONDS / 2
         cursor = start
+        last_start: float | None = None
         while cursor + MAX_SECONDS <= end:
             out.append((cursor, cursor + MAX_SECONDS, label))
+            last_start = cursor
             cursor += step
+        # The stride leaves a tail: a beat from 30s to 130s emitted 30–90 and
+        # 60–120, so a rewatch at 125s could not be scored at all. Anchor one window
+        # to the end when the stride did not already land there.
+        tail = end - MAX_SECONDS
+        if last_start is None or abs(last_start - tail) > 1e-9:
+            out.append((tail, end, label))
 
     return out
 
@@ -245,6 +253,11 @@ def find_candidates(
     standout moment, and inventing three is how a feature stops being believed.
     """
     if not curve or not beats or duration_s <= 0:
+        return []
+    if count <= 0:
+        # Checked up front. The loop below tests `len(picked) == count` only *after*
+        # appending, so a zero or negative count returned every non-overlapping
+        # candidate — the parameter meant the opposite of a limit.
         return []
 
     spread = max(curve) - min(curve)

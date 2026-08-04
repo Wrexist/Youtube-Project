@@ -620,15 +620,11 @@
       "MonetisationOut": {
         "properties": {
           "blocking": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Blocking"
+            "items": {
+              "type": "string"
+            },
+            "title": "Blocking",
+            "type": "array"
           },
           "caveat": {
             "anyOf": [
@@ -1416,6 +1412,8 @@
             "required": false,
             "schema": {
               "default": 3,
+              "maximum": 10,
+              "minimum": 1,
               "title": "Count",
               "type": "integer"
             }

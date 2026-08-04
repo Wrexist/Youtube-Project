@@ -181,9 +181,15 @@ def decrypt(ciphertext: str) -> str:
 
 
 def needs_reencryption(ciphertext: str) -> bool:
-    """Whether this value is still under the legacy key."""
+    """Whether this value is still under the legacy key.
+
+    Raises `DecryptionFailed` for a value neither key opens. Returning `True` there
+    would tell a caller to migrate a credential that cannot be read at all, and the
+    migration would then write back nothing.
+    """
     try:
         _cipher().decrypt(ciphertext.encode())
     except InvalidToken:
+        decrypt(ciphertext)  # raises DecryptionFailed if the legacy key fails too
         return True
     return False

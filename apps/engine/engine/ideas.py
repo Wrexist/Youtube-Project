@@ -99,7 +99,10 @@ class Idea:
         reason about: at `FRESHNESS_HALF_LIFE_DAYS` old it is worth half as much,
         at twice that a quarter.
         """
-        now = now or datetime.now(UTC)
+        # `_aware` on the *argument* too, not just on `created_at`. A caller passing
+        # a naive `now` against an aware `created_at` raised TypeError, which is not
+        # "stale" and reaches nobody's error handling.
+        now = _aware(now or datetime.now(UTC))
         age_days = max((now - _aware(self.created_at)).total_seconds() / 86400.0, 0.0)
         return round(self.freshness * 0.5 ** (age_days / FRESHNESS_HALF_LIFE_DAYS), 4)
 
@@ -420,11 +423,15 @@ def next_up(
     full value on day 44 and vanishing on day 46. The cliff was doing two jobs, and
     only one of them was a cliff.
     """
-    now = now or datetime.now(UTC)
+    now = _aware(now or datetime.now(UTC))
     cutoff = now - timedelta(days=max_age_days)
     fresh = [
         idea
         for idea in backlog
-        if idea.status is IdeaStatus.BACKLOG and _aware(idea.created_at) >= cutoff
+        # Bounded at both ends. A future `created_at` has zero age, so it kept full
+        # trend weight *and* cleared the cutoff — a record dated a year ahead
+        # outranked everything real for a year. Clock skew and hand-edited rows both
+        # produce one.
+        if idea.status is IdeaStatus.BACKLOG and cutoff <= _aware(idea.created_at) <= now
     ]
     return sorted(fresh, key=lambda i: -i.score_at(now))[:count]
