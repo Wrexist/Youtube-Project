@@ -276,6 +276,39 @@ export const RETENTION_BEAT_MAP = [
   { at: 86, label: "Payoff", drop: 11, worst: false },
 ];
 
+/** Stretches of the video above worth cutting into a Short.
+ *
+ *  Not hand-written: this is the literal output of `engine/shorts.py` run against
+ *  `RETENTION` and `RETENTION_BEATS` above, so the demo shows what the algorithm
+ *  actually does rather than a flattering version of it. Two entries, not three —
+ *  that curve only has two stretches that rise above their own decay, and the
+ *  selector says so instead of padding the list.
+ */
+export const SHORT_CUTS = [
+  {
+    start_s: 408,
+    end_s: 468,
+    duration_s: 60,
+    label: "Counter-argument",
+    lift: 1.05,
+    hold: 0.829,
+    score: 0.871,
+    reason:
+      "Retention runs well above the surrounding stretch, 68% in, though it does lose viewers towards the end.",
+  },
+  {
+    start_s: 204,
+    end_s: 264,
+    duration_s: 60,
+    label: "Case study",
+    lift: 0.573,
+    hold: 0.797,
+    score: 0.457,
+    reason:
+      "Retention runs above the surrounding stretch, 34% in, though it does lose viewers towards the end.",
+  },
+];
+
 /** Finished videos waiting for a publish slot. */
 export const PENDING_VIDEOS = [
   { id: "p1", title: "Why bridges collapse", format: "long" as const, duration: "8:02" },

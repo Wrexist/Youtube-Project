@@ -968,6 +968,92 @@
         "title": "SetupStatus",
         "type": "object"
       },
+      "ShortCandidateOut": {
+        "properties": {
+          "duration_s": {
+            "title": "Duration S",
+            "type": "number"
+          },
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "hold": {
+            "title": "Hold",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lift": {
+            "title": "Lift",
+            "type": "number"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "duration_s",
+          "label",
+          "lift",
+          "hold",
+          "score",
+          "reason"
+        ],
+        "title": "ShortCandidateOut",
+        "type": "object"
+      },
+      "ShortsOut": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ShortCandidateOut"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "duration_s": {
+            "title": "Duration S",
+            "type": "number"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "video_id",
+          "duration_s",
+          "candidates",
+          "note"
+        ],
+        "title": "ShortsOut",
+        "type": "object"
+      },
       "TaskRoute": {
         "properties": {
           "group": {
@@ -1305,6 +1391,59 @@
           }
         },
         "summary": "Retention",
+        "tags": [
+          "insights"
+        ]
+      }
+    },
+    "/v1/analytics/shorts/{video_id}": {
+      "get": {
+        "description": "Moments in a long-form video worth cutting into a Short.\n\nReads the retention curve the retention map already pulls, and the beats the\nscript was written in, so the only new cost is one `videos.list` unit for the\nruntime.\n\nAn empty list is a real answer and comes with a `note` saying why \u2014 a video\nwhose retention never rises above its own decay has no standout moment, and\noffering three arbitrary windows instead would make every later ranking\nunbelievable.",
+        "operationId": "shorts_v1_analytics_shorts__video_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "count",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "title": "Count",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShortsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Shorts",
         "tags": [
           "insights"
         ]

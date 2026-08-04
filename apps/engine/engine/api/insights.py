@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from engine import monetisation as monetisation_progress
+from engine import shorts as shorts_from_retention
 from engine.api.publishing import CHANNELS
 from engine.insights import VideoRecord, analyze, map_retention_to_beats
 from engine.providers import youtube
@@ -109,6 +110,80 @@ async def audience() -> dict:
             "hour-of-day shape remains an estimate even once weekday data is measured."
         ),
     }
+
+
+class ShortCandidateOut(BaseModel):
+    start_s: float
+    end_s: float
+    duration_s: float
+    label: str
+    lift: float
+    hold: float
+    score: float
+    reason: str
+
+
+class ShortsOut(BaseModel):
+    video_id: str
+    duration_s: float
+    candidates: list[ShortCandidateOut]
+    note: str | None
+    """Set when the list is empty, saying which of the several reasons it was."""
+
+
+@router.get("/analytics/shorts/{video_id}")
+async def shorts(video_id: str, count: int = 3) -> ShortsOut:
+    """Moments in a long-form video worth cutting into a Short.
+
+    Reads the retention curve the retention map already pulls, and the beats the
+    script was written in, so the only new cost is one `videos.list` unit for the
+    runtime.
+
+    An empty list is a real answer and comes with a `note` saying why — a video
+    whose retention never rises above its own decay has no standout moment, and
+    offering three arbitrary windows instead would make every later ranking
+    unbelievable.
+    """
+    record = RECORDS.get(video_id)
+    if record is None:
+        raise HTTPException(404, "no provenance recorded for that video")
+
+    beats = getattr(record, "beats", [])
+    if not beats:
+        return ShortsOut(
+            video_id=video_id,
+            duration_s=0.0,
+            candidates=[],
+            note=(
+                "This video has no script beats recorded, so there is nothing to cut "
+                "on. Beats are what make a clip start at the top of a thought."
+            ),
+        )
+
+    creds = CHANNELS.get("default")
+    if creds is None:
+        raise HTTPException(409, "no channel connected")
+
+    duration_s = await youtube.YouTube(creds).duration_seconds(video_id)
+    if not duration_s:
+        raise HTTPException(502, "could not read the video's duration from YouTube")
+
+    curve = await Analytics(creds).retention(video_id)
+    candidates = shorts_from_retention.find_candidates(curve, beats, duration_s, count=count)
+
+    note = None
+    if not candidates:
+        note = (
+            "Retention on this video never rises above its own decay by enough to "
+            "call any stretch a standout. That usually means it holds evenly rather "
+            "than that it has no good moment — there is just nothing here to rank."
+        )
+    return ShortsOut(
+        video_id=video_id,
+        duration_s=round(duration_s, 2),
+        candidates=[ShortCandidateOut(**c.as_dict()) for c in candidates],
+        note=note,
+    )
 
 
 class ThresholdOut(BaseModel):

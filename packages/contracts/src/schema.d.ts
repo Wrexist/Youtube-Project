@@ -112,6 +112,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/analytics/shorts/{video_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Shorts
+         * @description Moments in a long-form video worth cutting into a Short.
+         *
+         *     Reads the retention curve the retention map already pulls, and the beats the
+         *     script was written in, so the only new cost is one `videos.list` unit for the
+         *     runtime.
+         *
+         *     An empty list is a real answer and comes with a `note` saying why — a video
+         *     whose retention never rises above its own decay has no standout moment, and
+         *     offering three arbitrary windows instead would make every later ranking
+         *     unbelievable.
+         */
+        get: operations["shorts_v1_analytics_shorts__video_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/google": {
         parameters: {
             query?: never;
@@ -1363,6 +1392,36 @@ export interface components {
             /** Worker Running */
             worker_running: boolean;
         };
+        /** ShortCandidateOut */
+        ShortCandidateOut: {
+            /** Duration S */
+            duration_s: number;
+            /** End S */
+            end_s: number;
+            /** Hold */
+            hold: number;
+            /** Label */
+            label: string;
+            /** Lift */
+            lift: number;
+            /** Reason */
+            reason: string;
+            /** Score */
+            score: number;
+            /** Start S */
+            start_s: number;
+        };
+        /** ShortsOut */
+        ShortsOut: {
+            /** Candidates */
+            candidates: components["schemas"]["ShortCandidateOut"][];
+            /** Duration S */
+            duration_s: number;
+            /** Note */
+            note: string | null;
+            /** Video Id */
+            video_id: string;
+        };
         /** TaskRoute */
         TaskRoute: {
             /** Group */
@@ -1559,6 +1618,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    shorts_v1_analytics_shorts__video_id__get: {
+        parameters: {
+            query?: {
+                count?: number;
+            };
+            header?: never;
+            path: {
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShortsOut"];
                 };
             };
             /** @description Validation Error */

@@ -267,7 +267,7 @@ right. Per screen, as of today:
 | Queue, Library, Models | live, falling back to `demo.ts` when the engine is unreachable |
 | Setup, Welcome | live only — no fallback, deliberately. They show "the engine is not running" instead of plausible fiction, because a setup screen that invents its own state is worse than one that admits it is blind |
 | Calendar | mixed even when live: quota and bookings come from the engine, the draggable video tray is always `PENDING_VIDEOS` |
-| Analytics | partly live: the monetisation card reads `GET /v1/analytics/monetisation` and hides itself when the engine is unreachable or no channel is connected. Everything below it is still demo — the per-video and retention panels remain unwired |
+| Analytics | partly live: the monetisation card reads `GET /v1/analytics/monetisation` and hides itself when the engine is unreachable or no channel is connected. Everything below it is still demo — the per-video, retention and Short-cut panels remain unwired. The Short-cut fixture in `demo.ts` is at least the genuine output of `engine/shorts.py` run over the demo retention curve, not an invented one |
 | Series, New channel | demo only, **no network call at all** — there is no series table, and the channel-launch endpoint has no caller |
 
 Series and New channel used to ship five buttons wired to nothing, including both
@@ -337,6 +337,14 @@ pointing at cues that no longer existed.
 - **No thumbnail A/B swapping**, which Phase 8's attribution is otherwise ready for.
 - **No trend monitoring.** The idea backlog accepts a `trending_terms` argument that
   nothing currently supplies.
+- **Shorts are selected but not cut.** `GET /v1/analytics/shorts/{video_id}` ranks
+  the stretches of a long-form video worth clipping and says why, but nothing
+  renders the clip. Two things are missing and neither is small: `VideoRecord`
+  carries no path to the rendered master, so there is no file to cut from, and a
+  9:16 crop of 16:9 footage needs a subject to crop *around* — a centre crop of a
+  talking-head shot is fine and a centre crop of anything else is not. Until both
+  exist the endpoint is a recommendation, which is why the UI shows timestamps and
+  no "Cut this" button.
 
 ---
 

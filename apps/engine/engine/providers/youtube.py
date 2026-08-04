@@ -561,6 +561,41 @@ class YouTube:
         items = resp.json().get("items", [])
         return items[0]["processingDetails"]["processingStatus"] if items else "unknown"
 
+    async def duration_seconds(self, video_id: str) -> float | None:
+        """The video's real runtime, for locating a retention fraction in seconds.
+
+        Worth one quota unit rather than being inferred: the nearest thing already
+        on hand is `avd_seconds`, which is *average view duration* — how long the
+        median viewer stayed, not how long the video is. On a video people leave
+        early, the two differ by a factor of several, and every timestamp derived
+        from the wrong one lands somewhere the moment is not.
+        """
+        resp = await self._call(
+            "GET",
+            f"{API}/videos",
+            "videos.list",
+            params={"part": "contentDetails", "id": video_id},
+        )
+        items = resp.json().get("items", [])
+        if not items:
+            return None
+        raw = items[0].get("contentDetails", {}).get("duration")
+        return _parse_iso8601_duration(raw) if raw else None
+
+
+def _parse_iso8601_duration(value: str) -> float | None:
+    """Parse the `PT#H#M#S` form the Data API reports durations in.
+
+    Not `timedelta` — the stdlib has no ISO-8601 duration parser, and the subset
+    YouTube emits for a video is small enough to read directly.
+    """
+    match = re.fullmatch(r"P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?", value)
+    if not match:
+        return None
+    days, hours, minutes, seconds = (float(g or 0) for g in match.groups())
+    total = days * 86400 + hours * 3600 + minutes * 60 + seconds
+    return total or None
+
 
 def _read_at(fh, offset: int, size: int) -> bytes:
     """Positioned read, run in a thread by the uploader."""

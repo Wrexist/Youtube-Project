@@ -24,6 +24,7 @@ import type {
   Diagnostics,
   Insights,
   Monetisation,
+  Shorts,
   JobCreated,
   JobRequest,
   JobStatus,
@@ -182,6 +183,8 @@ export const getSlots = (days = 14) => get<CalendarSlots>(`/v1/calendar/slots?da
 export const getChannels = () => get<Channels>("/v1/channels");
 export const getInsights = () => get<Insights>("/v1/insights");
 export const getMonetisation = () => get<Monetisation>("/v1/analytics/monetisation");
+export const getShorts = (videoId: string, count = 3) =>
+  get<Shorts>(`/v1/analytics/shorts/${encodeURIComponent(videoId)}?count=${count}`);
 export const getModels = () => get<Models>("/v1/models");
 export const getWorkflow = (name: string) => get<WorkflowGraph>(`/v1/workflows/${name}`);
 export const getJob = (id: string) => get<Record<string, unknown>>(`/v1/jobs/${id}`);
