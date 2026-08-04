@@ -2060,6 +2060,30 @@
         ]
       }
     },
+    "/v1/insights/review": {
+      "post": {
+        "description": "Run the weekly review now, rather than waiting for Monday.\n\nThe same work the cron job does, including storing this run's snapshot \u2014 so a\nmanual run genuinely becomes the baseline the next diff compares against,\ninstead of producing a report that vanishes and lets Monday re-report\neverything it already showed.",
+        "operationId": "run_review_v1_insights_review_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Review V1 Insights Review Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Review",
+        "tags": [
+          "insights"
+        ]
+      }
+    },
     "/v1/jobs": {
       "get": {
         "description": "Every job, newest first.\n\nThis did not exist, so the Queue and Library had nothing to read and rendered\ndemo data permanently \u2014 generate a video and neither screen would ever change.\nThey are the two screens someone looks at immediately after pressing Generate.\n\n`status` filters to one state; the Library asks for `completed` and the Queue\ntakes everything.",

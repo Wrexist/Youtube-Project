@@ -62,7 +62,7 @@ npm run dev                                 # web on :3000 (one half only)
 apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
 apps/engine/.venv/bin/python -m alembic -c apps/engine/alembic.ini upgrade head   # schema
-apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings   # render worker
+apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings   # render worker + weekly review cron
 ```
 
 `-c apps/engine/alembic.ini` is not optional from the repo root: `alembic.ini` lives

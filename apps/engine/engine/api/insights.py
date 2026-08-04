@@ -62,6 +62,20 @@ async def refresh_insights() -> dict:
     return {"pulled": len(rows), "matched": updated, "unmatched": len(rows) - updated}
 
 
+@router.post("/insights/review")
+async def run_review() -> dict:
+    """Run the weekly review now, rather than waiting for Monday.
+
+    The same work the cron job does, including storing this run's snapshot — so a
+    manual run genuinely becomes the baseline the next diff compares against,
+    instead of producing a report that vanishes and lets Monday re-report
+    everything it already showed.
+    """
+    from engine import review as weekly
+
+    return (await weekly.run()).as_dict()
+
+
 @router.get("/analytics/daily")
 async def daily(days: int = 28) -> dict:
     rows = await _channel().daily(days=days)

@@ -475,6 +475,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/insights/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Review
+         * @description Run the weekly review now, rather than waiting for Monday.
+         *
+         *     The same work the cron job does, including storing this run's snapshot — so a
+         *     manual run genuinely becomes the baseline the next diff compares against,
+         *     instead of producing a report that vanishes and lets Monday re-report
+         *     everything it already showed.
+         */
+        post: operations["run_review_v1_insights_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/jobs": {
         parameters: {
             query?: never;
@@ -2111,6 +2136,28 @@ export interface operations {
         };
     };
     refresh_insights_v1_insights_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    run_review_v1_insights_review_post: {
         parameters: {
             query?: never;
             header?: never;

@@ -141,3 +141,25 @@ class PerformanceRecord(Base):
     job_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class ReviewSnapshot(Base):
+    """What the weekly review believed, one row per run.
+
+    Kept as history rather than a single overwritten row: the diff only needs the
+    latest, but "when did this become confirmed" is the question anyone will ask
+    the first time a finding changes the generator's behaviour, and it cannot be
+    reconstructed after the fact.
+
+    `payload` holds the trimmed snapshot from `review.snapshot()` — four strings
+    and a verdict per finding — not the full report. See the note there.
+    """
+
+    __tablename__ = "review_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    video_count: Mapped[int] = mapped_column(Integer, default=0)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, index=True
+    )

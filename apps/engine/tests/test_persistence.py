@@ -585,6 +585,18 @@ async def fresh_sqlite(tmp_path, monkeypatch):
     db.engine.cache_clear()
 
 
+def _table_count() -> int:
+    """Read from the metadata rather than written down.
+
+    These two tests are about stamping, not about how many tables exist. Hardcoded,
+    the number turns every new table into two unrelated red tests and tells whoever
+    added it nothing about what they broke.
+    """
+    from engine.tables import Base
+
+    return len(Base.metadata.tables)
+
+
 async def test_a_schema_built_from_metadata_is_stamped_at_head(fresh_sqlite):
     summary = await db.ensure_schema()
     assert _head() in summary, "the startup log should say which revision it landed on"
@@ -594,7 +606,7 @@ async def test_a_schema_built_from_metadata_is_stamped_at_head(fresh_sqlite):
 async def test_stamping_is_not_repeated_on_the_second_boot(fresh_sqlite):
     """A second row makes Alembic ambiguous about where the database is."""
     await db.ensure_schema()
-    assert await db.ensure_schema() == "schema present (6 tables)"
+    assert await db.ensure_schema() == f"schema present ({_table_count()} tables)"
     assert await _version_rows(fresh_sqlite) == [_head()]
 
 
@@ -627,5 +639,5 @@ async def test_a_missing_alembic_ini_does_not_break_startup(fresh_sqlite, monkey
     guaranteed to exist — installed as a wheel, it is not there.
     """
     monkeypatch.setattr(db, "_stamp_head", lambda conn: None)
-    assert await db.ensure_schema() == "created schema (6 tables)"
+    assert await db.ensure_schema() == f"created schema ({_table_count()} tables)"
     assert await _version_rows(fresh_sqlite) == []

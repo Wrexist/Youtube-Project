@@ -34,7 +34,14 @@ from sqlalchemy import delete, select
 
 from engine.db import session
 from engine.insights import VideoRecord
-from engine.tables import Channel, ChannelLaunch, Job, PerformanceRecord, ScheduleSlot
+from engine.tables import (
+    Channel,
+    ChannelLaunch,
+    Job,
+    PerformanceRecord,
+    ReviewSnapshot,
+    ScheduleSlot,
+)
 from engine.workflows.base import StageState, StageStatus
 
 # ── stage state (de)serialisation ───────────────────────────────────────────
@@ -411,6 +418,32 @@ async def load_performance_records() -> dict[str, VideoRecord]:
         if record is not None:
             records[record.video_id] = record
     return records
+
+
+async def save_review_snapshot(payload: dict, video_count: int) -> None:
+    """Record what the weekly review believed, for next week's diff to read."""
+    if not _persistence_enabled():
+        return
+    async with session() as db:
+        db.add(ReviewSnapshot(payload=payload, video_count=video_count))
+
+
+async def latest_review_snapshot() -> dict | None:
+    """The most recent snapshot, or None when no review has ever run.
+
+    None and an empty snapshot are different answers and must stay so: no previous
+    review means every finding is reported as new, while a previous review that
+    found nothing means a finding appearing now genuinely appeared.
+    """
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = (
+            await db.execute(
+                select(ReviewSnapshot).order_by(ReviewSnapshot.generated_at.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+    return row.payload if row is not None else None
 
 
 # The old private name, kept because save_job and the tests both use it.

@@ -28,7 +28,7 @@ import json
 from contextlib import suppress
 from typing import Any
 
-from arq import create_pool
+from arq import create_pool, cron
 from arq.connections import RedisSettings
 from arq.constants import default_queue_name, health_check_key_suffix
 from loguru import logger
@@ -319,6 +319,17 @@ async def startup(_ctx: dict) -> None:
         await ledger.load()
 
 
+async def weekly_review_task(ctx: dict) -> dict:  # noqa: ARG001 — arq passes ctx
+    """Re-read what the system has learned, and report what changed.
+
+    Returns the review as a dict so it lands in arq's result store, where it can be
+    read back without a database round trip.
+    """
+    from engine import review
+
+    return (await review.run()).as_dict()
+
+
 class WorkerSettings:
     """`python -m arq engine.worker.WorkerSettings`.
 
@@ -330,6 +341,27 @@ class WorkerSettings:
     """
 
     functions: list[Any] = [run_job_task]
+    cron_jobs: list[Any] = [
+        # Monday 06:00 UTC. Deliberately not "every 7 days from whenever the worker
+        # last restarted" — a review that lands on a different weekday each time is
+        # one nobody builds a habit of reading.
+        #
+        # `hour` and `minute` are set explicitly because arq reads an unset field
+        # as *every* value: `cron(fn, weekday="mon")` alone runs 1,440 times on
+        # Monday, not once. (`second` already defaults to 0, so it needs no help.)
+        #
+        # `run_at_startup` is off for a different reason: a worker restart is not a
+        # week passing, and a review triggered by one consumes the snapshot the
+        # real weekly diff was going to compare against.
+        cron(
+            weekly_review_task,
+            weekday="mon",
+            hour=6,
+            minute=0,
+            second=0,
+            run_at_startup=False,
+        )
+    ]
     on_startup = startup
     redis_settings: RedisSettings = build_redis_settings()
     max_jobs = 4
