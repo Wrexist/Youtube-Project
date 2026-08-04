@@ -140,6 +140,29 @@ reads. Recorded here so it stops being re-flagged as a bug: it is a decision, no
 oversight. `providers/analytics.py` used to claim in its own docstring that these
 calls *were* recorded; that claim is gone.
 
+### 3.2c edge-tts ignores the standard TLS and proxy environment variables
+**Status:** worked around, but the workaround reaches into a private global.
+
+Every other outbound call in this repo goes through `httpx`, which reads
+`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and the proxy variables. edge-tts does not: it
+reaches Azure over a WebSocket and verifies against a module-level context built
+from `certifi` at import, which it passes explicitly to `ws_connect(ssl=...)`.
+Behind a TLS-inspecting proxy — every corporate network, most CI runners — it is the
+only provider that fails, with `CERTIFICATE_VERIFY_FAILED`, at **stage 9 of 17**,
+after the research and the entire script chain have been paid for.
+
+`_trust_extra_cas()` in `workflows/media.py` loads the configured bundle into that
+context (additive — certifi's roots stay, nothing is disabled) and `_tts_proxy()`
+passes the proxy edge-tts never reads for itself. `scripts/doctor.py` reports which
+roots are in use.
+
+The fragile part is `edge_tts.communicate._SSL_CTX`, a private name in someone
+else's package. If upstream renames it the code logs a warning and carries on, which
+is correct on every network that does not need the bundle. A first attempt at this
+fix passed edge-tts a `TCPConnector` carrying our context; it looked right and did
+nothing, because the explicit `ssl=` argument to `ws_connect` wins. The regression
+test pins the context, not the connector.
+
 ### 3.3 Music licensing
 Nothing ships with licensed music. MoneyPrinterTurbo's bundled `resource/songs` has
 unclear provenance and is deliberately **not** carried over — it is excluded from the

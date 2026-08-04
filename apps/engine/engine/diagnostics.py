@@ -132,6 +132,38 @@ def _check_imports(report: Report) -> None:
         )
 
 
+def _check_tts_trust(report: Report) -> None:
+    """Whether the voiceover stage can verify Azure's certificate.
+
+    Reported separately from the other network checks because it is the one that
+    fails *late*: voiceover is stage 9 of 17, so a TLS problem here surfaces after
+    the research and the whole script chain have already been paid for. Saying so
+    up front costs nothing.
+    """
+    from engine.workflows.media import _trust_extra_cas
+
+    bundle = _trust_extra_cas()
+    if bundle:
+        report.add(
+            Check(
+                key="tts_trust",
+                name="Voiceover TLS",
+                level="ok",
+                detail=f"edge-tts also trusting {bundle}",
+            )
+        )
+        return
+
+    report.add(
+        Check(
+            key="tts_trust",
+            name="Voiceover TLS",
+            level="ok",
+            detail="using the default certificate roots",
+        )
+    )
+
+
 def _check_ffmpeg(report: Report) -> None:
     if shutil.which("ffmpeg"):
         report.add(Check(key="ffmpeg", name="ffmpeg", level="ok", detail="on PATH"))
@@ -473,7 +505,7 @@ async def run(*, include_network: bool = True) -> Report:
     report = Report()
 
     checks: list = [_check_python, _check_imports, _check_ffmpeg, _check_env_file]
-    checks += [_check_font, _check_database, _check_redis, _check_keys]
+    checks += [_check_font, _check_database, _check_redis, _check_keys, _check_tts_trust]
     if include_network:
         checks.append(_check_grounding)
 
