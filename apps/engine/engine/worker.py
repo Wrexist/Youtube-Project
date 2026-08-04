@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from arq import create_pool, cron
 from arq.connections import RedisSettings
@@ -34,6 +34,9 @@ from arq.constants import default_queue_name, health_check_key_suffix
 from loguru import logger
 
 from engine.settings import get_settings
+
+if TYPE_CHECKING:  # imported at call time inside the task, to keep worker start cheap.
+    from engine.review import ReviewPayload
 
 # One channel per job. Subscribing per job rather than filtering one firehose
 # keeps a busy queue from waking every open browser tab.
@@ -341,7 +344,7 @@ async def hydrate_analytics_state() -> None:
     publishing.SCHEDULE.update(await repository.load_schedule())
 
 
-async def weekly_review_task(ctx: dict) -> dict:  # noqa: ARG001 — arq passes ctx
+async def weekly_review_task(ctx: dict[str, Any]) -> ReviewPayload:  # noqa: ARG001 — arq passes ctx
     """Re-read what the system has learned, and report what changed.
 
     Returns the review as a dict so it lands in arq's result store, where it can be

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any, TypedDict
 
 from loguru import logger
 
@@ -33,6 +34,58 @@ from engine.insights import Finding, InsightReport, Verdict
 
 #: A finding's identity: what it claims, with the numbers deliberately left out.
 Key = tuple[str, str, str, str]
+
+
+class FindingIdentity(TypedDict):
+    """One row of a stored snapshot: a finding's identity plus what we believed."""
+
+    dimension: str
+    metric: str
+    winner: str
+    loser: str
+    verdict: str
+
+
+class Snapshot(TypedDict):
+    """What is written to `review_snapshots.payload` and read back a week later."""
+
+    findings: list[FindingIdentity]
+
+
+class About(TypedDict):
+    """The subject of a change, for the kind that carries no finding."""
+
+    dimension: str
+    metric: str
+    winner: str
+    loser: str
+
+
+class ChangePayload(TypedDict):
+    kind: str
+    was: str | None
+    about: About | None
+    sentence: str
+    finding: dict[str, Any] | None
+
+
+class ReviewPayload(TypedDict):
+    """The review as it crosses the arq result store and the API.
+
+    Named rather than `dict` because this shape has three consumers that never
+    see each other — the worker's return value, the persisted snapshot, and next
+    week's diff — and a silent divergence between them is exactly the failure the
+    review exists to catch elsewhere.
+    """
+
+    generated_at: str
+    video_count: int
+    is_first: bool
+    worth_reading: bool
+    confirmed_count: int
+    findings: list[dict[str, Any]]
+    skipped: list[str]
+    changes: list[ChangePayload]
 
 
 def key_of(finding: Finding) -> Key:
@@ -115,7 +168,7 @@ class Review:
         """
         return bool(self.changes)
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> ReviewPayload:
         return {
             "generated_at": self.generated_at.isoformat(),
             "video_count": self.video_count,
@@ -146,7 +199,7 @@ class Review:
         }
 
 
-def snapshot(report: InsightReport) -> dict:
+def snapshot(report: InsightReport) -> Snapshot:
     """The minimum a future diff needs: each finding's identity and its verdict.
 
     Deliberately not the whole report. A snapshot is stored every week forever, and
@@ -166,7 +219,7 @@ def snapshot(report: InsightReport) -> dict:
     }
 
 
-def diff(previous: dict | None, report: InsightReport) -> tuple[list[Change], bool]:
+def diff(previous: Snapshot | None, report: InsightReport) -> tuple[list[Change], bool]:
     """Compare this week's findings against a stored snapshot.
 
     Returns the changes and whether this is the first review (no previous snapshot).
@@ -229,7 +282,7 @@ def diff(previous: dict | None, report: InsightReport) -> tuple[list[Change], bo
     return changes, False
 
 
-def build(report: InsightReport, previous: dict | None, video_count: int) -> Review:
+def build(report: InsightReport, previous: Snapshot | None, video_count: int) -> Review:
     """Assemble a `Review` from a fresh report and the previous week's snapshot."""
     changes, is_first = diff(previous, report)
     return Review(

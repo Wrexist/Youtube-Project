@@ -27,13 +27,16 @@ from __future__ import annotations
 from dataclasses import asdict, fields
 from datetime import UTC, datetime
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from sqlalchemy import delete, select
 
 from engine.db import session
 from engine.insights import VideoRecord
+
+if TYPE_CHECKING:  # `review` imports this module at call time; keep the cycle unrun.
+    from engine.review import Snapshot
 from engine.tables import (
     Channel,
     ChannelLaunch,
@@ -459,7 +462,7 @@ async def load_performance_records() -> dict[str, VideoRecord]:
     return records
 
 
-async def save_review_snapshot(payload: dict, video_count: int) -> None:
+async def save_review_snapshot(payload: Snapshot, video_count: int) -> None:
     """Record what the weekly review believed, for next week's diff to read."""
     if not _persistence_enabled():
         return
@@ -467,7 +470,7 @@ async def save_review_snapshot(payload: dict, video_count: int) -> None:
         db.add(ReviewSnapshot(payload=payload, video_count=video_count))
 
 
-async def latest_review_snapshot() -> dict | None:
+async def latest_review_snapshot() -> Snapshot | None:
     """The most recent snapshot, or None when no review has ever run.
 
     None and an empty snapshot are different answers and must stay so: no previous
