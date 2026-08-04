@@ -97,10 +97,19 @@ export async function get<T>(path: string): Promise<T | null> {
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: { accept: "application/json" },
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // Still `null`, because every caller's fallback is the same. But a 500 from a
+      // live engine and a stopped engine are not the same event, and until now they
+      // were indistinguishable everywhere — including in the logs. A broken
+      // endpoint looked exactly like "the engine isn't running", and the screen
+      // quietly showed demo data either way.
+      console.warn(`engine ${response.status} for ${path} — falling back to demo data`);
+      return null;
+    }
     return (await response.json()) as T;
-  } catch {
+  } catch (error) {
     // Unreachable, timed out, or serving nonsense. The caller falls back.
+    console.warn(`engine unreachable for ${path}: ${(error as Error).message}`);
     return null;
   }
 }

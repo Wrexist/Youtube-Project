@@ -59,7 +59,10 @@ class Change:
     def sentence(self) -> str:
         if self.kind == "disappeared":
             return "No longer supported by the data."
-        assert self.finding is not None
+        if self.finding is None:
+            # Not an assert: `python -O` strips those, and this would then be an
+            # AttributeError on None inside a scheduled job nobody is watching.
+            raise ValueError(f"a {self.kind} change must carry its finding")
         base = self.finding.sentence()
         if self.kind == "promoted":
             return f"{base} Confirmed this week — it now feeds back into generation."
@@ -225,7 +228,11 @@ async def run() -> Review:
     from engine.repository import latest_review_snapshot, save_review_snapshot
 
     creds = insights_api.CHANNELS.get("default")
-    if creds is not None:
+    if creds is None:
+        # Silence here was the failure: with no channel the review still produced a
+        # report, and an empty one looks exactly like a quiet week.
+        logger.warning("weekly review: no channel connected, so metrics are not refreshed")
+    else:
         try:
             rows = await Analytics(creds).per_video(days=90)
         except Exception as exc:  # noqa: BLE001 — a dead API must not kill the review
@@ -240,7 +247,7 @@ async def run() -> Review:
                 record.views = row["views"]
                 record.retention_30s = row["avd_percent"]
 
-    records = list(insights_api.RECORDS.values())
+    records = list((await insights_api.current_records()).values())
     report = analyze(records)
 
     previous = await latest_review_snapshot()

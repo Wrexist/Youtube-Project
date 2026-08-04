@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from loguru import logger
 from pydantic import BaseModel
 
 from engine import monetisation as monetisation_progress
@@ -11,12 +12,37 @@ from engine.api.publishing import CHANNELS
 from engine.insights import VideoRecord, analyze, map_retention_to_beats
 from engine.providers import youtube
 from engine.providers.analytics import Analytics
+from engine.settings import get_settings
 
 router = APIRouter(prefix="/v1", tags=["insights"])
 
 # Published videos joined to the provenance of what produced them. Postgres-backed
 # in Phase 1; the shape is what the attribution needs and does not change.
 RECORDS: dict[str, VideoRecord] = {}
+
+
+async def current_records() -> dict[str, VideoRecord]:
+    """The published-video records, re-read from the database when there is one.
+
+    `RECORDS` is a process-local dict that the API filled once at startup. The
+    process that *publishes* is the worker, so every video published since this
+    process booted was invisible here until someone restarted it — Analytics showed
+    a week-old picture and nothing said so.
+
+    Re-reading per request rather than caching with a TTL: the table has one row per
+    published video, a channel producing six a day takes years to make this
+    interesting, and a stale-but-fast answer is the failure being fixed.
+    """
+    if not get_settings().persist:
+        return RECORDS
+
+    from engine import repository
+
+    try:
+        RECORDS.update(await repository.load_performance_records())
+    except Exception:  # noqa: BLE001 — a stale view beats a 500 on every screen
+        logger.warning("could not refresh performance records; serving what is loaded")
+    return RECORDS
 
 
 def _channel() -> Analytics:
@@ -33,12 +59,13 @@ async def insights() -> dict:
     Suggestive findings are returned so the user can see them; only confirmed ones
     are ever fed back into generation.
     """
-    report = analyze(list(RECORDS.values()))
+    records = await current_records()
+    report = analyze(list(records.values()))
     return {
         "findings": [f.as_dict() for f in report.findings],
         "confirmed_count": len(report.confirmed),
         "skipped": report.skipped,
-        "video_count": len(RECORDS),
+        "video_count": len(records),
     }
 
 
@@ -48,9 +75,10 @@ async def refresh_insights() -> dict:
     analytics = _channel()
     rows = await analytics.per_video(days=90)
 
+    records = await current_records()
     updated = 0
     for row in rows:
-        record = RECORDS.get(row["video_id"])
+        record = records.get(row["video_id"])
         if record is None:
             continue  # published outside Studio; no provenance to attribute to
         record.ctr = row["ctr"]
@@ -99,8 +127,8 @@ async def daily(days: int = 28) -> dict:
 async def retention(video_id: str) -> dict:
     """The retention curve with script beats located on it."""
     curve = await _channel().retention(video_id)
-    record = RECORDS.get(video_id)
-    beats = getattr(record, "beats", []) if record else []
+    record = (await current_records()).get(video_id)
+    beats = record.beats if record else []
 
     return {
         "curve": curve,
@@ -158,11 +186,11 @@ async def shorts(video_id: str, count: int = 3) -> ShortsOut:
     offering three arbitrary windows instead would make every later ranking
     unbelievable.
     """
-    record = RECORDS.get(video_id)
+    record = (await current_records()).get(video_id)
     if record is None:
         raise HTTPException(404, "no provenance recorded for that video")
 
-    beats = getattr(record, "beats", [])
+    beats = record.beats
     if not beats:
         return ShortsOut(
             video_id=video_id,

@@ -11,23 +11,32 @@ import pytest
 from fastapi.testclient import TestClient
 
 from engine.api import insights as insights_api
+from engine.insights import VideoRecord
 from engine.main import app
 from engine.providers.youtube import _parse_iso8601_duration
 
 
-class FakeBeat:
-    def __init__(self, purpose: str, est_seconds: float) -> None:
-        self.purpose = purpose
-        self.est_seconds = est_seconds
+def FakeBeat(purpose: str, est_seconds: float) -> dict:
+    """A beat in *stored* form — the shape `VideoRecord.beats` actually holds."""
+    return {"purpose": purpose, "est_seconds": est_seconds}
 
 
-class Record:
-    """Stands in for a `VideoRecord` that has beats attached."""
+def Record(beats: list | None = None) -> VideoRecord:
+    """A real `VideoRecord`, not a stand-in.
 
-    def __init__(self, beats: list | None) -> None:
-        self.video_id = "vid1"
-        self.beats = beats if beats is not None else []
-        self.avd_seconds = 42.0
+    The earlier version was a hand-rolled class with a `beats` attribute. That is
+    exactly what hid the bug this endpoint shipped with: `VideoRecord` had no such
+    field, so every test passed while the endpoint returned "no beats recorded" for
+    every real video. A fake that is more capable than the type it replaces tests
+    nothing.
+    """
+    return VideoRecord(
+        video_id="vid1",
+        title="Why bridges collapse",
+        published_at="2026-01-01T00:00:00+00:00",
+        avd_seconds=42.0,
+        beats=list(beats or []),
+    )
 
 
 @pytest.fixture
@@ -87,7 +96,7 @@ class TestRefusals:
         assert client.get("/v1/analytics/shorts/nope").status_code == 404
 
     def test_a_video_with_no_beats_says_so_rather_than_cutting_blind(self, client):
-        insights_api.RECORDS["vid1"] = Record(beats=[])
+        insights_api.RECORDS["vid1"] = Record([])
         resp = client.get("/v1/analytics/shorts/vid1")
         assert resp.status_code == 200
         body = resp.json()

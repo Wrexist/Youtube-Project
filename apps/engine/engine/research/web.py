@@ -8,6 +8,7 @@ changing `_search` — everything above it is unaffected.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import re
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -188,12 +189,76 @@ def _dedupe_hosts(urls: list[str]) -> list[str]:
     return out
 
 
+#: Bytes read from any one source before we stop. `_strip_html` used to run on
+#: `resp.text`, which materialises the whole body first — eight of those in parallel
+#: with no ceiling, then truncated to 6,000 characters *after* the fact. One large
+#: or deliberately hostile page took the process out.
+MAX_SOURCE_BYTES = 2 * 1024 * 1024
+
+#: Networks a research fetch has no business reaching. Search results are attacker-
+#: influenced (any page that ranks), redirects are followed, and on a cloud host the
+#: link-local address is a credentials endpoint.
+_BLOCKED_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+    )
+)
+
+
+def is_public_url(url: str) -> bool:
+    """Whether a URL is safe to fetch as a research source.
+
+    Only http(s), and never a literal private or link-local address. A *hostname*
+    that resolves to one is not caught here — that needs resolution at connect time,
+    which httpx does not expose a hook for. This is the cheap half; the size cap and
+    the HTML-only check are what bound the damage from the rest.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    try:
+        return not any(ipaddress.ip_address(parsed.hostname) in net for net in _BLOCKED_NETWORKS)
+    except ValueError:
+        return True  # a name, not a literal address
+
+
 async def _fetch(client: httpx.AsyncClient, url: str) -> str:
-    resp = await client.get(url)
-    resp.raise_for_status()
-    if "text/html" not in resp.headers.get("content-type", ""):
+    if not is_public_url(url):
+        logger.debug("refusing to fetch non-public source: {}", url)
         return ""
-    return _strip_html(resp.text)
+
+    async with client.stream("GET", url) as resp:
+        resp.raise_for_status()
+        # Checked before reading a byte, and again as it streams: the header is a
+        # claim, the counter is a fact.
+        if "text/html" not in resp.headers.get("content-type", ""):
+            return ""
+        if str(resp.url) != url and not is_public_url(str(resp.url)):
+            logger.debug("refusing redirect to non-public host: {}", resp.url)
+            return ""
+
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in resp.aiter_bytes():
+            total += len(chunk)
+            if total > MAX_SOURCE_BYTES:
+                logger.debug("source exceeded {} bytes; truncating: {}", MAX_SOURCE_BYTES, url)
+                break
+            chunks.append(chunk)
+
+    body = b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+    return _strip_html(body)
 
 
 def _strip_html(html: str) -> str:

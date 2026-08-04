@@ -32,7 +32,7 @@ implied nowhere.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 #: The thresholds themselves. Constants rather than settings: they are Google's
 #: numbers, not ours, and an operator who "configures" them has only changed the
@@ -231,7 +231,9 @@ def progress(
     hands over 400 days of history must not have 400 days counted toward a figure
     Google measures over 365.
     """
-    today = today or date.today()
+    # UTC, matching the provider that supplies these days. Local time here meant the
+    # 365-day window could include or exclude a day the data was never keyed on.
+    today = today or datetime.now(UTC).date()
     shorts_views_by_day = shorts_views_by_day or {}
 
     hours_from = today - timedelta(days=WATCH_HOURS_WINDOW_DAYS)

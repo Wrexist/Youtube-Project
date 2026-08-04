@@ -63,7 +63,18 @@ export function MonetisationCard({ data }: { data: Monetisation }) {
   // Only the route in play. `route` is the engine's call, made on whichever is
   // further along by fraction of its own target.
   const content = data.route === "shorts" ? data.shorts_views : data.watch_hours;
-  const projection = eta(content.days_remaining) ?? eta(data.subscribers.days_remaining);
+
+  // Only when *nothing* is still outstanding except this bar.
+  //
+  // This used to be `eta(content.days_remaining) ?? eta(subscribers.days_remaining)`,
+  // which was wrong twice over. The fallback was dead — a subscriber count is a
+  // running total, so the engine never projects one and that side was always null.
+  // Worse, the first half showed the watch-hours date even when subscribers were the
+  // blocker: a channel at 4,000 hours and 50 subscribers was told "about 2 months",
+  // when the thing actually standing in the way was years out. `blocking` exists to
+  // answer this and was not being read.
+  const onlyThisBarLeft = data.subscribers.met || content.met;
+  const projection = onlyThisBarLeft ? eta(content.days_remaining) : null;
 
   return (
     <div className="rounded-[var(--radius-card)] border border-[var(--color-line)] p-5">
@@ -80,6 +91,12 @@ export function MonetisationCard({ data }: { data: Monetisation }) {
         <Bar threshold={data.subscribers} />
         <Bar threshold={content} />
       </div>
+
+      {!data.eligible && data.blocking && (
+        <p className="mt-4 text-[13px] text-[var(--color-dim)]">
+          Held up by {data.blocking}.
+        </p>
+      )}
 
       {/* Said once, plainly. Both figures can read higher than Google's own count,
           and a partial window is not a smaller version of the real number. */}

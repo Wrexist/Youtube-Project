@@ -70,6 +70,17 @@ class VideoRecord:
     script_model: str = ""
     format: str = "short"
 
+    #: The script's beats, as plain dicts so `asdict()` round-trips them through the
+    #: JSON column without a custom encoder.
+    #:
+    #: This field did not exist, and two features read it anyway via
+    #: `getattr(record, "beats", [])` — the retention map and the Shorts selector.
+    #: Both therefore saw an empty list on every real video, forever, and the
+    #: `getattr` default is what made it silent. Anything reading beats now goes
+    #: through `as_beats()` below, which raises on a shape it does not understand
+    #: rather than quietly returning nothing.
+    beats: list[dict] = field(default_factory=list)
+
     def dimension(self, name: str) -> str:
         return str(getattr(self, name, "") or "")
 
@@ -223,6 +234,54 @@ def _formatter(metric: Metric):
     return lambda v: f"{v:,.0f}"
 
 
+@dataclass(frozen=True)
+class ScriptBeat:
+    """A beat, reduced to the two things retention analysis needs.
+
+    The full `workflows.script.Beat` carries direction text that nothing here reads
+    and that would triple the size of every stored record.
+    """
+
+    purpose: str = ""
+    est_seconds: float = 1.0
+
+
+def as_beats(items: list) -> list[ScriptBeat]:
+    """Normalise beats arriving as dicts (from storage) or objects (from a workflow).
+
+    Deliberately strict. The previous readers used `getattr(b, "est_seconds", 1.0)`,
+    which silently returns the default for a *dict* — so a record loaded from the
+    database produced beats of equal, invented length and nobody could tell. A shape
+    this does not recognise is a bug, and it now says so.
+    """
+    out: list[ScriptBeat] = []
+    for item in items:
+        if isinstance(item, ScriptBeat):
+            out.append(item)
+        elif isinstance(item, dict):
+            out.append(
+                ScriptBeat(
+                    purpose=str(item.get("purpose", "")),
+                    est_seconds=float(item.get("est_seconds", 1.0) or 1.0),
+                )
+            )
+        elif hasattr(item, "purpose") or hasattr(item, "est_seconds"):
+            out.append(
+                ScriptBeat(
+                    purpose=str(getattr(item, "purpose", "")),
+                    est_seconds=float(getattr(item, "est_seconds", 1.0) or 1.0),
+                )
+            )
+        else:
+            raise TypeError(f"not a script beat: {type(item).__name__}")
+    return out
+
+
+def beats_to_payload(items: list) -> list[dict]:
+    """The stored form: what `as_beats` will read back."""
+    return [{"purpose": b.purpose, "est_seconds": b.est_seconds} for b in as_beats(items)]
+
+
 def map_retention_to_beats(curve: list[float], beats: list, duration_s: float) -> list[dict]:
     """Locate each script beat on the retention curve and find the steepest drop.
 
@@ -232,12 +291,13 @@ def map_retention_to_beats(curve: list[float], beats: list, duration_s: float) -
     if not curve or not beats or duration_s <= 0:
         return []
 
-    total_weight = sum(max(getattr(b, "est_seconds", 1.0), 0.5) for b in beats)
+    normalised = as_beats(beats)
+    total_weight = sum(max(b.est_seconds, 0.5) for b in normalised)
     cursor = 0.0
     out: list[dict] = []
 
-    for beat in beats:
-        weight = max(getattr(beat, "est_seconds", 1.0), 0.5)
+    for beat in normalised:
+        weight = max(beat.est_seconds, 0.5)
         span = weight / total_weight
         start_pct, end_pct = cursor, cursor + span
         cursor = end_pct
@@ -252,7 +312,7 @@ def map_retention_to_beats(curve: list[float], beats: list, duration_s: float) -
         out.append(
             {
                 "at_percent": round(start_pct * 100, 1),
-                "label": getattr(beat, "purpose", "")[:40],
+                "label": beat.purpose[:40],
                 "retention_start": round(start_value, 1),
                 "retention_end": round(end_value, 1),
                 "drop": round(drop, 1),

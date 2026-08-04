@@ -50,7 +50,7 @@ Rules for that code:
 - Data fetching in Server Components; mutations via Server Actions. TanStack Query only for the SSE-backed live job views.
 
 **Both**
-- Tests live next to the code. `pytest` and `vitest`.
+- Tests live next to the code. `pytest` and `vitest` — both are installed and both run in CI (`npm run test`).
 - Conventional commits.
 
 ## Commands

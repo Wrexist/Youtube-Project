@@ -163,6 +163,24 @@ fix passed edge-tts a `TCPConnector` carrying our context; it looked right and d
 nothing, because the explicit `ssl=` argument to `ws_connect` wins. The regression
 test pins the context, not the connector.
 
+### 3.2d Scraped pages reach the model as untrusted input
+**Status:** fenced, not solved.
+
+`ResearchStage` builds a script from pages the search backend returned, and a page
+that ranks for the topic can write anything. Until now the digest was interpolated
+into the prompt raw — no delimiter, no instruction, no size cap — and from there it
+shaped the script, the title, the description and a published video.
+
+`engine/untrusted.py:fence()` strips invisible control characters, defuses role
+markers and closing tags, and caps the length; the prompt says in words that the
+block is data and never instructions. `research/web.py` refuses private and
+link-local addresses, checks the post-redirect host, and streams with a 2MB ceiling
+instead of materialising `resp.text`.
+
+None of that makes a model immune to persuasion. It removes the cheap version of the
+attack. A model that summarises a page arguing for something will still reflect that
+argument — which is what summarising is.
+
 ### 3.3 Music licensing
 Nothing ships with licensed music. MoneyPrinterTurbo's bundled `resource/songs` has
 unclear provenance and is deliberately **not** carried over — it is excluded from the
@@ -358,6 +376,11 @@ pointing at cues that no longer existed.
 - **No ⌘K command palette**, though the design spec leans on it to keep screens
   sparse.
 - **No thumbnail A/B swapping**, which Phase 8's attribution is otherwise ready for.
+- **No engine authentication.** Still true and still the largest gap: anything that
+  can reach `127.0.0.1:8080` can read and write credentials through
+  `PUT /v1/setup/keys`. CORS names `http://localhost:3000`, so any *other* dev
+  server a developer happens to run on that port is a trusted origin. Do not expose
+  the engine.
 - **No trend monitoring.** The idea backlog accepts a `trending_terms` argument that
   nothing currently supplies, so `freshness` is zero on every real idea and its
   decay curve has nothing to decay. The scoring is ready for a supplier; there

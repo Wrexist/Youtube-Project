@@ -39,6 +39,10 @@ SCOPES = (
 
 CHUNK = 8 * 1024 * 1024
 
+#: Per-operation timeout for one chunk PUT. Generous — 8MB on a slow uplink is
+#: minutes — but finite, which `timeout=None` was not.
+CHUNK_TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=600.0, pool=30.0)
+
 #: YouTube's own field limits, enforced once more at the wire. `workflows/seo.py`
 #: shapes a generated package to fit these, but it is not the only way a value
 #: reaches here: a hand edit, a job restored from before a limit changed, or a
@@ -373,6 +377,12 @@ class YouTube:
             body["status"]["publishAt"] = publish_at.astimezone(UTC).isoformat()
 
         size = (await asyncio.to_thread(video_path.stat)).st_size
+        if size <= 0:
+            # Checked before `reserve()`. A zero-byte render used to book its 1,600
+            # units, skip the chunk loop entirely (`while offset < size` never runs)
+            # and fall out the bottom with "upload ended without a video id" — a
+            # day's quota spent on a file that was never sent.
+            raise YouTubeError(f"{video_path} is empty; refusing to spend quota on it")
 
         # 1. Reserve the units, then open the resumable session.
         #
@@ -416,7 +426,13 @@ class YouTube:
             await ledger.refund(entry)
             raise YouTubeError(f"could not open upload session: {init.text[:300]}")
 
-        session_url = init.headers["Location"]
+        session_url = init.headers.get("Location")
+        if not session_url:
+            # A 200 with no Location is not a session. Without this the next line
+            # raised a bare KeyError *after* the units were booked, which reads in
+            # the log like a bug in our code rather than a refusal from Google.
+            await ledger.refund(entry)
+            raise YouTubeError("upload session opened without a Location header")
 
         # 2. Push chunks, resuming from the last byte the server confirmed.
         offset = 0
@@ -425,7 +441,11 @@ class YouTube:
         # the network allowed, indefinitely, hammering the API that was already
         # asking us to back off.
         attempts = 0
-        async with httpx.AsyncClient(timeout=None) as client:
+        # Not `timeout=None`. A chunk is 8MB, so a generous per-operation timeout is
+        # still a timeout; without one a half-open connection holds the render slot
+        # for as long as the process lives. arq's `job_timeout` only bounds this when
+        # a worker is running, and the in-process fallback has no worker.
+        async with httpx.AsyncClient(timeout=CHUNK_TIMEOUT) as client:
             with video_path.open("rb") as fh:
                 while offset < size:
                     # Read off the event loop. An 8MB read from disk is tens of

@@ -97,10 +97,18 @@ jobs:
         run: npm run check --workspace=@studio/contracts
       - run: npm run lint
       - run: npm run typecheck
+      # The web app had no test runner at all until now: CLAUDE.md named vitest as
+      # the convention and it was never installed, so every screen was checked by
+      # tsc and eslint alone.
+      - run: npm run test
       - run: npm run build
       # Deliberately `critical`, not `high`. There are 14 standing high advisories,
       # all transitive build/dev dependencies whose fixes need an upstream Next or
       # eslint-config-next release — see AUDIT.md §4.7 for what each one exposes.
       # Failing on `high` would mean a permanently red build that nobody reads;
       # this still fails the moment something critical appears.
-      - run: npm audit --audit-level=critical
+      # 'high' rather than 'critical'. At 'critical' this step passed with three
+      # high-severity advisories outstanding, which made it a green tick that
+      # meant nothing. Advisories with no upstream fix belong in an explicit
+      # allowlist, not in a threshold that hides every finding below it.
+      - run: npm audit --audit-level=high

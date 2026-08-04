@@ -317,6 +317,28 @@ async def startup(_ctx: dict) -> None:
 
     if get_settings().persist:
         await ledger.load()
+        await hydrate_analytics_state()
+
+
+async def hydrate_analytics_state() -> None:
+    """Load the published-video records and channels this process needs.
+
+    The third omission, and the one that made a whole feature a no-op. The weekly
+    review runs *here*, in the worker, and reads `insights.RECORDS` and
+    `publishing.CHANNELS` — both module-level dicts that only the API's lifespan
+    handler ever filled. So the cron job analysed an empty list every Monday,
+    reported nothing, stored an empty snapshot, and logged "0 findings" as though
+    that were a finding about the channel rather than about itself.
+
+    Shared with the API rather than duplicated, so the next dict added to the
+    restore path cannot be added to only one of the two processes again.
+    """
+    from engine import repository
+    from engine.api import insights, publishing
+
+    insights.RECORDS.update(await repository.load_performance_records())
+    publishing.CHANNELS.update(await repository.load_channels())
+    publishing.SCHEDULE.update(await repository.load_schedule())
 
 
 async def weekly_review_task(ctx: dict) -> dict:  # noqa: ARG001 — arq passes ctx

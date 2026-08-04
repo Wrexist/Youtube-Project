@@ -23,6 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import fmean
 
+from engine.insights import as_beats
+
 # YouTube accepts Shorts up to three minutes, but the format's own conventions —
 # and every study of them — sit far below that. Under 15s reads as a fragment
 # rather than a clip; over 60s stops being a Short in anything but eligibility.
@@ -140,7 +142,8 @@ def _windows(beats: list, duration_s: float) -> list[tuple[float, float, str]]:
 
     # Beat `est_seconds` are the script's estimates and rarely sum to the finished
     # runtime, so they are rescaled onto the real duration rather than trusted.
-    weights = [max(getattr(b, "est_seconds", 1.0), 0.5) for b in beats]
+    normalised = as_beats(beats)
+    weights = [max(b.est_seconds, 0.5) for b in normalised]
     total = sum(weights)
     if total <= 0:
         return []
@@ -161,16 +164,16 @@ def _windows(beats: list, duration_s: float) -> list[tuple[float, float, str]]:
             if length > MAX_SECONDS:
                 break  # every longer run from i is also too long
             if length >= MIN_SECONDS:
-                label = str(getattr(beats[i], "purpose", "") or "")[:60]
+                label = normalised[i].purpose[:60]
                 out.append((start, end, label))
 
     # A single beat longer than MAX_SECONDS produces no run at all, and on a video
     # written in three long beats that means no candidates whatsoever. Slide a
     # max-length window through any such beat so it can still be drawn from.
-    for (start, end), beat in zip(bounds, beats, strict=True):
+    for (start, end), beat in zip(bounds, normalised, strict=True):
         if end - start <= MAX_SECONDS:
             continue
-        label = str(getattr(beat, "purpose", "") or "")[:60]
+        label = beat.purpose[:60]
         step = MAX_SECONDS / 2
         cursor = start
         while cursor + MAX_SECONDS <= end:
