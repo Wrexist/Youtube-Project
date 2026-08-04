@@ -1,4 +1,7 @@
-node_modules/
+# No trailing slash: with one, this matches only directories, and a *symlink*
+# named node_modules sails past it. That happened — self-referential symlinks
+# got committed, and every fresh clone came up with an unusable install.
+node_modules
 .next/
 out/
 dist/
