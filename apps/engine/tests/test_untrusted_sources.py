@@ -8,9 +8,12 @@ could be at any address the search engine returned.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
+import httpx
 import pytest
 
-from engine.research.web import MAX_SOURCE_BYTES, is_public_url
+from engine.research.web import MAX_SOURCE_BYTES, _fetch, is_public_url
 from engine.untrusted import fence
 
 
@@ -89,6 +92,48 @@ class TestUrlGuard:
         assert is_public_url(url) is False
 
     def test_the_size_cap_is_a_real_limit(self):
-        """`resp.text` materialises the whole body before anything truncates it, so
-        the cap has to be applied while streaming, not after."""
         assert 0 < MAX_SOURCE_BYTES <= 8 * 1024 * 1024
+
+    @pytest.mark.asyncio
+    async def test_fetch_stops_reading_instead_of_buffering_the_whole_body(self):
+        """Asserted through `_fetch`, not against the constant.
+
+        The constant on its own proves nothing: `resp.text` materialises the entire
+        body *before* any truncation, so a version that read 2GB and then sliced it
+        would satisfy a constant check and still take the process out. What matters
+        is that the reading stops, so this counts the bytes the transport is asked
+        for.
+        """
+        served = 0
+        chunk = b"<html><body>" + b"x" * 65_536
+
+        async def body() -> AsyncIterator[bytes]:
+            nonlocal served
+            while served < MAX_SOURCE_BYTES * 4:
+                served += len(chunk)
+                yield chunk
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, headers={"content-type": "text/html"}, stream=_Stream(body())
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            await _fetch(client, "https://example.com/huge")
+
+        assert served <= MAX_SOURCE_BYTES + len(chunk), (
+            f"read {served} bytes for a {MAX_SOURCE_BYTES}-byte cap — the whole body "
+            "was buffered before the limit was applied"
+        )
+
+
+class _Stream(httpx.AsyncByteStream):
+    """A body that keeps yielding until the reader stops asking."""
+
+    def __init__(self, chunks: AsyncIterator[bytes]) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._chunks:
+            yield chunk
