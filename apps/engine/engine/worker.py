@@ -26,14 +26,17 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from arq import create_pool
+from arq import create_pool, cron
 from arq.connections import RedisSettings
 from arq.constants import default_queue_name, health_check_key_suffix
 from loguru import logger
 
 from engine.settings import get_settings
+
+if TYPE_CHECKING:  # imported at call time inside the task, to keep worker start cheap.
+    from engine.review import ReviewPayload
 
 # One channel per job. Subscribing per job rather than filtering one firehose
 # keeps a busy queue from waking every open browser tab.
@@ -317,6 +320,39 @@ async def startup(_ctx: dict) -> None:
 
     if get_settings().persist:
         await ledger.load()
+        await hydrate_analytics_state()
+
+
+async def hydrate_analytics_state() -> None:
+    """Load the published-video records and channels this process needs.
+
+    The third omission, and the one that made a whole feature a no-op. The weekly
+    review runs *here*, in the worker, and reads `insights.RECORDS` and
+    `publishing.CHANNELS` — both module-level dicts that only the API's lifespan
+    handler ever filled. So the cron job analysed an empty list every Monday,
+    reported nothing, stored an empty snapshot, and logged "0 findings" as though
+    that were a finding about the channel rather than about itself.
+
+    Shared with the API rather than duplicated, so the next dict added to the
+    restore path cannot be added to only one of the two processes again.
+    """
+    from engine import repository
+    from engine.api import insights, publishing
+
+    insights.RECORDS.update(await repository.load_performance_records())
+    publishing.CHANNELS.update(await repository.load_channels())
+    publishing.SCHEDULE.update(await repository.load_schedule())
+
+
+async def weekly_review_task(ctx: dict[str, Any]) -> ReviewPayload:  # noqa: ARG001 — arq passes ctx
+    """Re-read what the system has learned, and report what changed.
+
+    Returns the review as a dict so it lands in arq's result store, where it can be
+    read back without a database round trip.
+    """
+    from engine import review
+
+    return (await review.run()).as_dict()
 
 
 class WorkerSettings:
@@ -330,6 +366,27 @@ class WorkerSettings:
     """
 
     functions: list[Any] = [run_job_task]
+    cron_jobs: list[Any] = [
+        # Monday 06:00 UTC. Deliberately not "every 7 days from whenever the worker
+        # last restarted" — a review that lands on a different weekday each time is
+        # one nobody builds a habit of reading.
+        #
+        # `hour` and `minute` are set explicitly because arq reads an unset field
+        # as *every* value: `cron(fn, weekday="mon")` alone runs 1,440 times on
+        # Monday, not once. (`second` already defaults to 0, so it needs no help.)
+        #
+        # `run_at_startup` is off for a different reason: a worker restart is not a
+        # week passing, and a review triggered by one consumes the snapshot the
+        # real weekly diff was going to compare against.
+        cron(
+            weekly_review_task,
+            weekday="mon",
+            hour=6,
+            minute=0,
+            second=0,
+            run_at_startup=False,
+        )
+    ]
     on_startup = startup
     redis_settings: RedisSettings = build_redis_settings()
     max_jobs = 4

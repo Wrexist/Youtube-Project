@@ -44,6 +44,11 @@ export type Calendar = Ok<paths["/v1/calendar"]["get"]>;
 export type CalendarSlots = Ok<paths["/v1/calendar/slots"]["get"]>;
 export type Channels = Ok<paths["/v1/channels"]["get"]>;
 export type Insights = Ok<paths["/v1/insights"]["get"]>;
+/** Progress toward the Partner Programme — the number the product is aimed at. */
+export type Monetisation = Ok<paths["/v1/analytics/monetisation"]["get"]>;
+/** Stretches of a long-form video worth cutting into a Short. */
+export type Shorts = Ok<paths["/v1/analytics/shorts/{video_id}"]["get"]>;
+export type ShortCut = Shorts["candidates"][number];
 export type Models = Ok<paths["/v1/models"]["get"]>;
 /** One row of `GET /v1/jobs` — what the Queue and Library list. */
 export type JobSummary = components["schemas"]["JobSummary"];

@@ -140,6 +140,47 @@ reads. Recorded here so it stops being re-flagged as a bug: it is a decision, no
 oversight. `providers/analytics.py` used to claim in its own docstring that these
 calls *were* recorded; that claim is gone.
 
+### 3.2c edge-tts ignores the standard TLS and proxy environment variables
+**Status:** worked around, but the workaround reaches into a private global.
+
+Every other outbound call in this repo goes through `httpx`, which reads
+`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and the proxy variables. edge-tts does not: it
+reaches Azure over a WebSocket and verifies against a module-level context built
+from `certifi` at import, which it passes explicitly to `ws_connect(ssl=...)`.
+Behind a TLS-inspecting proxy — every corporate network, most CI runners — it is the
+only provider that fails, with `CERTIFICATE_VERIFY_FAILED`, at **stage 9 of 17**,
+after the research and the entire script chain have been paid for.
+
+`_trust_extra_cas()` in `workflows/media.py` loads the configured bundle into that
+context (additive — certifi's roots stay, nothing is disabled) and `_tts_proxy()`
+passes the proxy edge-tts never reads for itself. `scripts/doctor.py` reports which
+roots are in use.
+
+The fragile part is `edge_tts.communicate._SSL_CTX`, a private name in someone
+else's package. If upstream renames it the code logs a warning and carries on, which
+is correct on every network that does not need the bundle. A first attempt at this
+fix passed edge-tts a `TCPConnector` carrying our context; it looked right and did
+nothing, because the explicit `ssl=` argument to `ws_connect` wins. The regression
+test pins the context, not the connector.
+
+### 3.2d Scraped pages reach the model as untrusted input
+**Status:** fenced, not solved.
+
+`ResearchStage` builds a script from pages the search backend returned, and a page
+that ranks for the topic can write anything. Until now the digest was interpolated
+into the prompt raw — no delimiter, no instruction, no size cap — and from there it
+shaped the script, the title, the description and a published video.
+
+`engine/untrusted.py:fence()` strips invisible control characters, defuses role
+markers and closing tags, and caps the length; the prompt says in words that the
+block is data and never instructions. `research/web.py` refuses private and
+link-local addresses, checks the post-redirect host, and streams with a 2MB ceiling
+instead of materialising `resp.text`.
+
+None of that makes a model immune to persuasion. It removes the cheap version of the
+attack. A model that summarises a page arguing for something will still reflect that
+argument — which is what summarising is.
+
 ### 3.3 Music licensing
 Nothing ships with licensed music. MoneyPrinterTurbo's bundled `resource/songs` has
 unclear provenance and is deliberately **not** carried over — it is excluded from the
@@ -267,7 +308,8 @@ right. Per screen, as of today:
 | Queue, Library, Models | live, falling back to `demo.ts` when the engine is unreachable |
 | Setup, Welcome | live only — no fallback, deliberately. They show "the engine is not running" instead of plausible fiction, because a setup screen that invents its own state is worse than one that admits it is blind |
 | Calendar | mixed even when live: quota and bookings come from the engine, the draggable video tray is always `PENDING_VIDEOS` |
-| Analytics, Series, New channel | demo only, **no network call at all** — there is no series table, the Analytics API is unwired, and the channel-launch endpoint has no caller |
+| Analytics | partly live: the monetisation card reads `GET /v1/analytics/monetisation` and hides itself when the engine is unreachable or no channel is connected. Everything below it is still demo — the per-video, retention and Short-cut panels remain unwired. The Short-cut fixture in `demo.ts` is at least the genuine output of `engine/shorts.py` run over the demo retention curve, not an invented one |
+| Series, New channel | demo only, **no network call at all** — there is no series table, and the channel-launch endpoint has no caller |
 
 Series and New channel used to ship five buttons wired to nothing, including both
 screens' single primary action: pressing the one prominent control did nothing at
@@ -334,8 +376,30 @@ pointing at cues that no longer existed.
 - **No ⌘K command palette**, though the design spec leans on it to keep screens
   sparse.
 - **No thumbnail A/B swapping**, which Phase 8's attribution is otherwise ready for.
+- **No engine authentication.** Still true and still the largest gap: anything that
+  can reach `127.0.0.1:8080` can read and write credentials through
+  `PUT /v1/setup/keys`. CORS names `http://localhost:3000`, so any *other* dev
+  server a developer happens to run on that port is a trusted origin. Do not expose
+  the engine.
 - **No trend monitoring.** The idea backlog accepts a `trending_terms` argument that
-  nothing currently supplies.
+  nothing currently supplies, so `freshness` is zero on every real idea and its
+  decay curve has nothing to decay. The scoring is ready for a supplier; there
+  isn't one.
+- **The weekly review has no screen and sends no notification.** The cron job runs
+  Monday 06:00 UTC and `POST /v1/insights/review` runs it on demand, but the only
+  way to read the result is the API or the worker log. `Review.worth_reading` is
+  there for a notifier that does not exist yet — most weeks it is false, which is
+  the point.
+- **The review needs a running worker.** It is an arq cron job, so the in-process
+  fallback mode (no Redis) never fires it. Nothing warns about this.
+- **Shorts are selected but not cut.** `GET /v1/analytics/shorts/{video_id}` ranks
+  the stretches of a long-form video worth clipping and says why, but nothing
+  renders the clip. Two things are missing and neither is small: `VideoRecord`
+  carries no path to the rendered master, so there is no file to cut from, and a
+  9:16 crop of 16:9 footage needs a subject to crop *around* — a centre crop of a
+  talking-head shot is fine and a centre crop of anything else is not. Until both
+  exist the endpoint is a recommendation, which is why the UI shows timestamps and
+  no "Cut this" button.
 
 ---
 

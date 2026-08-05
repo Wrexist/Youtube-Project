@@ -16,7 +16,8 @@
     "typecheck": "npm run typecheck --workspace=@studio/web",
     "check:toolchain": "node scripts/check-web-toolchain.mjs",
     "reinstall": "node scripts/reinstall.mjs",
-    "infra": "docker compose up -d"
+    "infra": "docker compose up -d",
+    "test": "npm run test --workspace=@studio/web"
   },
   "engines": {
     "node": ">=20"
@@ -29,7 +30,7 @@
     "win32 entry at all. `npm install` on Windows then never fetches the binary and",
     "Tailwind dies at the first CSS import with 'Cannot find module",
     "../lightningcss.win32-x64-msvc.node'. This is npm/cli#4828, and `npm install",
-    "--os=win32` does not fix it — it prunes rather than adds.",
+    "--os=win32` does not fix it \u2014 it prunes rather than adds.",
     "",
     "Declaring them here forces every variant into the lockfile. They stay optional,",
     "and each one carries its own os/cpu constraints, so npm still installs only the",
@@ -38,7 +39,7 @@
     "",
     "Versions must track @tailwindcss/oxide and the lightningcss under",
     "@tailwindcss/node. `npm run check:toolchain` fails when they drift, and CI",
-    "runs it — so a Tailwind bump that forgets these is caught, even though CI",
+    "runs it \u2014 so a Tailwind bump that forgets these is caught, even though CI",
     "runs on Linux and cannot see a missing win32 binary directly."
   ],
   "optionalDependencies": {

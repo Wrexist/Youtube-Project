@@ -19,11 +19,12 @@ makes every trend look like it is collapsing. `is_provisional` marks them.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 from loguru import logger
 
+from engine.monetisation import SHORTS_VIEWS_WINDOW_DAYS
 from engine.providers.youtube import Credentials, refresh
 from engine.scheduling import AudienceProfile
 
@@ -31,6 +32,21 @@ BASE = "https://youtubeanalytics.googleapis.com/v2/reports"
 
 # Days at the end of a window that Google has not finished counting.
 PROVISIONAL_DAYS = 2
+
+
+def today() -> date:
+    """Today in UTC, not in whatever zone the server happens to sit in.
+
+    `date.today()` is local. Every other timestamp in this codebase is UTC-aware on
+    purpose, and this is the layer that talks to Google — so a container in UTC+13
+    asked for a date range a day ahead of the one it meant, and marked the wrong two
+    days provisional. Being consistently one day off is worse than being wrong once:
+    it silently shifts every window this module computes.
+
+    UTC rather than the channel's own zone because the API does not expose that. The
+    two-day provisional margin already covers a zone offset several times over.
+    """
+    return datetime.now(UTC).date()
 
 
 @dataclass
@@ -41,10 +57,17 @@ class DailyMetrics:
     ctr: float = 0.0
     avd_seconds: float = 0.0
     subscribers_gained: int = 0
+    #: Minutes, as Google reports them — `engine.monetisation` converts to hours.
+    #:
+    #: `daily()` has always *asked* for `estimatedMinutesWatched` and then read
+    #: columns 1, 3 and 4 of the four it paid for, dropping this one. It is half of
+    #: the Partner Programme threshold the whole product is aimed at, so it was the
+    #: one number worth keeping.
+    watch_minutes: float = 0.0
 
     @property
     def is_provisional(self) -> bool:
-        return (date.today() - self.day).days < PROVISIONAL_DAYS
+        return (today() - self.day).days < PROVISIONAL_DAYS
 
 
 class Analytics:
@@ -65,7 +88,7 @@ class Analytics:
         return resp.json()
 
     async def daily(self, days: int = 28) -> list[DailyMetrics]:
-        end = date.today()
+        end = today()
         start = end - timedelta(days=days)
         payload = await self._query(
             {
@@ -81,11 +104,43 @@ class Analytics:
             DailyMetrics(
                 day=date.fromisoformat(row[0]),
                 views=int(row[1]),
+                watch_minutes=float(row[2]),
                 avd_seconds=float(row[3]),
                 subscribers_gained=int(row[4]),
             )
             for row in rows
         ]
+
+    async def shorts_views(self, days: int = SHORTS_VIEWS_WINDOW_DAYS) -> dict[date, int]:
+        """Daily Shorts views — the other route to the Partner Programme.
+
+        Separate from `daily()` because it needs a filter the rest of the daily pull
+        must not have: `creatorContentType==shortsVideo` would silently narrow every
+        other metric to Shorts alone if it were added there.
+
+        Returns an empty mapping rather than raising when the dimension is refused.
+        Not every channel and not every API version answers this filter, and a
+        channel with no Shorts is the overwhelmingly common case here — neither is
+        an error worth failing a dashboard over, and the long-form route is
+        unaffected either way.
+        """
+        end = today()
+        start = end - timedelta(days=days)
+        try:
+            payload = await self._query(
+                {
+                    "startDate": start.isoformat(),
+                    "endDate": end.isoformat(),
+                    "metrics": "views",
+                    "dimensions": "day",
+                    "filters": "creatorContentType==shortsVideo",
+                    "sort": "day",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 — the long-form route must still answer
+            logger.info("no Shorts breakdown available ({}); the long-form route stands", exc)
+            return {}
+        return {date.fromisoformat(row[0]): int(row[1]) for row in payload.get("rows", [])}
 
     async def per_video(self, days: int = 90) -> list[dict]:
         """Per-video CTR and duration — the input to attribution.
@@ -94,7 +149,7 @@ class Analytics:
         and only for the last ~90 days, which is the practical horizon for any
         finding this system produces.
         """
-        end = date.today()
+        end = today()
         start = end - timedelta(days=days)
         payload = await self._query(
             {
@@ -130,8 +185,8 @@ class Analytics:
         payload = await self._query(
             {
                 "ids": "channel==MINE",
-                "startDate": (date.today() - timedelta(days=90)).isoformat(),
-                "endDate": date.today().isoformat(),
+                "startDate": (today() - timedelta(days=90)).isoformat(),
+                "endDate": today().isoformat(),
                 "metrics": "audienceWatchRatio",
                 "dimensions": "elapsedVideoTimeRatio",
                 "filters": f"video=={video_id}",
@@ -148,7 +203,7 @@ class Analytics:
         API, so this is reconstructed from *when views actually happen* — which is a
         proxy, not the same thing, and the profile is labelled accordingly.
         """
-        end = date.today()
+        end = today()
         start = end - timedelta(days=90)
         try:
             payload = await self._query(

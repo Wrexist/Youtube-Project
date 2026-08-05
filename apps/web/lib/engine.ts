@@ -23,6 +23,8 @@ import type {
   Channels,
   Diagnostics,
   Insights,
+  Monetisation,
+  Shorts,
   JobCreated,
   JobRequest,
   JobStatus,
@@ -95,10 +97,26 @@ export async function get<T>(path: string): Promise<T | null> {
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: { accept: "application/json" },
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // Still `null`, because every caller's fallback is the same. But a 500 from a
+      // live engine and a stopped engine are not the same event, and until now they
+      // were indistinguishable everywhere — including in the logs. A broken
+      // endpoint looked exactly like "the engine isn't running", and the screen
+      // quietly showed demo data either way.
+      console.warn(`engine ${response.status} for ${path} — falling back to demo data`);
+      return null;
+    }
     return (await response.json()) as T;
-  } catch {
-    // Unreachable, timed out, or serving nonsense. The caller falls back.
+  } catch (error) {
+    // `response.json()` is inside this try, so a *reachable* engine serving
+    // malformed JSON lands here too. Labelling that "unreachable" sends whoever
+    // reads the log to check whether the process is running.
+    const name = (error as Error).name;
+    const reachable = name !== "TimeoutError" && name !== "TypeError";
+    console.warn(
+      `engine ${reachable ? "returned an unreadable response" : "unreachable"} ` +
+        `for ${path}: ${(error as Error).message}`,
+    );
     return null;
   }
 }
@@ -180,6 +198,9 @@ export const getCalendar = () => get<Calendar>("/v1/calendar");
 export const getSlots = (days = 14) => get<CalendarSlots>(`/v1/calendar/slots?days=${days}`);
 export const getChannels = () => get<Channels>("/v1/channels");
 export const getInsights = () => get<Insights>("/v1/insights");
+export const getMonetisation = () => get<Monetisation>("/v1/analytics/monetisation");
+export const getShorts = (videoId: string, count = 3) =>
+  get<Shorts>(`/v1/analytics/shorts/${encodeURIComponent(videoId)}?count=${count}`);
 export const getModels = () => get<Models>("/v1/models");
 export const getWorkflow = (name: string) => get<WorkflowGraph>(`/v1/workflows/${name}`);
 export const getJob = (id: string) => get<Record<string, unknown>>(`/v1/jobs/${id}`);

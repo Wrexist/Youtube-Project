@@ -50,7 +50,7 @@ Rules for that code:
 - Data fetching in Server Components; mutations via Server Actions. TanStack Query only for the SSE-backed live job views.
 
 **Both**
-- Tests live next to the code. `pytest` and `vitest`.
+- Tests live next to the code. `pytest` and `vitest` — both are installed and both run in CI (`npm run test`).
 - Conventional commits.
 
 ## Commands
@@ -62,7 +62,7 @@ npm run dev                                 # web on :3000 (one half only)
 apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
 apps/engine/.venv/bin/python -m alembic -c apps/engine/alembic.ini upgrade head   # schema
-apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings   # render worker
+apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings   # render worker + weekly review cron
 ```
 
 `-c apps/engine/alembic.ini` is not optional from the repo root: `alembic.ini` lives
@@ -73,10 +73,11 @@ On Windows the interpreter is at `.venv/Scripts/python` instead of `.venv/bin/py
 
 The web app runs **without an engine and without any API keys** — start it alone and
 every screen still renders, from `apps/web/lib/demo.ts`, so the design can be judged
-before the plumbing exists. With the engine up, seven of the ten screens read it for
-real; Analytics, Series and New channel make no network call at all because the
-endpoints behind them do not exist yet. `KNOWN-ISSUES.md` §5.5 has the per-screen
-breakdown. When you wire one of those three up, that table is what needs updating.
+before the plumbing exists. With the engine up, eight of the ten screens read it for
+real; Series and New channel make no network call at all because the endpoints behind
+them do not exist yet, and Analytics is only partly wired — its monetisation card is
+live, the rest is still demo. `KNOWN-ISSUES.md` §5.5 has the per-screen breakdown.
+When you wire one of these up, that table is what needs updating.
 
 **Toolchain note:** this machine has neither `pnpm` nor `uv`, so the repo uses npm
 workspaces and a plain venv at `apps/engine/.venv`. Switch to pnpm/uv if you install

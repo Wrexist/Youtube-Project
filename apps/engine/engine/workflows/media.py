@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
+import ssl
 import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -432,7 +434,8 @@ async def _synthesize(
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{hashlib.sha1(text.encode()).hexdigest()[:16]}.mp3"
 
-    communicate = edge_tts.Communicate(text, voice, boundary="WordBoundary")
+    _trust_extra_cas()
+    communicate = edge_tts.Communicate(text, voice, boundary="WordBoundary", proxy=_tts_proxy())
     words: list[dict] = []
     sentences: list[dict] = []
 
@@ -459,6 +462,72 @@ async def _synthesize(
     # No timings at all — SubtitlesStage falls back to Whisper.
     logger.warning("voice {} returned no boundary events", voice)
     return path, []
+
+
+#: Where a CA bundle is looked for, in order. These are the two names the rest of
+#: the Python ecosystem already uses — `httpx` and `requests` read them, so every
+#: other outbound call in this repo is already configured by whoever set them.
+_CA_BUNDLE_VARS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
+
+#: Proxy variables, most specific first. `ALL_PROXY` is the catch-all and is only
+#: consulted when neither WebSocket-relevant one is set.
+_PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy")
+
+
+@lru_cache(maxsize=1)
+def _trust_extra_cas() -> str | None:
+    """Teach edge-tts to trust the CAs the rest of this repo already trusts.
+
+    edge-tts reaches Azure over a WebSocket and verifies it against a *module-level*
+    context built from `certifi` at import time, which it then passes explicitly to
+    `ws_connect(ssl=...)`. That explicit argument beats anything set on a connector,
+    so handing it a connector of our own does nothing — the only reachable seam is
+    the context object itself.
+
+    Behind a TLS-inspecting proxy (every corporate network, most CI runners) this is
+    the one provider in the repo that fails, with `CERTIFICATE_VERIFY_FAILED`, while
+    every other outbound call succeeds — the rest go through `httpx`, which reads
+    `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`. Those are exactly the two variables
+    read here, so one setting configures everything.
+
+    `load_verify_locations` is **additive**: certifi's 120-odd public roots stay
+    trusted and the corporate root joins them. Nothing is weakened, and no
+    verification is disabled — which is the tempting shortcut here and the reason
+    this docstring is longer than the function.
+
+    Worth the reach into another package's globals because of where the failure
+    lands: voiceover is the 9th of 17 stages, so it fails *after* the research and
+    the entire script chain have been paid for.
+    """
+    bundle = next((os.environ[var] for var in _CA_BUNDLE_VARS if os.environ.get(var)), None)
+    if not bundle or not Path(bundle).is_file():
+        return None
+
+    from edge_tts import communicate
+
+    context = getattr(communicate, "_SSL_CTX", None)
+    if not isinstance(context, ssl.SSLContext):
+        # Upstream renamed or restructured it. Not fatal: without a proxy in the
+        # way the default context works, and saying so beats raising here.
+        logger.warning("edge-tts SSL context not found; {} will not be applied", bundle)
+        return None
+
+    context.load_verify_locations(cafile=bundle)
+    logger.debug("added {} to the CAs edge-tts trusts", bundle)
+    return bundle
+
+
+def _tts_proxy() -> str | None:
+    """The proxy to reach Azure through, from the standard environment variables.
+
+    edge-tts takes a proxy argument but does not read the environment for one, so on
+    a network where outbound traffic *must* go through a proxy the connection is
+    simply refused. `NO_PROXY` is deliberately not honoured: it is a host-list
+    format with wildcard and suffix rules that is worth getting exactly right or not
+    implementing at all, and a half-parse that wrongly bypasses the proxy fails in
+    the same invisible way this function exists to fix.
+    """
+    return next((os.environ[var] for var in _PROXY_VARS if os.environ.get(var)), None)
 
 
 _TRAILING_SENT = re.compile(r"([.!?]+)$")

@@ -39,6 +39,10 @@ SCOPES = (
 
 CHUNK = 8 * 1024 * 1024
 
+#: Per-operation timeout for one chunk PUT. Generous — 8MB on a slow uplink is
+#: minutes — but finite, which `timeout=None` was not.
+CHUNK_TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=600.0, pool=30.0)
+
 #: YouTube's own field limits, enforced once more at the wire. `workflows/seo.py`
 #: shapes a generated package to fit these, but it is not the only way a value
 #: reaches here: a hand edit, a job restored from before a limit changed, or a
@@ -299,6 +303,34 @@ class YouTube:
         )
         return resp.json().get("items", [])
 
+    async def subscriber_count(self) -> int | None:
+        """The channel's subscriber total. One quota unit.
+
+        Analytics reports `subscribersGained`, which is a *delta* — summing it over
+        a window gives you the change, not the count, and it ignores both losses and
+        every subscriber the channel had before the window opened. The Partner
+        Programme threshold is a total, so it has to come from the Data API.
+
+        Returns None rather than raising when the channel has hidden its subscriber
+        count: `hiddenSubscriberCount` is a setting an operator can turn on, and a
+        dashboard that 500s because of a privacy preference is worse than one that
+        says the number is unavailable.
+        """
+        resp = await self._call(
+            "GET",
+            f"{API}/channels",
+            "channels.list",
+            params={"part": "statistics", "mine": "true"},
+        )
+        items = resp.json().get("items", [])
+        if not items:
+            return None
+        stats = items[0].get("statistics", {})
+        if stats.get("hiddenSubscriberCount"):
+            return None
+        raw = stats.get("subscriberCount")
+        return int(raw) if raw is not None else None
+
     async def upload(
         self,
         video_path: Path,
@@ -345,6 +377,12 @@ class YouTube:
             body["status"]["publishAt"] = publish_at.astimezone(UTC).isoformat()
 
         size = (await asyncio.to_thread(video_path.stat)).st_size
+        if size <= 0:
+            # Checked before `reserve()`. A zero-byte render used to book its 1,600
+            # units, skip the chunk loop entirely (`while offset < size` never runs)
+            # and fall out the bottom with "upload ended without a video id" — a
+            # day's quota spent on a file that was never sent.
+            raise YouTubeError(f"{video_path} is empty; refusing to spend quota on it")
 
         # 1. Reserve the units, then open the resumable session.
         #
@@ -388,7 +426,19 @@ class YouTube:
             await ledger.refund(entry)
             raise YouTubeError(f"could not open upload session: {init.text[:300]}")
 
-        session_url = init.headers["Location"]
+        session_url = init.headers.get("Location")
+        if not session_url:
+            # A 200 with no Location is not a usable session — but Google answered
+            # 2xx, so it processed the request and the units are plausibly spent.
+            # Deliberately *not* refunded: the two ways to be wrong here are not
+            # symmetric. Over-reporting spend delays an upload until midnight
+            # Pacific; under-reporting it overruns the ceiling, which cannot be
+            # undone. The bare `KeyError` this replaces did neither and read like a
+            # bug in our own code.
+            raise YouTubeError(
+                "upload session opened without a Location header; "
+                "the quota entry is kept because Google answered 2xx"
+            )
 
         # 2. Push chunks, resuming from the last byte the server confirmed.
         offset = 0
@@ -397,7 +447,11 @@ class YouTube:
         # the network allowed, indefinitely, hammering the API that was already
         # asking us to back off.
         attempts = 0
-        async with httpx.AsyncClient(timeout=None) as client:
+        # Not `timeout=None`. A chunk is 8MB, so a generous per-operation timeout is
+        # still a timeout; without one a half-open connection holds the render slot
+        # for as long as the process lives. arq's `job_timeout` only bounds this when
+        # a worker is running, and the in-process fallback has no worker.
+        async with httpx.AsyncClient(timeout=CHUNK_TIMEOUT) as client:
             with video_path.open("rb") as fh:
                 while offset < size:
                     # Read off the event loop. An 8MB read from disk is tens of
@@ -532,6 +586,41 @@ class YouTube:
         )
         items = resp.json().get("items", [])
         return items[0]["processingDetails"]["processingStatus"] if items else "unknown"
+
+    async def duration_seconds(self, video_id: str) -> float | None:
+        """The video's real runtime, for locating a retention fraction in seconds.
+
+        Worth one quota unit rather than being inferred: the nearest thing already
+        on hand is `avd_seconds`, which is *average view duration* — how long the
+        median viewer stayed, not how long the video is. On a video people leave
+        early, the two differ by a factor of several, and every timestamp derived
+        from the wrong one lands somewhere the moment is not.
+        """
+        resp = await self._call(
+            "GET",
+            f"{API}/videos",
+            "videos.list",
+            params={"part": "contentDetails", "id": video_id},
+        )
+        items = resp.json().get("items", [])
+        if not items:
+            return None
+        raw = items[0].get("contentDetails", {}).get("duration")
+        return _parse_iso8601_duration(raw) if raw else None
+
+
+def _parse_iso8601_duration(value: str) -> float | None:
+    """Parse the `PT#H#M#S` form the Data API reports durations in.
+
+    Not `timedelta` — the stdlib has no ISO-8601 duration parser, and the subset
+    YouTube emits for a video is small enough to read directly.
+    """
+    match = re.fullmatch(r"P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?", value)
+    if not match:
+        return None
+    days, hours, minutes, seconds = (float(g or 0) for g in match.groups())
+    total = days * 86400 + hours * 3600 + minutes * 60 + seconds
+    return total or None
 
 
 def _read_at(fh, offset: int, size: int) -> bytes:

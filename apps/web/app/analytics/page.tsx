@@ -1,5 +1,8 @@
 import { Header, Page, Card } from "@/components/ui";
 import { LiveBadge } from "@/components/live-badge";
+import { MonetisationCard } from "@/components/monetisation";
+import { ShortCuts } from "@/components/short-cuts";
+import { getMonetisation } from "@/lib/engine";
 import { BigNumber, StatTile, RetentionMap } from "@/components/charts";
 import {
   VIEWS_28D,
@@ -9,6 +12,7 @@ import {
   RETENTION,
   RETENTION_BEATS,
   RETENTION_BEAT_MAP,
+  SHORT_CUTS,
   FINDINGS,
   SKIPPED,
 } from "@/lib/demo";
@@ -23,7 +27,12 @@ import {
  *  look like a finding from 90, because only the confirmed ones actually change what
  *  the generator does.
  */
-export default function AnalyticsPage() {
+export default async function AnalyticsPage() {
+  // The one figure on this screen that is real. Everything below it is still
+  // `lib/demo.ts` — the per-video metrics need published videos to attribute, and
+  // this needs only a connected channel, so the two arrive at different times and
+  // the badges have to say so separately. KNOWN-ISSUES §5.5.
+  const monetisation = await getMonetisation();
   const total = VIEWS_28D.reduce((a, b) => a + b, 0);
   const confirmed = FINDINGS.filter((f) => f.verdict === "confirmed");
 
@@ -42,6 +51,12 @@ export default function AnalyticsPage() {
         }
       />
       <Page>
+        {monetisation && (
+          <section className="pb-10">
+            <MonetisationCard data={monetisation} />
+          </section>
+        )}
+
         <section className="pb-10">
           <BigNumber
             label="Views"
@@ -183,6 +198,20 @@ export default function AnalyticsPage() {
             Drop is measured per unit of runtime, so a long beat isn&apos;t flagged
             just for being long. The worst beat here is fed into the next script&apos;s
             prompt as an explicit instruction not to repeat it.
+          </p>
+        </section>
+
+        <section className="mt-10">
+          <h2 className="text-[13px] font-semibold text-[var(--color-muted)]">
+            Worth cutting into a Short
+          </h2>
+          <Card className="mt-3 p-6">
+            <ShortCuts cuts={SHORT_CUTS} />
+          </Card>
+          <p className="mt-3 max-w-[64ch] text-[12px] leading-relaxed text-[var(--color-faint)]">
+            Ranked by how far each stretch rises above the video&apos;s own retention
+            decay — not by raw retention, which is highest in the first ten seconds
+            of every video ever made and would pick the intro every time.
           </p>
         </section>
 

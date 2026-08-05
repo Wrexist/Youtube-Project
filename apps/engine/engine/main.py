@@ -29,7 +29,7 @@ from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
 from engine.api.setup import router as setup_router
-from engine.insights import VideoRecord, analyze
+from engine.insights import VideoRecord, analyze, beats_to_payload
 from engine.providers import youtube
 from engine.quota import QuotaExceeded, ledger
 from engine.settings import get_settings
@@ -698,7 +698,29 @@ def _published_record(job: dict) -> VideoRecord | None:
         thumbnail_concept=thumbnail_concept,
         script_model=_output_model(job, "revision", "draft"),
         format=str(job.get("inputs", {}).get("format", "short")),
+        # Without this the retention map and the Shorts selector both read an empty
+        # beat list on every published video — the field they read did not exist and
+        # `getattr(..., [])` hid it. Carried as plain dicts so the record survives
+        # the JSON column unchanged.
+        beats=_published_beats(job),
     )
+
+
+def _published_beats(job: dict) -> list[dict]:
+    """The beats the script was written in, in stored form.
+
+    The `beats` stage output is the canonical list; a publish job that was resumed
+    from a partial run may not have it, and an empty list is the honest answer there
+    rather than a reconstruction.
+    """
+    raw = _output_value(job, "beats")
+    if not raw:
+        return []
+    try:
+        return beats_to_payload(list(raw))
+    except (TypeError, ValueError) as exc:
+        logger.warning("could not record beats for attribution: {}", exc)
+        return []
 
 
 async def _capture_published_record(job: dict) -> None:

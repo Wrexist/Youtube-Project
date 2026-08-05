@@ -63,6 +63,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/analytics/monetisation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Monetisation
+         * @description How close the channel is to the Partner Programme, on either route.
+         *
+         *     The number the whole product is aimed at, and the one no screen showed. Three
+         *     calls: the subscriber total from the Data API (one quota unit — Analytics
+         *     reports a delta, not a count), a year of daily watch minutes, and 90 days of
+         *     Shorts views.
+         *
+         *     A year of dailies is one Analytics query, and Analytics has its own far larger
+         *     quota pool (KNOWN-ISSUES §3.2b), so the cost of this endpoint is the single
+         *     Data API unit.
+         */
+        get: operations["monetisation_v1_analytics_monetisation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/analytics/retention/{video_id}": {
         parameters: {
             query?: never;
@@ -75,6 +104,35 @@ export interface paths {
          * @description The retention curve with script beats located on it.
          */
         get: operations["retention_v1_analytics_retention__video_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/analytics/shorts/{video_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Shorts
+         * @description Moments in a long-form video worth cutting into a Short.
+         *
+         *     Reads the retention curve the retention map already pulls, and the beats the
+         *     script was written in, so the only new cost is one `videos.list` unit for the
+         *     runtime.
+         *
+         *     An empty list is a real answer and comes with a `note` saying why — a video
+         *     whose retention never rises above its own decay has no standout moment, and
+         *     offering three arbitrary windows instead would make every later ranking
+         *     unbelievable.
+         */
+        get: operations["shorts_v1_analytics_shorts__video_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -411,6 +469,31 @@ export interface paths {
          * @description Pull the last 90 days and re-join metrics onto stored provenance.
          */
         post: operations["refresh_insights_v1_insights_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/insights/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Review
+         * @description Run the weekly review now, rather than waiting for Monday.
+         *
+         *     The same work the cron job does, including storing this run's snapshot — so a
+         *     manual run genuinely becomes the baseline the next diff compares against,
+         *     instead of producing a report that vanishes and lets Monday re-report
+         *     everything it already showed.
+         */
+        post: operations["run_review_v1_insights_review_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1171,6 +1254,22 @@ export interface components {
             /** Tasks */
             tasks: components["schemas"]["TaskRoute"][];
         };
+        /** MonetisationOut */
+        MonetisationOut: {
+            /** Blocking */
+            blocking: string[];
+            /** Caveat */
+            caveat: string | null;
+            /** Eligible */
+            eligible: boolean;
+            /** Route */
+            route: string;
+            shorts_views: components["schemas"]["ThresholdOut"];
+            /** Subscriber Count Hidden */
+            subscriber_count_hidden: boolean;
+            subscribers: components["schemas"]["ThresholdOut"];
+            watch_hours: components["schemas"]["ThresholdOut"];
+        };
         /**
          * PendingVideo
          * @description One video waiting for a slot.
@@ -1318,6 +1417,36 @@ export interface components {
             /** Worker Running */
             worker_running: boolean;
         };
+        /** ShortCandidateOut */
+        ShortCandidateOut: {
+            /** Duration S */
+            duration_s: number;
+            /** End S */
+            end_s: number;
+            /** Hold */
+            hold: number;
+            /** Label */
+            label: string;
+            /** Lift */
+            lift: number;
+            /** Reason */
+            reason: string;
+            /** Score */
+            score: number;
+            /** Start S */
+            start_s: number;
+        };
+        /** ShortsOut */
+        ShortsOut: {
+            /** Candidates */
+            candidates: components["schemas"]["ShortCandidateOut"][];
+            /** Duration S */
+            duration_s: number;
+            /** Note */
+            note: string | null;
+            /** Video Id */
+            video_id: string;
+        };
         /** TaskRoute */
         TaskRoute: {
             /** Group */
@@ -1332,6 +1461,33 @@ export interface components {
             quality: string;
             /** Task */
             task: string;
+        };
+        /**
+         * ThresholdOut
+         * @description One bar. `fraction` is already clamped to 0..1, so the UI multiplies by 100
+         *     and stops there — nothing downstream re-derives it from current/target.
+         */
+        ThresholdOut: {
+            /** Covers Full Window */
+            covers_full_window: boolean;
+            /** Current */
+            current: number;
+            /** Days Remaining */
+            days_remaining: number | null;
+            /** Fraction */
+            fraction: number;
+            /** Met */
+            met: boolean;
+            /** Name */
+            name: string;
+            /** Remaining */
+            remaining: number;
+            /** Target */
+            target: number;
+            /** Unit */
+            unit: string;
+            /** Window Days */
+            window_days: number;
         };
         /** ValidationError */
         ValidationError: {
@@ -1447,6 +1603,26 @@ export interface operations {
             };
         };
     };
+    monetisation_v1_analytics_monetisation_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonetisationOut"];
+                };
+            };
+        };
+    };
     retention_v1_analytics_retention__video_id__get: {
         parameters: {
             query?: never;
@@ -1467,6 +1643,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    shorts_v1_analytics_shorts__video_id__get: {
+        parameters: {
+            query?: {
+                count?: number;
+            };
+            header?: never;
+            path: {
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShortsOut"];
                 };
             };
             /** @description Validation Error */
@@ -1927,6 +2136,28 @@ export interface operations {
         };
     };
     refresh_insights_v1_insights_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    run_review_v1_insights_review_post: {
         parameters: {
             query?: never;
             header?: never;

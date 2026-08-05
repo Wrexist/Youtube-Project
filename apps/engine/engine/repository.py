@@ -24,17 +24,27 @@ startup so a job that was mid-render when the process died comes back as
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import UTC, datetime
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from sqlalchemy import delete, select
 
 from engine.db import session
 from engine.insights import VideoRecord
-from engine.tables import Channel, ChannelLaunch, Job, PerformanceRecord, ScheduleSlot
+
+if TYPE_CHECKING:  # `review` imports this module at call time; keep the cycle unrun.
+    from engine.review import Snapshot
+from engine.tables import (
+    Channel,
+    ChannelLaunch,
+    Job,
+    PerformanceRecord,
+    ReviewSnapshot,
+    ScheduleSlot,
+)
 from engine.workflows.base import StageState, StageStatus
 
 # ── stage state (de)serialisation ───────────────────────────────────────────
@@ -380,10 +390,49 @@ def jsonable(inputs: dict) -> dict:
 # ── performance records ─────────────────────────────────────────────────────
 
 
+#: Fields renamed since rows were first written, old name -> new name.
+#:
+#: `retention_30s` only ever held `averageViewPercentage`, so it was renamed to
+#: say so. The rename alone silently destroyed history: `VideoRecord(**payload)`
+#: raises TypeError on the unknown key, `_record_from_payload` caught it, and
+#: every performance record written before the rename was dropped at startup with
+#: one warning line. The attribution loop's entire sample, gone on upgrade.
+_RENAMED_FIELDS = {"retention_30s": "avd_percent"}
+
+
 def _record_from_payload(payload: dict) -> VideoRecord | None:
+    """Rebuild a stored record, tolerating the shapes older rows were written in.
+
+    Unknown keys are dropped rather than fatal. A field removed in a later version
+    should cost that field, not the row — losing the row loses the provenance that
+    is the only reason this table exists, and it does so quietly.
+    """
+    known = {f.name for f in fields(VideoRecord)}
+    migrated: dict[str, Any] = {}
+    unknown: list[str] = []
+
+    # Canonical names first, then the renamed ones fill what is still missing.
+    # A single pass with `setdefault` let key *order* decide: a payload carrying
+    # both `retention_30s` and `avd_percent` took whichever came first, so a
+    # migrated legacy value could silently beat the real one. Rare, but the rule
+    # should be stated rather than fall out of dict ordering.
+    for key, value in payload.items():
+        if key in known:
+            migrated[key] = value
+        elif key not in _RENAMED_FIELDS:
+            unknown.append(key)
+
+    for old, new in _RENAMED_FIELDS.items():
+        if old in payload and new not in migrated:
+            migrated[new] = payload[old]
+
+    if unknown:
+        logger.info("ignoring {} unknown field(s) on a stored record: {}", len(unknown), unknown)
+
     try:
-        return VideoRecord(**payload)
+        return VideoRecord(**migrated)
     except TypeError as exc:
+        # Only a *missing required* field reaches here now.
         logger.warning("dropping malformed performance record: {}", exc)
         return None
 
@@ -411,6 +460,32 @@ async def load_performance_records() -> dict[str, VideoRecord]:
         if record is not None:
             records[record.video_id] = record
     return records
+
+
+async def save_review_snapshot(payload: Snapshot, video_count: int) -> None:
+    """Record what the weekly review believed, for next week's diff to read."""
+    if not _persistence_enabled():
+        return
+    async with session() as db:
+        db.add(ReviewSnapshot(payload=payload, video_count=video_count))
+
+
+async def latest_review_snapshot() -> Snapshot | None:
+    """The most recent snapshot, or None when no review has ever run.
+
+    None and an empty snapshot are different answers and must stay so: no previous
+    review means every finding is reported as new, while a previous review that
+    found nothing means a finding appearing now genuinely appeared.
+    """
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = (
+            await db.execute(
+                select(ReviewSnapshot).order_by(ReviewSnapshot.generated_at.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+    return row.payload if row is not None else None
 
 
 # The old private name, kept because save_job and the tests both use it.
