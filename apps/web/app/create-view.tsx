@@ -1,14 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Header, Page, Button, Card } from "@/components/ui";
 import { Pipeline } from "@/components/pipeline";
 import { VideoPreview } from "@/components/video-preview";
 import { useJobStream } from "@/lib/use-job-stream";
 import { DEMO_JOB } from "@/lib/demo";
 import type { Stage } from "@/lib/types";
-import { ideaSuggestions, improveTopic, publish, rerunFrom, startJob } from "./actions";
+import type { Playlist } from "@studio/contracts";
+import {
+  ideaSuggestions,
+  improveTopic,
+  loadPlaylists,
+  publish,
+  rerunFrom,
+  startJob,
+} from "./actions";
 
 /**
  * Whether this install can actually make a video, as of the last page load.
@@ -76,6 +84,9 @@ export function CreateView({
   const [attempt, setAttempt] = useState(0);
   /** Which variant is picked per stage, so the choice reaches the publish call. */
   const [chosen, setChosen] = useState<Record<string, number>>({});
+  /** The playlist to add the upload to, or "" for none. */
+  const [playlist, setPlaylist] = useState("");
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
 
   const stream = useJobStream(jobId, emptyStages(), attempt);
 
@@ -93,6 +104,50 @@ export function CreateView({
       cancelled = true;
     };
   }, [jobId, demo]);
+  // Fetched when the run finishes rather than on mount: it is one quota unit and
+  // a round trip that only matters at the approval gate, and a job that fails
+  // never reaches it.
+  useEffect(() => {
+    if (demo || stream.status !== "completed") return;
+    let cancelled = false;
+    loadPlaylists().then((r) => {
+      if (!cancelled && r.ok && r.data) setPlaylists(r.data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [demo, stream.status]);
+
+  /**
+   * Say so when a long render lands.
+   *
+   * A long-form render is tens of minutes; the tab gets buried and there is no
+   * signal. The stream already knows, so this costs a notification and nothing
+   * else.
+   *
+   * Guarded three ways, because every one of them happens: the API is absent in
+   * some browsers and all insecure origins, permission may be denied, and the
+   * effect re-runs on every stream tick — so `notified` makes it fire once per
+   * job rather than once per frame. Nothing is shown while the tab is focused;
+   * a notification for something you are already looking at is noise.
+   */
+  const notified = useRef<string | null>(null);
+  useEffect(() => {
+    if (demo || !jobId) return;
+    if (stream.status !== "completed" && stream.status !== "failed") return;
+    if (notified.current === jobId) return;
+    notified.current = jobId;
+
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    if (typeof document !== "undefined" && document.visibilityState === "visible") return;
+
+    const ok = stream.status === "completed";
+    new Notification(ok ? "Your video is ready" : "The run stopped", {
+      body: ok ? topic || "Open Studio to review and publish." : (stream.error ?? "A stage failed."),
+      tag: jobId, // replaces rather than stacks if one is already showing
+    });
+  }, [demo, jobId, stream.status, stream.error, topic]);
+
   const stages: Stage[] = demo ? DEMO_JOB.stages : stream.stages;
   const cost = demo ? DEMO_JOB.cost_usd : stream.cost_usd;
 
@@ -132,6 +187,14 @@ export function CreateView({
   function start() {
     if (topic.trim().length < 3) return;
     setError(null);
+    // Asked here and nowhere else. Browsers require a user gesture for this, and
+    // Generate is the only moment where wanting to be told when it finishes is
+    // self-evident — a prompt on page load is the one everybody denies. The result
+    // is deliberately ignored: a refusal is a preference, not an error, and the
+    // run is unaffected either way.
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      void Notification.requestPermission().catch(() => {});
+    }
     startTransition(async () => {
       const result = await startJob({ topic: topic.trim(), format });
       if (result.ok && result.data) {
@@ -156,6 +219,11 @@ export function CreateView({
         // and published the first one anyway.
         chosen_title_index: chosen.titles ?? 0,
         chosen_thumbnail_index: chosen.thumbnail ?? 0,
+        // `PublishRequest` has accepted this since it was written, and nothing
+        // ever sent it — so `PlaylistStage` skipped on every publish this project
+        // has ever done. Undefined rather than "" keeps the stage's own skip
+        // condition meaningful for "no playlist".
+        playlist_id: playlist || undefined,
       });
       if (result.ok) {
         setNotice("Publishing — the upload has started.");
@@ -198,7 +266,25 @@ export function CreateView({
             </span>
           }
           action={
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              {/* Only once there is something to publish, and only if the channel
+                  actually has playlists. An empty select beside Publish is a
+                  control that asks a question with no answers. */}
+              {playlists.length > 0 && stream.status === "completed" && !demo && (
+                <select
+                  value={playlist}
+                  onChange={(e) => setPlaylist(e.target.value)}
+                  aria-label="Add to playlist"
+                  className="max-w-[180px] rounded-[var(--radius-btn)] border border-[var(--color-line)] bg-[var(--color-bg)] px-2.5 py-2 text-[13px] text-[var(--color-muted)] outline-none transition-colors duration-150 hover:border-[var(--color-line-hover)] focus:border-[var(--color-accent)]"
+                >
+                  <option value="">No playlist</option>
+                  {playlists.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title} ({p.count})
+                    </option>
+                  ))}
+                </select>
+              )}
               <Button variant="ghost" onClick={reset}>
                 New
               </Button>

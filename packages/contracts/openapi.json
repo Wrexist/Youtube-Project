@@ -725,6 +725,49 @@
         "title": "MonetisationOut",
         "type": "object"
       },
+      "Options": {
+        "description": "What this install can actually choose between, right now.",
+        "properties": {
+          "fonts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fonts",
+            "type": "array"
+          },
+          "tracks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tracks",
+            "type": "array"
+          },
+          "tracks_dir": {
+            "title": "Tracks Dir",
+            "type": "string"
+          },
+          "voices": {
+            "items": {
+              "$ref": "#/components/schemas/Voice"
+            },
+            "title": "Voices",
+            "type": "array"
+          },
+          "voices_live": {
+            "title": "Voices Live",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "voices",
+          "voices_live",
+          "fonts",
+          "tracks",
+          "tracks_dir"
+        ],
+        "title": "Options",
+        "type": "object"
+      },
       "PendingVideo": {
         "description": "One video waiting for a slot.\n\nWas `dict`, which meant a missing `id` reached `auto_schedule` and came back\nas a 500 with a KeyError \u2014 four ordinary malformed payloads all did. Declaring\nthe shape turns each of them into a 422 naming the field.",
         "properties": {
@@ -764,6 +807,29 @@
           "id"
         ],
         "title": "PendingVideo",
+        "type": "object"
+      },
+      "Playlist": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "count"
+        ],
+        "title": "Playlist",
         "type": "object"
       },
       "PublishRequest": {
@@ -1156,6 +1222,153 @@
         "title": "ShortsOut",
         "type": "object"
       },
+      "Style": {
+        "properties": {
+          "bgm_enabled": {
+            "title": "Bgm Enabled",
+            "type": "boolean"
+          },
+          "bgm_track": {
+            "title": "Bgm Track",
+            "type": "string"
+          },
+          "bgm_volume": {
+            "title": "Bgm Volume",
+            "type": "number"
+          },
+          "ken_burns": {
+            "enum": [
+              "none",
+              "in",
+              "out",
+              "alternate"
+            ],
+            "title": "Ken Burns",
+            "type": "string"
+          },
+          "options": {
+            "$ref": "#/components/schemas/Options"
+          },
+          "subtitle_font": {
+            "title": "Subtitle Font",
+            "type": "string"
+          },
+          "transition_fade_s": {
+            "title": "Transition Fade S",
+            "type": "number"
+          },
+          "voice": {
+            "title": "Voice",
+            "type": "string"
+          }
+        },
+        "required": [
+          "voice",
+          "subtitle_font",
+          "ken_burns",
+          "transition_fade_s",
+          "bgm_enabled",
+          "bgm_volume",
+          "bgm_track",
+          "options"
+        ],
+        "title": "Style",
+        "type": "object"
+      },
+      "StyleUpdate": {
+        "description": "Every field optional \u2014 the screen sends what changed, not the whole form.",
+        "properties": {
+          "bgm_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bgm Enabled"
+          },
+          "bgm_track": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bgm Track"
+          },
+          "bgm_volume": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bgm Volume"
+          },
+          "ken_burns": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "in",
+                  "out",
+                  "alternate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ken Burns"
+          },
+          "subtitle_font": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtitle Font"
+          },
+          "transition_fade_s": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transition Fade S"
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice"
+          }
+        },
+        "title": "StyleUpdate",
+        "type": "object"
+      },
       "Suggestion": {
         "properties": {
           "competition": {
@@ -1429,6 +1642,42 @@
           "image_model"
         ],
         "title": "Variant",
+        "type": "object"
+      },
+      "Voice": {
+        "description": "One narrator, described in the service's own words rather than ours.",
+        "properties": {
+          "gender": {
+            "title": "Gender",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "locale": {
+            "title": "Locale",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "traits": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Traits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "locale",
+          "gender"
+        ],
+        "title": "Voice",
         "type": "object"
       },
       "engine__api__channels__ApplyRequest": {
@@ -2245,6 +2494,32 @@
           }
         },
         "summary": "Limits",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/v1/channels/playlists": {
+      "get": {
+        "description": "The connected channel's playlists, so a publish can pick one.\n\n`PlaylistStage` has been able to add a video to a playlist since it was\nwritten, and skipped on every run, because `playlist_id` was never set by\nanything \u2014 there was no way to learn an id short of reading it out of a YouTube\nURL. One quota unit.\n\nAn empty list when no channel is connected, rather than an error: the publish\nscreen asks for this before it knows whether it will need it, and a 4xx there\nwould surface as a failure on a screen where nothing has failed.",
+        "operationId": "playlists_v1_channels_playlists_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Playlist"
+                  },
+                  "title": "Response Playlists V1 Channels Playlists Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Playlists",
         "tags": [
           "channels"
         ]
@@ -3431,6 +3706,67 @@
         "summary": "Report",
         "tags": [
           "setup"
+        ]
+      }
+    },
+    "/v1/style": {
+      "get": {
+        "operationId": "read_v1_style_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Style"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read",
+        "tags": [
+          "style"
+        ]
+      },
+      "put": {
+        "description": "Write the changed fields to `.env` and make them live in this process.\n\nReturns the new state rather than an acknowledgement, so the screen shows what\nis actually in force instead of what it hoped it had set \u2014 the same contract as\n`PUT /v1/setup/keys`.",
+        "operationId": "update_v1_style_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StyleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Style"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update",
+        "tags": [
+          "style"
         ]
       }
     },

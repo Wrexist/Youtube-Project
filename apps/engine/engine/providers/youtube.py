@@ -592,6 +592,35 @@ class YouTube:
             files=files,
         )
 
+    async def playlists(self, limit: int = 50) -> list[dict]:
+        """The channel's own playlists, cheapest-possible.
+
+        One unit — `playlists.list` is a read — so the publish screen can offer a
+        real picker rather than asking for an id. `PlaylistStage` has been able to
+        add a video to a playlist since it was written and skipped every time,
+        because nothing could tell it which playlist.
+
+        `mine=true` rather than a channel id: the credentials already scope this to
+        the connected account, and asking for someone else's playlists would return
+        only their public ones anyway.
+        """
+        response = await self._call(
+            "GET",
+            f"{API}/playlists",
+            "playlists.list",
+            params={"part": "snippet,contentDetails", "mine": "true", "maxResults": limit},
+        )
+        items = response.json().get("items", [])
+        return [
+            {
+                "id": item.get("id", ""),
+                "title": (item.get("snippet") or {}).get("title", ""),
+                "count": (item.get("contentDetails") or {}).get("itemCount", 0),
+            }
+            for item in items
+            if item.get("id")
+        ]
+
     async def add_to_playlist(self, video_id: str, playlist_id: str) -> None:
         await self._call(
             "POST",

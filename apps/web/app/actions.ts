@@ -28,9 +28,11 @@ import {
   regenerateThumbnail,
   sharpenThumbnailInstruction,
   getDiagnosticReport,
+  getPlaylists,
   isLive,
   publishJob,
   saveKeys,
+  saveStyle,
   applySchedulePlan,
   editStage,
   rerunStage,
@@ -46,8 +48,11 @@ import type {
   Brief,
   Diagnostics,
   JobRequest,
+  Playlist,
   PublishRequest,
   Sharpened,
+  Style,
+  StyleUpdate,
   Suggestion,
   Thumbnails,
 } from "@studio/contracts";
@@ -99,6 +104,31 @@ export async function ideaSuggestions(): Promise<ActionResult<Suggestion[]>> {
 
 export async function loadThumbnails(jobId: string): Promise<ActionResult<Thumbnails>> {
   const data = await getThumbnails(jobId);
+  if (!data) return { ok: false, error: "the engine did not answer" };
+  return { ok: true, data };
+}
+
+/**
+ * Change how videos sound and look.
+ *
+ * The engine answers with the whole style *in force*, not an acknowledgement, so
+ * the screen renders what actually took effect. That distinction is load-bearing
+ * here: an already-exported `STUDIO_*` variable outranks the dotenv, so a save can
+ * legitimately succeed on disk and change nothing, and only the engine knows.
+ */
+export async function updateStyle(changes: StyleUpdate): Promise<ActionResult<Style>> {
+  try {
+    return { ok: true, data: await saveStyle(changes) };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+export async function loadPlaylists(): Promise<ActionResult<Playlist[]>> {
+  const data = await getPlaylists();
+  // `null` is the engine being unreachable. An empty array is a connected channel
+  // with no playlists, or no channel at all — both of which the picker renders as
+  // "nothing to add this to", which is true and not an error.
   if (!data) return { ok: false, error: "the engine did not answer" };
   return { ok: true, data };
 }

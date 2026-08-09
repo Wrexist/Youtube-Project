@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     bgm_enabled: bool = False
     bgm_dir: str = ""
     bgm_volume: float = Field(default=0.12, gt=0.0, le=1.0)
+    #: Which track, by filename. Empty means a different one each render, which
+    #: `bgm.resolve` has always supported and nothing was able to override — the
+    #: renderer called `resolve()` with no argument, so "random" was the only
+    #: behaviour reachable however many tracks were on disk.
+    bgm_track: str = ""
 
     # YouTube
     youtube_daily_quota: int = 10_000

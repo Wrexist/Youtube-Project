@@ -31,10 +31,13 @@ import type {
   JobStatus,
   JobSummary,
   Models,
+  Playlist,
   PublishRequest,
   Quota,
   Sharpened,
   SetupStatus,
+  Style,
+  StyleUpdate,
   Suggestions,
   Thumbnails,
   WorkflowGraph,
@@ -207,6 +210,8 @@ export const getMonetisation = () => get<Monetisation>("/v1/analytics/monetisati
 export const getShorts = (videoId: string, count = 3) =>
   get<Shorts>(`/v1/analytics/shorts/${encodeURIComponent(videoId)}?count=${count}`);
 export const getModels = () => get<Models>("/v1/models");
+export const getStyle = () => get<Style>("/v1/style");
+export const getPlaylists = () => get<Playlist[]>("/v1/channels/playlists");
 export const getWorkflow = (name: string) => get<WorkflowGraph>(`/v1/workflows/${name}`);
 export const getJob = (id: string) => get<Record<string, unknown>>(`/v1/jobs/${id}`);
 
@@ -245,6 +250,9 @@ export const fileUrl = (key: string) => `${BASE}/v1/files/${key}`;
 /** Route one task to one model. PUT, not POST — it replaces, it does not append. */
 export const setRoute = (task: string, model: string) =>
   put<unknown>("/v1/models/route", { task, model });
+
+/** Only what changed. The engine returns the whole style back, in force. */
+export const saveStyle = (changes: StyleUpdate) => put<Style>("/v1/style", changes);
 
 /** The "run it all locally" button. */
 export const setAllRoutes = (model: string) =>
