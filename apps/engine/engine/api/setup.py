@@ -39,6 +39,7 @@ from fastapi.responses import PlainTextResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from engine import secretfile
 from engine.models import routing
 from engine.settings import get_settings
 
@@ -532,8 +533,9 @@ def write_env(path: Path, updates: dict[str, str]) -> None:
         with os.fdopen(handle, "w", encoding="utf-8") as fh:
             fh.write("\n".join(out).rstrip("\n") + "\n")
         # Before the rename, not after: for the width of the gap otherwise, every
-        # credential in the file is world-readable.
-        tmp.chmod(0o600)
+        # credential in the file is readable by whoever the directory lets in. The
+        # rename carries the tightened ACL with it.
+        secretfile.restrict(tmp)
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)

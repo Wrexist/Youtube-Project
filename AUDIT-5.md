@@ -292,8 +292,11 @@ Not features; each is under an hour and each has bitten already.
 - **Channel launches are generated and never persisted** — `save_launch` and
   `load_launches` both exist and nothing calls either.
 - **`storage/tmp` keeps a full copy of every render.** 55MB per video, never cleaned.
-- **Secrets on Windows have no ACL** — `chmod(0o600)` is a no-op there. Written up as
-  KNOWN-ISSUES §5.9.
+- ~~**Secrets on Windows have no ACL**~~ — done, and it was not the theoretical
+  finding it was filed as. `chmod(0o600)` is a no-op there, and the machine this was
+  audited on had a sandbox tool granting a service group read on `Downloads` by
+  inheritance, so `.env` was readable by two other local accounts. `secretfile.py`
+  now sets an explicit DACL at both write sites. KNOWN-ISSUES §5.9.
 - **`providers/llm.py` still opens `httpx.AsyncClient` inline in three places**, with
   no retry below the JSON-parse loop in `LLM.json` — so a connection reset fails the
   stage rather than being asked again. `providers/images.py` now has the wrapper

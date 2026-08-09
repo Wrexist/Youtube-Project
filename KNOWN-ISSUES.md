@@ -392,19 +392,58 @@ observable, and the two tests that assert on them
 are skipped on `os.name == "nt"` — they were failing every Windows install, and
 passing them would have meant testing Python's emulation rather than the file.
 
-What actually protects both files on Windows is the NTFS ACL inherited from the
-directory they sit in. Under a user profile — `C:\Users\<you>\...`, where anyone who
-double-clicked `Install Studio.cmd` from their Downloads folder ends up — that
-already excludes other non-administrator users, which is the same practical
-guarantee `0o600` gives. It is *not* equivalent anywhere world-writable: a clone
-under `C:\ProgramData`, a shared drive, or the root of `C:\` inherits a permissive
-ACL and every local user can read the credentials.
+What decides who can read either file on Windows is the NTFS ACL it inherits from
+its directory. This section used to argue that inheritance was good enough in
+practice, on the grounds that a clone under a user profile — `C:\Users\<you>\...`,
+where anyone who double-clicked `Install Studio.cmd` from their Downloads folder
+ends up — inherits an ACL that already excludes other non-administrator users.
 
-Closing it properly means setting an explicit DACL (`icacls /inheritance:r
-/grant:r <SID>:F`, or the Win32 API through `ctypes`) at both write sites, and the
-tests then have to assert on the ACL rather than on `st_mode`. Not done: it is a
-security feature rather than a portability fix, and CLAUDE.md #4's "never
-committed, never logged" is unaffected either way.
+**That was wrong, and the machine it was written on was the counterexample.** A
+sandboxing tool had added an explicit `(OI)(CI)` ACE granting a service group Read
+& Execute on `C:\Users\<user>\Downloads`, so `.env` came out as:
+
+```
+.env  Phantomen\CodexSandboxUsers:(I)(RX)
+      NT AUTHORITY\SYSTEM:(I)(F)
+      BUILTIN\Administrators:(I)(F)
+      PHANTOMEN\IsacC:(I)(F)
+```
+
+Two other local accounts could read every API key and the OAuth client secret. A
+profile directory is a *convention* about permissions, not a guarantee, and the
+tools most likely to add an inherited read ACE — sandboxes, MDM, backup agents — are
+exactly the ones a developer machine collects.
+
+**Fixed.** `engine/secretfile.py` sets an explicit DACL at both write sites:
+`icacls /inheritance:r` followed by full control for the owner's SID, SYSTEM and
+Administrators. SYSTEM and Administrators are kept deliberately — an administrator
+can take ownership of any file regardless, so dropping them protects nothing and
+breaks backup and antivirus tooling.
+
+Two things about it are worth knowing:
+
+- **It never raises.** It runs after the credential is already on disk, and a file
+  with a wider ACL than intended is a smaller problem than a broken install.
+- **It verifies its own work.** `/inheritance:r` strips before it grants, so a grant
+  that fails halfway leaves a file readable by nobody — including the engine on its
+  next start. If the tightening cannot be confirmed by reading the file back, it is
+  reverted with `icacls /reset` and warned about.
+
+That self-check exists because CI cannot cover this: every workflow is
+`ubuntu-latest`, so `test_the_acl_keeps_only_the_owner_system_and_administrators`
+is skipped everywhere except a developer's own Windows machine. The revert path is
+tested on all platforms by driving the Windows branch directly.
+
+The two `st_mode` tests above stay skipped on Windows — they assert on Python's
+emulation, which is still not the mechanism.
+
+**Existing files are not retro-fixed.** The ACL is applied when a file is written,
+so a `.env` that predates this keeps whatever it inherited until the next key save.
+To tighten one in place:
+
+```
+icacls .env /inheritance:r /grant:r "%USERNAME%:(F)" /grant:r "*S-1-5-18:(F)" /grant:r "*S-1-5-32-544:(F)"
+```
 
 ---
 
