@@ -15,6 +15,7 @@ defaults to "auto" rather than naming a provider.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -29,6 +30,26 @@ ImageProvider = Literal["openai", "gemini"]
 
 class ImageUnavailable(RuntimeError):
     """The provider could not be reached, or returned something unusable."""
+
+
+_ATTEMPTS = 3
+#: Doubling from here: 2s, then 4s. Small against the 10-30s an image generation
+#: takes anyway, and short enough that three failures still answer the HTTP request
+#: waiting on them.
+_BACKOFF = 2.0
+
+#: Statuses worth a second ask. Every one of them is the provider saying it did no
+#: work — a rate limit, or its own fault. The rest of 4xx is deterministic: a
+#: rejected prompt, a bad key and an unknown model all answer the same way three
+#: times over, so retrying them only delays the error the operator has to read.
+_TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})
+
+#: Retried for the same reason: all three fail *before* the request reaches the
+#: provider, so there is no half-finished generation to pay for twice. Read and
+#: write timeouts are deliberately absent — those mean the request landed and our
+#: own client gave up waiting, and an image API that is merely slow may well bill
+#: for the picture it was still drawing.
+_RETRYABLE = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
 
 @dataclass
@@ -180,19 +201,74 @@ async def generate(prompt: str, *, aspect: str = "16:9") -> GeneratedImage | Non
     )
 
 
+async def _send(
+    method: Literal["GET", "POST"],
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    json: dict | None = None,
+    follow_redirects: bool = False,
+) -> httpx.Response:
+    """One call to an image provider, asked again while the failure looks transient.
+
+    CLAUDE.md wants external calls behind a wrapper with retry and backoff, and this
+    module needs one more than most. Two of the three callers of `generate` are
+    workflow stages, which already get three attempts from the runner — but
+    `POST /v1/jobs/{id}/thumbnails` composes its variant inside the request. Nothing
+    stands behind that one, so a single 503 turns a generation the operator paid for
+    into a 502 they have to notice and repeat.
+
+    On the last attempt the response is handed back rather than raised on, so the
+    caller's own error keeps the provider's body text in it. That text is the part
+    that says *why*, and a generic "gave up after 3 attempts" throws it away.
+    """
+    last: Exception | None = None
+    for attempt in range(1, _ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(
+                timeout=180.0, follow_redirects=follow_redirects
+            ) as client:
+                if method == "POST":
+                    resp = await client.post(url, headers=headers, json=json)
+                else:
+                    resp = await client.get(url, headers=headers)
+        except _RETRYABLE as exc:
+            last = exc
+            reason = type(exc).__name__
+        else:
+            if attempt == _ATTEMPTS or resp.status_code not in _TRANSIENT:
+                return resp
+            reason = str(resp.status_code)
+
+        if attempt == _ATTEMPTS:
+            break
+        # Safe to log the URL: this module keeps every key in a header precisely so
+        # that a logged request cannot carry one.
+        logger.warning(
+            "image provider gave {} on attempt {}/{} for {} - retrying",
+            reason,
+            attempt,
+            _ATTEMPTS,
+            url,
+        )
+        await asyncio.sleep(_BACKOFF * 2 ** (attempt - 1))
+
+    raise ImageUnavailable(f"could not reach the image provider: {last}") from last
+
+
 async def _openai(spec: ImageSpec, prompt: str) -> bytes:
     settings = get_settings()
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/images/generations",
-            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-            json={
-                "model": spec.model,
-                "prompt": prompt,
-                "size": spec.request_size,
-                "n": 1,
-            },
-        )
+    resp = await _send(
+        "POST",
+        "https://api.openai.com/v1/images/generations",
+        headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+        json={
+            "model": spec.model,
+            "prompt": prompt,
+            "size": spec.request_size,
+            "n": 1,
+        },
+    )
     if resp.status_code >= 400:
         raise ImageUnavailable(f"OpenAI images returned {resp.status_code}: {resp.text[:200]}")
 
@@ -238,10 +314,9 @@ async def _gemini(spec: ImageSpec, prompt: str) -> bytes:
             "parameters": {"sampleCount": 1, "aspectRatio": spec.request_size},
         }
 
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        resp = await client.post(
-            url, headers={"x-goog-api-key": settings.gemini_api_key or ""}, json=body
-        )
+    resp = await _send(
+        "POST", url, headers={"x-goog-api-key": settings.gemini_api_key or ""}, json=body
+    )
     if resp.status_code >= 400:
         raise ImageUnavailable(f"{spec.label} returned {resp.status_code}: {resp.text[:200]}")
 
@@ -264,8 +339,7 @@ async def _gemini(spec: ImageSpec, prompt: str) -> bytes:
 
 
 async def _fetch(url: str) -> bytes:
-    async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
-        resp = await client.get(url)
+    resp = await _send("GET", url, follow_redirects=True)
     if resp.status_code >= 400:
         raise ImageUnavailable(f"could not download generated image: {resp.status_code}")
     return resp.content

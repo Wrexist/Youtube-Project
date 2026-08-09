@@ -189,11 +189,90 @@ async def test_the_api_key_never_appears_in_the_error(monkeypatch):
     """Imagen takes its key in the query string, so the URL must stay out of logs."""
     monkeypatch.setenv("STUDIO_IMAGE_PROVIDER", "gemini")
     monkeypatch.setenv("GEMINI_API_KEY", "super-secret-key")
+    monkeypatch.setattr(images, "_BACKOFF", 0.0)  # 500 is retried; do not sleep for it
     _stub_post(monkeypatch, httpx.Response(500, text="upstream boom"))
 
     with pytest.raises(images.ImageUnavailable) as caught:
         await images.generate("a ridge at dawn")
     assert "super-secret-key" not in str(caught.value)
+
+
+# ── transport retry ─────────────────────────────────────────────────────────
+#
+# Two of the three callers of `generate` are stages, and the workflow runner gives
+# a stage three attempts. The third is `POST /v1/jobs/{id}/thumbnails`, which
+# composes inside the request with nothing behind it — so a blip there is a 502 on
+# an action the panel has already told the operator costs money.
+
+
+async def test_a_transient_status_is_retried_until_it_succeeds(monkeypatch):
+    calls = _stub_sequence(
+        monkeypatch,
+        httpx.Response(503, text="overloaded"),
+        httpx.Response(429, text="slow down"),
+        httpx.Response(200, json=_GEMINI_OK),
+    )
+
+    result = await images.generate("a ridge at dawn")
+    assert result is not None and result.data == b"fake-bytes"
+    assert len(calls) == 3
+
+
+async def test_a_rejected_prompt_is_not_retried(monkeypatch):
+    """400 is the model's verdict on the prompt. It says the same thing three times."""
+    calls = _stub_sequence(monkeypatch, httpx.Response(400, text="content policy"))
+
+    with pytest.raises(images.ImageUnavailable, match="content policy"):
+        await images.generate("a ridge at dawn")
+    assert len(calls) == 1
+
+
+async def test_giving_up_still_reports_the_provider_s_own_words(monkeypatch):
+    """The last response is returned, not swallowed — its body is the diagnosis."""
+    calls = _stub_sequence(monkeypatch, *[httpx.Response(503, text="overloaded")] * 3)
+
+    with pytest.raises(images.ImageUnavailable, match="overloaded"):
+        await images.generate("a ridge at dawn")
+    assert len(calls) == 3
+
+
+async def test_a_connect_failure_is_retried(monkeypatch):
+    calls = _stub_sequence(
+        monkeypatch,
+        httpx.ConnectError("no route to host"),
+        httpx.Response(200, json=_GEMINI_OK),
+    )
+
+    result = await images.generate("a ridge at dawn")
+    assert result is not None and result.data == b"fake-bytes"
+    assert len(calls) == 2
+
+
+async def test_a_read_timeout_is_not_retried(monkeypatch):
+    """The request landed and we gave up waiting. The provider may be drawing the
+    picture it will bill us for, so asking again risks paying twice for one image."""
+    calls = _stub_sequence(monkeypatch, httpx.ReadTimeout("too slow"))
+
+    with pytest.raises(httpx.ReadTimeout):
+        await images.generate("a ridge at dawn")
+    assert len(calls) == 1
+
+
+async def test_the_wait_grows_between_attempts(monkeypatch):
+    """Backing off flat would hammer a provider that asked for room."""
+    slept: list[float] = []
+
+    async def _record(seconds):
+        slept.append(seconds)
+
+    # After `_stub_sequence`, which installs a no-op sleep of its own.
+    _stub_sequence(monkeypatch, *[httpx.Response(503, text="overloaded")] * 3)
+    monkeypatch.setattr(images.asyncio, "sleep", _record)
+
+    with pytest.raises(images.ImageUnavailable):
+        await images.generate("a ridge at dawn")
+    # Two waits for three attempts. Nothing is slept after the last one.
+    assert slept == [2.0, 4.0]
 
 
 # ── composition ─────────────────────────────────────────────────────────────
@@ -409,6 +488,48 @@ def _stub_post(monkeypatch, response: httpx.Response) -> None:
         return response
 
     monkeypatch.setattr(httpx.AsyncClient, "post", post)
+
+
+#: One decoded Gemini answer, for tests whose subject is not the envelope.
+_GEMINI_OK = {
+    "candidates": [
+        {"content": {"parts": [{"inlineData": {"data": base64.b64encode(b"fake-bytes").decode()}}]}}
+    ]
+}
+
+
+def _stub_sequence(monkeypatch, *outcomes) -> list[str]:
+    """Answer each POST with the next outcome, raising it if it is an exception.
+
+    Returns the list of URLs called, which is how the retry tests count attempts —
+    and a call past the end of the sequence fails the test rather than repeating
+    the last answer, so an over-eager retry cannot pass quietly.
+
+    Sleeping is stubbed out here as well. The delays are real seconds and only one
+    test below cares what they are.
+    """
+    monkeypatch.setenv("STUDIO_IMAGE_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(images.asyncio, "sleep", _no_sleep)
+
+    calls: list[str] = []
+    remaining = list(outcomes)
+
+    async def post(self, url, *_a, **_kw):
+        calls.append(str(url))
+        if not remaining:
+            raise AssertionError(f"attempt {len(calls)} was not expected: {url}")
+        outcome = remaining.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    return calls
 
 
 def _use_storage(monkeypatch, root) -> None:

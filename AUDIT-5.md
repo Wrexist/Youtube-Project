@@ -294,6 +294,11 @@ Not features; each is under an hour and each has bitten already.
 - **`storage/tmp` keeps a full copy of every render.** 55MB per video, never cleaned.
 - **Secrets on Windows have no ACL** — `chmod(0o600)` is a no-op there. Written up as
   KNOWN-ISSUES §5.9.
+- **`providers/llm.py` still opens `httpx.AsyncClient` inline in three places**, with
+  no retry below the JSON-parse loop in `LLM.json` — so a connection reset fails the
+  stage rather than being asked again. `providers/images.py` now has the wrapper
+  CLAUDE.md's conventions ask for; lifting it into something both providers share is
+  the actual fix, and it touches the most load-bearing module in the engine.
 
 ---
 
