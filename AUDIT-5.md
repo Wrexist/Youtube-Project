@@ -297,6 +297,10 @@ Not features; each is under an hour and each has bitten already.
   audited on had a sandbox tool granting a service group read on `Downloads` by
   inheritance, so `.env` was readable by two other local accounts. `secretfile.py`
   now sets an explicit DACL at both write sites. KNOWN-ISSUES §5.9.
+- **No route declares its error responses.** Seven routers raise `HTTPException`
+  with 404/409/502/503; the OpenAPI schema advertises only 200 and 422, so
+  `packages/contracts` cannot type a failure. Worth fixing as one pass over every
+  router — doing it for one endpoint would make that endpoint the odd one out.
 - **`providers/llm.py` still opens `httpx.AsyncClient` inline in three places**, with
   no retry below the JSON-parse loop in `LLM.json` — so a connection reset fails the
   stage rather than being asked again. `providers/images.py` now has the wrapper

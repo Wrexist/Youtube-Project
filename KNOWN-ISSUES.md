@@ -402,7 +402,7 @@ ends up — inherits an ACL that already excludes other non-administrator users.
 sandboxing tool had added an explicit `(OI)(CI)` ACE granting a service group Read
 & Execute on `C:\Users\<user>\Downloads`, so `.env` came out as:
 
-```
+```text
 .env  Phantomen\CodexSandboxUsers:(I)(RX)
       NT AUTHORITY\SYSTEM:(I)(F)
       BUILTIN\Administrators:(I)(F)
@@ -441,9 +441,12 @@ emulation, which is still not the mechanism.
 so a `.env` that predates this keeps whatever it inherited until the next key save.
 To tighten one in place:
 
+```powershell
+icacls .env /inheritance:r /grant:r "$($env:USERNAME):(F)" /grant:r "*S-1-5-18:(F)" /grant:r "*S-1-5-32-544:(F)"
 ```
-icacls .env /inheritance:r /grant:r "%USERNAME%:(F)" /grant:r "*S-1-5-18:(F)" /grant:r "*S-1-5-32-544:(F)"
-```
+
+From Git Bash the same line needs `MSYS_NO_PATHCONV=1` in front of it and
+`"$USERNAME:(F)"`, or the `/inheritance:r` argument is rewritten into a path.
 
 ---
 

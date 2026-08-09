@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -48,9 +49,29 @@ def test_the_file_is_still_readable_afterwards(tmp_path):
 
 def test_a_missing_tool_is_a_warning_rather_than_a_failed_write(tmp_path, monkeypatch):
     """`restrict` runs after the credential is already on disk. Raising here would
-    turn a permissions problem into a lost key."""
+    turn a permissions problem into a lost key.
+
+    Through the Windows branch directly: `restrict` never reaches `_run` on POSIX,
+    so calling it there would assert nothing.
+    """
     path = _secret(tmp_path)
     monkeypatch.setattr(secretfile, "_run", lambda _argv: None)
+
+    secretfile._restrict_windows(path)  # must not raise
+
+    assert path.read_text(encoding="utf-8") == "sk-not-a-real-key"
+
+
+@posix_only
+def test_a_filesystem_without_permission_bits_does_not_fail_the_save(tmp_path, monkeypatch):
+    """`write_env` unlinks the temp file on any exception, so a chmod that raises
+    on an SMB or FAT mount would lose the credential rather than leave it exposed."""
+    path = _secret(tmp_path)
+
+    def _refuse(*_a, **_kw):
+        raise OSError("Operation not supported")
+
+    monkeypatch.setattr(Path, "chmod", _refuse)
 
     secretfile.restrict(path)  # must not raise
 

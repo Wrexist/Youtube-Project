@@ -46,7 +46,15 @@ _TIMEOUT = 15
 def restrict(path: Path) -> None:
     """Narrow `path` to its owner, by whatever mechanism the platform actually has."""
     if os.name != "nt":
-        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        try:
+            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except OSError as exc:
+            # The module contract is that this never raises, and the POSIX branch
+            # was the one place that could. `chmod` fails on a filesystem without
+            # permission bits — an SMB or FAT mount, a container bind — and
+            # `write_env` unlinks the temp file on any exception, so the credential
+            # save would have failed there rather than merely being unprotected.
+            logger.warning("could not restrict {}: {}", path, exc)
         return
     _restrict_windows(path)
 
