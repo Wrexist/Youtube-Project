@@ -13,17 +13,26 @@ export function Header({
 }) {
   return (
     <header className="sticky top-0 z-10 border-b border-[var(--color-line)] bg-[var(--color-bg)]/85 backdrop-blur">
-      <div className="mx-auto flex h-16 max-w-[1200px] items-center gap-4 px-8">
-        <h1 className="text-[20px] font-semibold">{title}</h1>
-        {meta && <div className="text-[13px] text-[var(--color-faint)]">{meta}</div>}
-        <div className="ml-auto">{action}</div>
+      {/* 16px of padding until there is room for 32. With a fixed 64px rail beside
+          it, `px-8` left a 375px screen 247px for a title and a button and the
+          header simply overflowed — the whole page scrolled sideways, on every
+          screen, because the frame did. Both values are on the spacing scale. */}
+      <div className="mx-auto flex h-16 max-w-[1200px] items-center gap-4 px-4 sm:px-8">
+        {/* `min-w-0` is what lets the title give way. Without it a flex item
+            refuses to shrink below its content and pushes the action off-screen
+            instead of truncating. */}
+        <h1 className="min-w-0 truncate text-[20px] font-semibold">{title}</h1>
+        {meta && (
+          <div className="hidden text-[13px] text-[var(--color-faint)] sm:block">{meta}</div>
+        )}
+        <div className="ml-auto shrink-0">{action}</div>
       </div>
     </header>
   );
 }
 
 export function Page({ children }: { children: ReactNode }) {
-  return <div className="mx-auto max-w-[1200px] px-8 py-8">{children}</div>;
+  return <div className="mx-auto max-w-[1200px] px-4 py-8 sm:px-8">{children}</div>;
 }
 
 export function Button({

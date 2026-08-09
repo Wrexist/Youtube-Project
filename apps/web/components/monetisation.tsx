@@ -79,7 +79,10 @@ export function MonetisationCard({ data }: { data: Monetisation }) {
   return (
     <div className="rounded-[var(--radius-card)] border border-[var(--color-line)] p-5">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-[15px] font-medium">
+        {/* 600, not 500. UI-DESIGN.md allows two weights and this was the only
+            `font-medium` in the app — a third weight nobody else uses reads as a
+            slightly-wrong heading rather than as a deliberate one. */}
+        <h2 className="text-[15px] font-semibold">
           {data.eligible ? "Eligible for monetisation" : "Monetisation"}
         </h2>
         {!data.eligible && projection && (

@@ -38,9 +38,19 @@ export function StageRow({
         onClick={interactive ? onToggle : undefined}
         aria-expanded={interactive ? expanded : undefined}
         disabled={!interactive}
-        className={`flex w-full items-center gap-4 px-4 py-3.5 text-left transition-colors duration-150 ${
-          interactive ? "hover:bg-[var(--color-raised)]" : "cursor-default"
-        }`}
+        // The running row is lifted onto `--raised`. In a seventeen-row list the
+        // pulsing glyph alone is a small target for the eye, and "which one is it
+        // on?" is the second question people ask after "is it stuck?". Not accent:
+        // the glyph already spends the accent here, and a whole highlighted row
+        // would blow the under-5% budget on its own.
+        // Wraps below `sm`, and only below `sm`. Beside a 64px rail a 375px screen
+        // leaves the row 247px, which a glyph, a 132px title, a 128px progress bar,
+        // a message, a cost and a chevron do not fit into — they were being clipped
+        // by the card. Giving the middle column its own line costs one row of
+        // height on a phone and nothing at all on a desktop.
+        className={`flex w-full flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5 text-left transition-colors duration-150 sm:flex-nowrap ${
+          stage.status === "running" ? "bg-[var(--color-raised)]" : ""
+        } ${interactive ? "hover:bg-[var(--color-raised)]" : "cursor-default"}`}
       >
         <StatusGlyph status={stage.status} />
 
@@ -52,9 +62,11 @@ export function StageRow({
           {stage.title}
         </span>
 
-        <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-muted)]">
+        {/* Last on a phone so it drops to its own full-width line; in the middle,
+            as it has always been, from `sm` up. */}
+        <span className="order-last w-full min-w-0 truncate text-[13px] text-[var(--color-muted)] sm:order-none sm:w-auto sm:flex-1">
           {stage.status === "running" ? (
-            <RunningBar message={stage.summary} />
+            <RunningBar message={stage.summary} progress={stage.progress} />
           ) : stage.status === "failed" ? (
             <span className="text-[var(--color-bad)]">{stage.error ?? "failed"}</span>
           ) : (
@@ -68,7 +80,11 @@ export function StageRow({
           </span>
         )}
         {stage.elapsed_ms > 0 && (
-          <span className="mono w-12 shrink-0 text-right text-[11px] text-[var(--color-faint)]">
+          // Dropped on a narrow screen. Glyph, title, message, cost, duration and
+          // chevron do not fit beside a 64px rail at 375px, and the card clips
+          // rather than scrolls — so something has to go, and a duration is the
+          // least of these. Cost stays: it is money.
+          <span className="mono hidden w-12 shrink-0 text-right text-[11px] text-[var(--color-faint)] sm:inline">
             {(stage.elapsed_ms / 1000).toFixed(1)}s
           </span>
         )}
@@ -206,19 +222,69 @@ function StatusGlyph({ status }: { status: StageStatus }) {
   );
 }
 
-/** A running stage's line. The skeleton stays — it is what says the job is alive —
- *  but "working…" is only the placeholder for a stage that has said nothing yet.
- *  UI-DESIGN.md #5: long work streams progress, and `stage.progress` /
- *  `stage.retrying` messages land on `summary`. Rendering the skeleton
- *  unconditionally meant a twelve-minute render and a stage on its third retry
- *  looked identical. */
-function RunningBar({ message }: { message?: string | null }) {
+/**
+ * A running stage's line: how far through, what it is doing, and that it is alive.
+ *
+ * The message half came first — `stage.progress` and `stage.retrying` land on
+ * `summary`, and rendering a bare skeleton meant a twelve-minute render and a
+ * stage on its third retry looked identical.
+ *
+ * The *fraction* was still being dropped. `compose.py` has always emitted one
+ * (0.05 downloading, 0.25 composing, 0.72 placing beats, 0.75 subtitles, 0.85
+ * encoding) and the reducer threw it away, so the honest question a forty-minute
+ * render provokes — "is this failed, or is it working?" — had no answer on screen.
+ *
+ * Indeterminate is a real state, not a failure to know: the short stages never
+ * report a fraction at all, and the long ones send keepalives between the ones
+ * they do. So a bar with no number shimmers rather than sitting at zero, which
+ * would read as "no progress" for a stage that is simply not instrumented.
+ */
+function RunningBar({
+  message,
+  progress,
+}: {
+  message?: string | null;
+  progress?: number | null;
+}) {
+  const percent =
+    typeof progress === "number" && Number.isFinite(progress)
+      ? Math.round(Math.min(1, Math.max(0, progress)) * 100)
+      : null;
+
   return (
     <span className="flex items-center gap-2.5">
-      <span className="skeleton h-1 w-32 shrink-0 rounded-full" />
+      <span
+        // `.skeleton` already sets position and the raised background, so the
+        // determinate track only needs the background — and applying both would
+        // put a second shimmer under the fill.
+        className={`h-1 w-32 shrink-0 overflow-hidden rounded-full ${
+          percent === null ? "skeleton" : "relative bg-[var(--color-raised)]"
+        }`}
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        // Omitted while indeterminate: a screen reader announcing "0 percent"
+        // for a stage that has not reported is the audible version of the bug
+        // this component exists to fix.
+        {...(percent === null ? {} : { "aria-valuenow": percent })}
+        aria-valuetext={message || "working"}
+      >
+        {percent !== null && (
+          <span className="progress-fill is-live" style={{ width: `${percent}%` }} />
+        )}
+      </span>
+
       <span className="min-w-0 truncate text-[12px] text-[var(--color-faint)]">
         {message || "working…"}
       </span>
+
+      {percent !== null && (
+        // Tabular figures, or the number jitters the message left and right every
+        // time it ticks past a digit that happens to be narrower.
+        <span className="mono shrink-0 text-[11px] text-[var(--color-faint)]">
+          {percent}%
+        </span>
+      )}
     </span>
   );
 }
@@ -307,14 +373,55 @@ export function Pipeline({
   const [open, setOpen] = useState<string | null>(null);
   const done = stages.filter((s) => s.status === "done").length;
 
+  // Skipped counts toward the end of the job even though it is not "done": a run
+  // that skips a stage would otherwise have a bar that can never fill, which reads
+  // as unfinished work rather than as a decision the workflow made.
+  const settled = stages.filter(
+    (s) => s.status === "done" || s.status === "skipped",
+  ).length;
+  // Partial credit for the stage in flight, so a seventeen-stage job with one
+  // forty-minute render in it advances during that render instead of holding at
+  // 16/17 for most of the run — which is precisely when someone asks whether it
+  // has failed.
+  const running = stages.find((s) => s.status === "running");
+  const partial =
+    typeof running?.progress === "number" && Number.isFinite(running.progress)
+      ? Math.min(1, Math.max(0, running.progress))
+      : 0;
+  const overall = stages.length
+    ? Math.min(1, (settled + partial) / stages.length)
+    : 0;
+
   return (
-    <div className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)]">
-      <div className="flex items-center justify-between border-b border-[var(--color-line)] px-4 py-3">
+    <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)]">
+      <div className="flex items-center justify-between px-4 py-3">
         <span className="text-[13px] font-semibold">Pipeline</span>
         <span className="mono text-[12px] text-[var(--color-faint)]">
           {done}/{stages.length}
         </span>
       </div>
+
+      {/* The job's own progress, as the card's dividing line rather than as
+          another element. It replaces the border that was here, so it costs no
+          vertical space and reads as part of the frame.
+
+          `aria-hidden` on purpose: the count beside "Pipeline" already states this
+          for a screen reader, and announcing both would say the same thing twice.
+          Green at the end because finishing deserves to look like finishing — and
+          the count says 17/17 alongside it, so the meaning never rests on colour. */}
+      <div
+        className="relative h-0.5 w-full bg-[var(--color-line)]"
+        aria-hidden
+      >
+        <span
+          className="progress-fill"
+          style={{
+            width: `${overall * 100}%`,
+            background: overall >= 1 ? "var(--color-ok)" : undefined,
+          }}
+        />
+      </div>
+
       <ul>
         {stages.map((stage) => (
           <StageRow

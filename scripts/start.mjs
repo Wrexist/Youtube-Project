@@ -21,10 +21,10 @@
  * whose entire job is removing steps.
  */
 
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
-import { createServer } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -263,6 +263,107 @@ function showStudio(url) {
 }
 
 /**
+ * One value out of `apps/engine/.env`.
+ *
+ * The launcher needs `STUDIO_REDIS_URL` to know where to look for Redis, and the
+ * engine reads it from that file rather than from the environment — so probing
+ * `process.env` alone would check localhost on every machine that had pointed
+ * Studio at a Redis somewhere else, decide it was absent, and quietly run without
+ * a worker. Deliberately not a dotenv dependency for one key.
+ *
+ * Whatever comes back is treated as a URL and never printed: a Redis URL can carry
+ * a password, and CLAUDE.md #4 is that secrets are never logged.
+ */
+function fromEnvFile(key) {
+  try {
+    const text = readFileSync(join(ROOT, "apps/engine/.env"), "utf8");
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq === -1 || trimmed.slice(0, eq).trim() !== key) continue;
+      // Strip one layer of matching quotes, which is what python-dotenv does.
+      return trimmed
+        .slice(eq + 1)
+        .trim()
+        .replace(/^(['"])(.*)\1$/, "$2");
+    }
+  } catch {
+    // No .env on a fresh clone. The default below is the same one Settings uses.
+  }
+  return null;
+}
+
+/**
+ * Is `name` an executable on PATH?
+ *
+ * Used to decide which "get a Redis" line to print. Telling a machine with no
+ * Docker to run `docker compose up -d redis` is a dead end dressed as help — and
+ * that is not hypothetical, it is this machine. Advice that cannot be followed is
+ * worse than none, because it ends the search.
+ *
+ * A PATH scan rather than spawning `docker --version`: this runs on the startup
+ * path and a subprocess costs a few hundred milliseconds to answer a question the
+ * filesystem already knows.
+ */
+function onPath(name) {
+  const exts = WINDOWS ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""];
+  for (const dir of (process.env.PATH ?? "").split(WINDOWS ? ";" : ":")) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      if (existsSync(join(dir, name + ext.toLowerCase()))) return true;
+      if (existsSync(join(dir, name + ext))) return true;
+    }
+  }
+  return false;
+}
+
+/** Where Redis is expected, as a host and port this script can open a socket to. */
+function redisTarget() {
+  const raw =
+    process.env.STUDIO_REDIS_URL ??
+    fromEnvFile("STUDIO_REDIS_URL") ??
+    "redis://localhost:6379/0";
+  try {
+    const url = new URL(raw);
+    return { host: url.hostname || "localhost", port: Number(url.port) || 6379 };
+  } catch {
+    return { host: "localhost", port: 6379 };
+  }
+}
+
+/**
+ * Is a Redis answering there?
+ *
+ * A real `PING` rather than a port probe, because the question that matters is
+ * whether the *worker* will be able to connect — and something else holding 6379
+ * would pass a port check and then fail every enqueue. Redis's inline protocol
+ * answers `+PONG`, and a Redis that wants AUTH answers `-NOAUTH`; both prove a
+ * Redis is there, and the worker has the credentials this probe deliberately does
+ * not use.
+ *
+ * No client library, for the same reason the rest of this file has no
+ * dependencies: a launcher whose job is removing setup steps should not add one.
+ */
+function redisAnswers({ host, port }, timeoutMs = 700) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = createConnection({ host, port });
+    const finish = (answer) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(answer);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.on("connect", () => socket.write("PING\r\n"));
+    socket.on("data", (chunk) => finish(/^[+-]/.test(chunk.toString("utf8", 0, 1))));
+    socket.on("timeout", () => finish(false));
+    socket.on("error", () => finish(false));
+  });
+}
+
+/**
  * The first free port at or after `from`, or null if there is no room.
  *
  * `taken` covers ports this run has already claimed but not yet bound: the two
@@ -420,6 +521,15 @@ function run(name, colour, command, args, options = {}) {
 
   child.on("exit", (code, signal) => {
     if (shuttingDown) return;
+    // `onExit` is how a non-essential child opts out of taking everything with it.
+    // The engine and the web app are each half of Studio, so one dying makes the
+    // other worse than useless — a web app talking to nothing silently falls back
+    // to demo data. The worker is different: without it renders merely stop being
+    // durable, and killing a working app over that would be the larger failure.
+    if (options.onExit) {
+      options.onExit(code, signal, label);
+      return;
+    }
     console.log(
       `\n${label} exited (${signal ?? `code ${code}`}). Stopping the other half too.\n`,
     );
@@ -427,6 +537,15 @@ function run(name, colour, command, args, options = {}) {
   });
   child.on("error", (error) => {
     console.error(`${label} could not start: ${error.message}`);
+    // Same reasoning as the exit handler: a worker that cannot be spawned is a
+    // downgrade, not a reason to take the app down. Routed through `onExit` so a
+    // failed spawn and a crashed process are handled in one place — a spawn error
+    // fires *instead of* `exit`, so without this the supervisor below would never
+    // hear about the most likely failure of all, a missing arq.
+    if (options.onExit) {
+      options.onExit(null, null, label);
+      return;
+    }
     stop(1);
   });
 
@@ -455,10 +574,64 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
+/**
+ * Is there a Redis for the render worker to talk to?
+ *
+ * Answered before anything is spawned, so the header can say which of the two
+ * worlds this run is in. Printed after the engine had already started logging, it
+ * scrolled past under uvicorn's startup — and a warning nobody reads is the same
+ * as no warning.
+ */
+const WORKER_TARGET = redisTarget();
+const WORKER_WANTED = process.env.STUDIO_WORKER !== "0";
+const DURABLE = WORKER_WANTED && (await redisAnswers(WORKER_TARGET));
+
+/**
+ * Whether WSL has a distribution, not merely whether `wsl.exe` exists.
+ *
+ * Windows 11 ships the `wsl.exe` stub whether or not anything is installed behind
+ * it, so a PATH check says yes on a machine where every `wsl` command answers
+ * "The Windows Subsystem for Linux is not installed." Suggesting it there is the
+ * dead end `onPath` was written to avoid, arrived at from the other side.
+ *
+ * A subprocess is acceptable here: this runs only on the branch where Redis is
+ * already missing, which is the degraded path anyway.
+ */
+function wslHasDistro() {
+  if (!WINDOWS || !onPath("wsl")) return false;
+  const result = spawnSync("wsl", ["-l", "-q"], {
+    encoding: "utf8",
+    timeout: 3000,
+    windowsHide: true,
+  });
+  // `wsl -l -q` writes UTF-16LE, which arrives here as text interleaved with NULs.
+  // Stripping them is the difference between "no distros" and "one distro whose
+  // name looks like `U b u n t u`".
+  const listed = (result.stdout ?? "").replace(/\0/g, "").trim();
+  return result.status === 0 && listed.length > 0;
+}
+
+/** The shortest route to a Redis *on this machine*, not on an imagined one. */
+function redisAdvice() {
+  if (onPath("docker")) return "docker compose up -d redis";
+  if (wslHasDistro()) return "wsl -e sudo service redis-server start";
+  return "see README.md, 'Durable renders'";
+}
+
 console.log(
   `\n  ${paint(36, "Studio")}\n` +
     `  web     http://localhost:${WEB_PORT}\n` +
     `  engine  http://localhost:${ENGINE_PORT}\n` +
+    // Said plainly either way. The failure this exists to prevent — a forty-minute
+    // render lost to a restart — is invisible until it happens, so the state has to
+    // be visible before it does. The host and port are named but never the URL: a
+    // Redis URL can carry a password (CLAUDE.md #4).
+    (DURABLE
+      ? `  renders ${paint(32, "durable")} ${paint(90, `— queued through redis at ${WORKER_TARGET.host}:${WORKER_TARGET.port}`)}\n`
+      : WORKER_WANTED
+        ? `  renders ${paint(33, "not durable")} ${paint(90, `— no redis at ${WORKER_TARGET.host}:${WORKER_TARGET.port}, so they run inside`)}\n` +
+          `           ${paint(90, `the engine and stop if it restarts. Fix: ${redisAdvice()}`)}\n`
+        : `  renders ${paint(90, "not durable — STUDIO_WORKER=0, no worker started")}\n`) +
     (OPEN
       ? `  ${paint(90, "starting — the Studio window opens in a moment")}\n` +
         `  ${paint(90, "keep this window open; closing it stops Studio")}\n`
@@ -499,6 +672,66 @@ run(
     },
   },
 );
+
+/**
+ * The render worker, if there is a Redis for it to talk to.
+ *
+ * Without this, every render runs inside the API process — so it dies with a
+ * restart, a crash, or an edit to any engine file, because uvicorn is started with
+ * `--reload`. That is not hypothetical: it cost sixteen completed stages of a
+ * seventeen-stage run, and the only symptom was the pipeline going quiet.
+ *
+ * The engine already handles both worlds. `worker.enqueue` probes Redis, checks
+ * that something is actually consuming the queue, and returns false to the
+ * in-process path if either answer is no — so starting a worker here changes
+ * nothing except whether renders survive. That is why this is allowed to be
+ * conditional rather than required: `npm start` on a clone with no Docker must
+ * still work, and it does.
+ *
+ * `STUDIO_WORKER=0` skips it, for anyone who would rather run arq themselves with
+ * different settings. Both that and the Redis probe are resolved above, next to
+ * the header that reports which world this run is in.
+ */
+if (DURABLE) {
+  // A supervisor, because worker.py says so and nothing was playing the part:
+  // "arq's own poll loop has no reconnect of its own, so a Redis that stays down
+  // past redis-py's retry ends the worker process; the supervisor is expected to
+  // restart it, and an interrupted job comes back resumable."
+  //
+  // Bounded, because an unbounded restart loop against a permanently broken
+  // install is a scrolling wall of the same traceback. After the last attempt it
+  // says what was lost — durability — rather than dying silently.
+  const MAX_RESTARTS = 5;
+  let restarts = 0;
+
+  const startWorker = () => {
+    run("worker", 33, PYTHON, ["-m", "arq", "engine.worker.WorkerSettings"], {
+      cwd: join(ROOT, "apps/engine"),
+      onExit: (code, signal, label) => {
+        if (restarts >= MAX_RESTARTS) {
+          console.log(
+            `\n${label} stopped for good after ${MAX_RESTARTS} restarts.\n` +
+              `${label} renders still run, but inside the engine — they will not ` +
+              `survive a restart.\n`,
+          );
+          return;
+        }
+        restarts += 1;
+        const wait = Math.min(1000 * 2 ** (restarts - 1), 15_000);
+        console.log(
+          `${label} exited (${signal ?? `code ${code}`}); ` +
+            `restarting in ${wait / 1000}s (${restarts}/${MAX_RESTARTS})`,
+        );
+        // Unref'd: a pending restart must never be the reason Ctrl-C hangs.
+        setTimeout(() => {
+          if (!shuttingDown) startWorker();
+        }, wait).unref?.();
+      },
+    });
+  };
+
+  startWorker();
+}
 
 /**
  * Wait for the web app to actually serve, then open it.
