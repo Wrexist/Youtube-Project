@@ -209,3 +209,93 @@ async def test_search_found_things_but_none_could_be_read():
 
     assert findings["sources"] == []
     assert "none of which could be fetched" in findings["problem"]
+
+
+# ── the two failures that took research down together ───────────────────────
+#
+# Reported from a real install, and it looked like one problem because both
+# backends went quiet at once. It was three:
+#
+#   duckduckgo-lite: parsed 0 results
+#   duckduckgo-html: parsed 0 results
+#   wikipedia: 403 Forbidden
+#
+# The DuckDuckGo lines were a lie — the endpoints answered with a bot check, not
+# with an empty result set — and Wikipedia's 403 was our own User-Agent.
+
+
+def test_the_user_agent_identifies_us_with_a_contact():
+    """Wikimedia enforces its User-Agent policy with a 403, and the old string —
+    "contact via project owner" — is not a contact. A browser user agent is
+    refused as well: the policy wants identification, not disguise."""
+    assert "http" in web.USER_AGENT, "the policy requires a URL or an email"
+    assert "Mozilla" not in web.USER_AGENT, "pretending to be a browser is refused too"
+
+
+@respx.mock
+async def test_a_bot_check_is_not_reported_as_an_empty_result():
+    """DuckDuckGo answers a scraper with 202 and an anomaly page, so
+    `raise_for_status()` passes, the regexes match nothing, and the backend used to
+    report "parsed 0 results" — which reads as "nobody has written about this" and
+    sends the reader off to rephrase a perfectly good topic."""
+    challenge = httpx.Response(202, html="<html><body>anomaly detected</body></html>")
+    respx.post(DDG_LITE).mock(return_value=challenge)
+    respx.post(DDG_HTML).mock(return_value=challenge)
+    respx.get(WIKI).mock(return_value=httpx.Response(200, json={"query": {"search": []}}))
+
+    urls, problem = await web._search("roman concrete", limit=5)
+    assert urls == []
+    assert "bot check" in problem
+    assert "parsed 0 results" not in problem.split("wikipedia")[0]
+
+
+@respx.mock
+async def test_a_genuinely_empty_page_still_reports_as_empty():
+    """The distinction only helps if the other side of it survives."""
+    empty = httpx.Response(200, html="<html><body>no results</body></html>")
+    respx.post(DDG_LITE).mock(return_value=empty)
+    respx.post(DDG_HTML).mock(return_value=empty)
+    respx.get(WIKI).mock(return_value=httpx.Response(200, json={"query": {"search": []}}))
+
+    _, problem = await web._search("roman concrete", limit=5)
+    assert "parsed 0 results" in problem
+    assert "bot check" not in problem
+
+
+# ── the instruction in front of the topic ───────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("typed", "searched"),
+    [
+        # The Create screen asks "What's the video about?", so people answer it.
+        ("Make a video about how mrbeast overtook youtube", "how mrbeast overtook youtube"),
+        ("Create a short about roman concrete", "roman concrete"),
+        ("please can you make me a youtube video explaining black holes", "black holes"),
+        # Already a topic — left exactly as it is.
+        ("how mrbeast overtook youtube", "how mrbeast overtook youtube"),
+        # Begins with a verb but is not an instruction. Stripping here would search
+        # for "shed from pallets" and lose the thing being asked about.
+        ("Build a shed from pallets", "Build a shed from pallets"),
+    ],
+)
+def test_the_instruction_is_stripped_but_the_topic_is_not(typed, searched):
+    assert web._query(typed) == searched
+
+
+def test_stripping_never_leaves_nothing_to_search_for():
+    for pathological in ("make a video about", "a video on", "about"):
+        assert web._query(pathological).strip(), pathological
+
+
+@respx.mock
+async def test_the_cleaned_query_is_what_reaches_the_backend():
+    route = respx.get(WIKI).mock(
+        return_value=httpx.Response(200, json={"query": {"search": [{"title": "MrBeast"}]}})
+    )
+    respx.post(DDG_LITE).mock(return_value=httpx.Response(202, html="anomaly"))
+    respx.post(DDG_HTML).mock(return_value=httpx.Response(202, html="anomaly"))
+
+    await web._search("Make a video about how mrbeast overtook youtube", limit=5)
+    sent = route.calls.last.request.url.params["srsearch"]
+    assert sent == "how mrbeast overtook youtube"

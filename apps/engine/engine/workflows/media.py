@@ -26,6 +26,7 @@ from pathlib import Path
 import httpx
 from loguru import logger
 
+from engine.providers import images
 from engine.render import compose
 from engine.services import stock
 from engine.settings import get_settings
@@ -132,6 +133,8 @@ class MaterialsStage(Stage[Materials]):
 
         materials = Materials()
         seen_ids: set[str] = set()
+        generated_cost = 0.0
+        generated_beats = 0
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for index, beat in enumerate(beats):
@@ -140,35 +143,113 @@ class MaterialsStage(Stage[Materials]):
                 )
                 needed = max(1, round(beat.est_seconds / PACING.get(beat.energy, 3.5)))
                 clips = await stock.search(
-                    beat.visual_direction,
+                    # The short query, not the cinematic one. `visual_direction` is
+                    # written as a prompt for an image model and is a hopeless
+                    # search string; `stock_query` is the two-to-four plain words
+                    # for the same beat. Falls back to the old behaviour for beats
+                    # generated before the field existed.
+                    beat.stock_query or beat.visual_direction,
                     aspect=aspect,
                     count=needed,
                     exclude=seen_ids,
                     client=client,
-                    # The broadest query worth trying before giving the beat no
-                    # footage at all. A gap in the timeline is worse than generic
-                    # footage of the right subject.
-                    fallback=ctx.inputs.get("topic", ""),
+                    # Deliberately no topic-wide fallback any more. Widening the
+                    # query until *something* came back is what filled a beat about
+                    # a subscriber counter with coloured paper clips: the search
+                    # succeeded, the footage was unrelated, and nothing downstream
+                    # could tell. Generation below is the better answer.
                 )
                 for clip in clips:
                     clip["beat_index"] = index
                     seen_ids.add(clip["id"])
                 materials.clips.extend(clips)
 
+                if clips:
+                    continue
+
+                # Nothing in the libraries matches this beat. That is the normal
+                # case for anything about a named person, product or event — no
+                # stock library has footage of a specific creator — and it is
+                # exactly where CLAUDE.md says to generate instead of shipping
+                # stock-only. `visual_direction` is already an image prompt.
+                generated = await _generate_broll(beat, index, aspect)
+                if generated:
+                    materials.clips.append(generated)
+                    seen_ids.add(generated["id"])
+                    generated_cost += generated.pop("_cost_usd", 0.0)
+                    generated_beats += 1
+
         if not materials.clips:
             raise RuntimeError("no footage found for any beat")
 
         return StageOutput(
             value=materials,
+            # Metered, per CLAUDE.md #5. Stock is free and generation is not, so a
+            # video whose beats all had to be generated costs real money here and
+            # the per-video ceiling has to see it.
+            cost_usd=round(generated_cost, 4),
             provenance=Provenance(
                 params={
                     "aspect": aspect,
                     "unique_clips": len(seen_ids),
                     "pacing": PACING,
                     "providers": sorted({c["provider"] for c in materials.clips}),
+                    "generated_beats": generated_beats,
                 }
             ),
         )
+
+
+async def _generate_broll(beat, index: int, aspect: str) -> dict | None:
+    """An image-model shot for a beat the stock libraries cannot serve.
+
+    Returns a clip in the same shape the stock providers return, with
+    `kind="image"` so the compositor holds it for the beat's span rather than
+    trying to open it as a video. `None` when generation is not configured, which
+    is a supported state — the render then holds the previous shot, which is what
+    it did for every unmatched beat before this existed.
+
+    Never raises. A beat without footage is a small loss; a render that dies at
+    stage eleven because an image API was busy is a large one.
+    """
+    prompt = beat.visual_direction or beat.stock_query
+    if not prompt:
+        return None
+
+    try:
+        image = await images.generate(
+            # The negative is load-bearing and needs to be this emphatic: the
+            # renderer burns captions over this shot, and image models still
+            # render signage under a plain "no text" — an early attempt at a
+            # subscriber-counter beat came back with a garbled "TICKER — TICKER"
+            # label across it. Digits on a prop the prompt asked for are fine;
+            # words are not.
+            f"{prompt}. Cinematic, photographic, richly lit. "
+            "No text, no words, no lettering, no signage, no labels, "
+            "no captions, no watermark, no logo.",
+            aspect=aspect,
+        )
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("could not generate b-roll for beat {}: {}", index + 1, exc)
+        return None
+
+    if image is None:
+        logger.info("beat {} has no stock match and image generation is off", index + 1)
+        return None
+
+    key = await store.put_bytes(image.data, f"broll/{index}-{abs(hash(prompt)) % 10**8}.png")
+    logger.info("beat {} generated its own b-roll ({})", index + 1, image.model)
+    return {
+        "id": f"generated-{index}",
+        "provider": "generated",
+        "kind": "image",
+        "path": str(await store.local_path(key)),
+        "url": "",
+        "duration": beat.est_seconds,
+        "query": prompt,
+        "beat_index": index,
+        "_cost_usd": image.cost_usd,
+    }
 
 
 @lru_cache(maxsize=1)
@@ -263,7 +344,14 @@ class RenderStage(Stage[str]):
 
         return StageOutput(
             value=key,
-            artifacts={"video": key},
+            # Keyed to match this stage's own name, which is what every other
+            # reference to the artifact already uses: the publish stage's
+            # dependency list and context read, the readiness check, and the job
+            # summary in main.py. This one alone said "video", so `render_key`
+            # came back null on every completed job and the Library could never
+            # link to a finished video — the file was there, served, and
+            # seekable, with nothing pointing at it.
+            artifacts={"render": key},
             provenance=Provenance(
                 params={"duration_s": voiceover.duration_s, "cue_count": len(cues)}
             ),
@@ -455,7 +543,7 @@ async def _synthesize(
 
     if words:
         src = original_text or text
-        return path, _group_cues(_restore_punctuation(words, src))
+        return path, _group_cues(_restore_written_forms(words, src))
     if sentences:
         logger.info("voice {} returned sentence boundaries only; splitting", voice)
         return path, _split_sentence_cues(sentences)
@@ -585,11 +673,168 @@ def _restore_punctuation(word_cues: list[dict], original_text: str) -> list[dict
     return out
 
 
-def _group_cues(word_cues: list[dict], max_chars: int = 42) -> list[dict]:
+#: The words a TTS engine says when it reads a number, a currency amount or a
+#: date. Used only to decide how many spoken words one written token swallowed —
+#: never to produce text, so a gap here costs alignment, not correctness.
+_SPOKEN_NUMBER = frozenset(
+    """zero one two three four five six seven eight nine ten eleven twelve
+    thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty
+    forty fifty sixty seventy eighty ninety hundred thousand million billion
+    trillion and point oh dollars dollar cents cent percent pounds pound euros
+    euro first second third fourth fifth sixth seventh eighth ninth tenth
+    eleventh twelfth thirteenth fourteenth fifteenth sixteenth seventeenth
+    eighteenth nineteenth twentieth thirtieth fortieth fiftieth
+    january february march april may june july august september october
+    november december""".split()
+)
+
+#: A written token worth restoring: it contains a digit or a currency symbol, so
+#: the spoken form and the written form differ.
+_WRITTEN_FORM = re.compile(r"[\d$£€%]")
+
+
+def _restore_written_forms(word_cues: list[dict], original_text: str) -> list[dict]:
+    """Re-align spoken word boundaries onto the text as it was written.
+
+    edge-tts reports what it *said*, not what it read. So a script saying
+
+        He put up $50,000 on October 5, 2018.
+
+    produced captions reading "fifty thousand dollars" and "October fifth twenty
+    eighteen" — which is how a caption track ends up looking like a transcript of
+    a phone call rather than like the script. Numerals are also shorter, and
+    caption space is the scarcest thing on a 9:16 frame.
+
+    Walks the written tokens as the authority and consumes cues to match. A token
+    containing a digit or a currency symbol swallows the run of spoken
+    number-words that follows, and the merged cue keeps the first word's start
+    and the last word's end, so timing never drifts. Everything else matches one
+    to one by prefix, which also re-attaches the punctuation edge-tts strips —
+    the written token already has it.
+
+    Falls back to the input untouched if alignment goes badly wrong (fewer than
+    two thirds of the cues consumed). A caption track that is merely missing its
+    numerals beats one that has drifted out of sync with the audio.
+    """
+    written = [w for w in re.split(r"\s+", original_text.strip()) if w]
+    if not written or not word_cues:
+        return word_cues
+
+    out: list[dict] = []
+    cue_i = 0
+    for token in written:
+        if cue_i >= len(word_cues):
+            break
+
+        bare = _LEADING_STRIP.sub("", _TRAILING_SENT.sub("", token)).lower()
+        first = word_cues[cue_i]
+        consumed = 1
+
+        if _WRITTEN_FORM.search(token):
+            # Swallow the spoken expansion: "fifty", "thousand", "dollars".
+            #
+            # Capped at what this particular number is actually worth rather than
+            # at "as many number-words as follow". Greedy consumption looked right
+            # and silently ate the next token: in "October 5, 2018", the "5,"
+            # took "fifth twenty eighteen", and "2018." then consumed the word
+            # after it — so "That was" lost its "That".
+            budget = _spoken_word_count(token)
+            while (
+                consumed < budget
+                and cue_i + consumed < len(word_cues)
+                and word_cues[cue_i + consumed]["text"].strip(".,!?;:").lower() in _SPOKEN_NUMBER
+            ):
+                consumed += 1
+        elif bare and not _matches(word_cues[cue_i]["text"], bare):
+            # Drifted. Skip this written token rather than mislabelling a cue.
+            continue
+
+        last = word_cues[cue_i + consumed - 1]
+        out.append({"start": first["start"], "end": last["end"], "text": token})
+        cue_i += consumed
+
+    if cue_i < len(word_cues) * 2 // 3:
+        logger.warning(
+            "subtitle alignment consumed only {}/{} cues; keeping the spoken forms",
+            cue_i,
+            len(word_cues),
+        )
+        return _restore_punctuation(word_cues, original_text)
+
+    # Anything past the last written token still has to be shown.
+    out.extend(word_cues[cue_i:])
+    return out
+
+
+def _spoken_word_count(token: str) -> int:
+    """How many words a TTS engine spends saying this written token.
+
+    Not a general number-to-words implementation — it only has to count, and only
+    well enough to stop one number swallowing the next. Deliberately errs low: an
+    under-count leaves a stray spoken word in the captions, an over-count eats a
+    real word out of the script.
+    """
+    digits = re.sub(r"\D", "", token)
+    if not digits:
+        return 1
+
+    words = 0
+    value = int(digits)
+
+    # A bare four-digit year is read as two pairs — "twenty eighteen" — not as
+    # "two thousand and eighteen", which is why 2018 is two words and 2,018 is
+    # three.
+    if "," not in token and 1000 <= value <= 2099 and len(digits) == 4:
+        words = 2
+    else:
+        for scale in (1_000_000_000, 1_000_000, 1_000):
+            if value >= scale:
+                words += _under_thousand(value // scale) + 1  # "...billion"
+                value %= scale
+        if value or not words:
+            words += _under_thousand(value)
+
+    # The unit is spoken too: "dollars", "percent".
+    if re.search(r"[$£€%]", token):
+        words += 1
+    return max(1, words)
+
+
+def _under_thousand(value: int) -> int:
+    """Word count for 0-999: "three hundred and five" is four."""
+    if value == 0:
+        return 1  # "zero" - only reached for a literal 0
+    words = 0
+    if value >= 100:
+        words += 2  # "three hundred"
+        value %= 100
+        if value:
+            words += 1  # "and"
+    if value >= 20:
+        words += 1 + (1 if value % 10 else 0)  # "twenty" (+ "one")
+    elif value:
+        words += 1  # "nineteen"
+    return words
+
+
+def _matches(cue_text: str, bare: str) -> bool:
+    spoken = cue_text.lower().strip()
+    return bool(spoken) and (spoken == bare or bare.startswith(spoken) or spoken.startswith(bare))
+
+
+def _group_cues(word_cues: list[dict], max_chars: int = 32) -> list[dict]:
     """Group word boundaries into readable subtitle lines.
 
     Breaks on sentence endings first, then on the character budget — a line that
     splits mid-clause reads badly at any font size.
+
+    The budget is 32 rather than 42, and it is now checked *before* the word is
+    added rather than after. Both came from looking at rendered frames: the old
+    rule appended a word, noticed the line was over, and flushed — so 42 was a
+    floor rather than a ceiling and a long word could carry a cue to 50-odd
+    characters. At the caption font that is three lines on a 9:16 frame, which
+    covers a third of the picture and is far more text than anyone reads off a
+    Short. Two short lines is the target.
     """
     grouped: list[dict] = []
     buffer: list[dict] = []
@@ -607,9 +852,13 @@ def _group_cues(word_cues: list[dict], max_chars: int = 42) -> list[dict]:
         buffer.clear()
 
     for word in word_cues:
+        candidate = " ".join([*(w["text"] for w in buffer), word["text"]])
+        if buffer and len(candidate) > max_chars:
+            flush()
         buffer.append(word)
-        line = " ".join(w["text"] for w in buffer)
-        if word["text"].rstrip().endswith((".", "!", "?")) or len(line) >= max_chars:
+        # A sentence ending still breaks immediately, whatever the length: the
+        # full stop is a better place to cut than any character count.
+        if word["text"].rstrip().endswith((".", "!", "?")):
             flush()
     flush()
     return grouped

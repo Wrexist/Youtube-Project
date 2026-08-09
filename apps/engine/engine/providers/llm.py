@@ -39,6 +39,22 @@ DEFAULT_OLLAMA_URL = "http://localhost:11434"
 #: actually uses it, and output tokens are metered either way.
 THINKING_RESERVE = 8192
 
+#: Ceiling on the doubling in `json()` when a response comes back truncated.
+#: Generous enough for the longest thing any stage asks for — a full script
+#: revision — and finite so that a model which never emits a closing brace cannot
+#: walk the budget up attempt after attempt on someone's bill.
+_MAX_JSON_TOKENS = 32_768
+
+
+class Truncated(ValueError):
+    """The response was valid JSON that ran out of output budget.
+
+    A `ValueError` so every existing `except ValueError` around `_extract_json`
+    still catches it, and a distinct type so the retry loop can tell "the model
+    wrapped its JSON in prose" (ask again) apart from "the model needed more
+    room" (give it more room).
+    """
+
 
 class ProviderUnavailable(RuntimeError):
     """The provider could not be reached — distinct from it returning bad output."""
@@ -132,16 +148,26 @@ class LLM:
         messages = ([{"role": "system", "content": system}] if system else []) + [
             {"role": "user", "content": prompt}
         ]
+        # Same shape as the Anthropic transport above, and for the same reasons:
+        # OpenAI's reasoning models renamed the output ceiling, spend it on
+        # thinking before the answer, and reject any temperature but the default.
+        # All three are 400s rather than ignored parameters, so a route to GPT-5
+        # failed on its first call while GPT-4o on the identical code worked.
+        body: dict[str, Any] = {
+            "model": self.spec.model,
+            "messages": messages,
+            self.spec.max_tokens_field: max_tokens
+            + (THINKING_RESERVE if self.spec.thinks_by_default else 0),
+        }
+        policy = self.spec.temperature_policy
+        if policy == "any" or (policy == "default-only" and temp == 1.0):
+            body["temperature"] = temp
+
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(
                 f"{base.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {key}"} if key else {},
-                json={
-                    "model": self.spec.model,
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": temp,
-                },
+                json=body,
             )
         if resp.status_code >= 400:
             raise ProviderUnavailable(f"{base} returned {resp.status_code}: {resp.text[:200]}")
@@ -288,21 +314,33 @@ class LLM:
         instruction = f"{prompt}\n\nRespond with valid JSON only. No prose, no markdown fences."
         attempts = retries + (1 if self.spec.is_local else 0)
         last_error = ""
+        was_truncated = False
+        budget = max_tokens
         discarded_input = discarded_output = 0
 
         for attempt in range(attempts + 1):
-            body = (
-                instruction
-                if not last_error
-                else (
+            if not last_error:
+                body = instruction
+            elif was_truncated:
+                # It did not get the format wrong — it ran out of room. Telling it
+                # to "return only valid JSON this time" is both useless and
+                # slightly wrong, and re-sending the same ceiling reproduces the
+                # same cut-off object.
+                body = (
+                    f"{instruction}\n\nYour previous response was cut off before it "
+                    f"finished. You have more room now; keep every field but be "
+                    f"concise in the long ones."
+                )
+            else:
+                body = (
                     f"{instruction}\n\nYour previous response could not be parsed: "
                     f"{last_error}\nReturn only valid JSON this time."
                 )
-            )
+
             completion = await self.complete(
                 body,
                 system=system,
-                max_tokens=max_tokens,
+                max_tokens=budget,
                 temperature=temperature,
                 want_json=True,
             )
@@ -312,11 +350,17 @@ class LLM:
                 discarded_input += completion.input_tokens
                 discarded_output += completion.output_tokens
                 last_error = str(exc)
+                was_truncated = isinstance(exc, Truncated)
+                if was_truncated:
+                    # Doubled, and capped so a model that simply will not stop
+                    # cannot walk the budget up indefinitely on someone's bill.
+                    budget = min(budget * 2, _MAX_JSON_TOKENS)
                 logger.warning(
-                    "JSON parse failed on {} (attempt {}): {}",
+                    "JSON parse failed on {} (attempt {}): {}{}",
                     self.spec.key(),
                     attempt + 1,
                     exc,
+                    f" - retrying with max_tokens={budget}" if was_truncated else "",
                 )
                 continue
 
@@ -351,13 +395,37 @@ def _extract_json(text: str) -> Any:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    for opener, closer in (("{", "}"), ("[", "]")):
-        start, end = text.find(opener), text.rfind(closer)
-        if start != -1 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                continue
+
+    # Salvage only when the model wrapped its JSON in prose. When the response
+    # *begins* with a delimiter it was already trying to answer in pure JSON, and
+    # anything that failed to parse from there is cut off rather than surrounded —
+    # so scanning for an inner span does not recover the answer, it invents a
+    # smaller one.
+    #
+    # That is not hypothetical and it is silent, which makes it the worse half of
+    # this bug: `[{"a": 1}, {"b": ` finds `{` at index 1 and `}` at index 8 and
+    # returns `{"a": 1}`. A beats array truncated at twenty items came back as one
+    # item, parsed cleanly, and every stage downstream believed the script had a
+    # single beat.
+    if not text or text[0] not in "{[":
+        for opener, closer in (("{", "}"), ("[", "]")):
+            start, end = text.find(opener), text.rfind(closer)
+            if start != -1 and end > start:
+                try:
+                    return json.loads(text[start : end + 1])
+                except json.JSONDecodeError:
+                    continue
+    # Truncation is not a formatting problem and must not be reported as one. A
+    # response that opens with `{` and never closes it is valid JSON that ran out
+    # of room, and the remedy is a bigger budget rather than a firmer instruction
+    # — retrying with the same ceiling produces the same cut-off object, which is
+    # what happened to a critique on Opus 5: two three-minute attempts, both
+    # billed, both truncated at the same point.
+    if text and text[0] in "{[":
+        raise Truncated(
+            f"response was cut off mid-JSON after {len(text)} characters "
+            f"(max_tokens too low): {text[:160]!r}"
+        )
     raise ValueError(f"no JSON found in response: {text[:200]!r}")
 
 

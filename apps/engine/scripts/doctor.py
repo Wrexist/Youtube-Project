@@ -51,8 +51,8 @@ async def main() -> int:
     try:
         from engine import diagnostics
     except ImportError as exc:
-        print(f"\n {RED}✗{RESET} engine package: {exc}")
-        print(f'   {DIM}cd apps/engine && .venv/bin/pip install -e ".[dev]"{RESET}\n')
+        print(f"\n  {RED}✗{RESET} engine package: {exc}")
+        print(f'    {DIM}cd apps/engine && .venv/bin/pip install -e ".[dev]"{RESET}\n')
         return 1
 
     report = await diagnostics.run()
@@ -60,22 +60,26 @@ async def main() -> int:
     width = max(len(c.name) for c in report.checks) + 2
     print()
     for check in report.checks:
-        print(f" {MARKS[check.level]} {check.name:<{width}} {DIM}{check.detail}{RESET}")
+        print(f"  {MARKS[check.level]} {check.name:<{width}} {DIM}{check.detail}{RESET}")
 
     if report.blockers:
-        print(f"\n{RED}{len(report.blockers)} thing(s) must be fixed before anything runs:{RESET}")
+        plural = "" if len(report.blockers) == 1 else "s"
+        print(
+            f"\n  {RED}{len(report.blockers)} thing{plural} must be fixed "
+            f"before anything runs:{RESET}"
+        )
         for check in report.blockers:
             _advise(check)
 
     if report.warnings:
-        print(f"\n{YELLOW}{len(report.warnings)} optional:{RESET}")
+        print(f"\n  {YELLOW}{len(report.warnings)} optional:{RESET}")
         for check in report.warnings:
             if check.fix or check.command:
                 _advise(check)
 
     if report.ready:
-        print(f"\n{GREEN}Ready.{RESET} Start it with:")
-        print(f"   {DIM}npm start{RESET}")
+        print(f"\n  {GREEN}Ready.{RESET} Start it with:")
+        print(f"    {DIM}npm start{RESET}")
 
     print()
     # Disposed here, not in the library: the checks run inside the live API too,
@@ -93,7 +97,7 @@ async def main() -> int:
 
 def _advise(check) -> None:
     """One finding, with whatever will actually resolve it."""
-    print(f"   {check.name}: {check.fix or check.detail}")
+    print(f"    {check.name}: {check.fix or check.detail}")
     if check.command:
         print(f"      {DIM}{check.command}{RESET}")
     if check.href:

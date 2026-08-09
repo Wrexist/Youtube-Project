@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Header, Page, Button, Card } from "@/components/ui";
 import { Pipeline } from "@/components/pipeline";
+import { VideoPreview } from "@/components/video-preview";
 import { useJobStream } from "@/lib/use-job-stream";
 import { DEMO_JOB } from "@/lib/demo";
 import type { Stage } from "@/lib/types";
-import { publish, rerunFrom, startJob } from "./actions";
+import { ideaSuggestions, improveTopic, publish, rerunFrom, startJob } from "./actions";
 
 /**
  * Whether this install can actually make a video, as of the last page load.
@@ -39,10 +40,33 @@ export interface Readiness {
  *  a job that ran one stage and died on a provider error — the first thing the
  *  product ever did was fail, for a reason it knew about before the click.
  */
-export function CreateView({ ready }: { ready: Readiness }) {
-  const [topic, setTopic] = useState("");
-  const [format, setFormat] = useState<"short" | "long">("long");
-  const [jobId, setJobId] = useState<string | null>(null);
+export function CreateView({
+  ready,
+  resumeJobId = null,
+  resumeTopic = "",
+  resumeFormat = "long",
+}: {
+  ready: Readiness;
+  /** `?job=<id>` — reopen a project instead of starting a blank one. */
+  resumeJobId?: string | null;
+  /** Fetched server-side: reopening is exactly when the browser has forgotten. */
+  resumeTopic?: string;
+  resumeFormat?: "short" | "long";
+}) {
+  const [topic, setTopic] = useState(resumeTopic);
+  /** Set once Improve has rewritten the field: what it said, and the way back. */
+  const [improved, setImproved] = useState<{
+    why: string;
+    previous: string;
+    previousFormat: "short" | "long";
+  } | null>(null);
+  const [improving, setImproving] = useState(false);
+  /** Researched ideas for this channel's niche. Empty until the engine answers. */
+  const [ideas, setIdeas] = useState<
+    { topic: string; score: number; demand: number; why: string }[]
+  >([]);
+  const [format, setFormat] = useState<"short" | "long">(resumeFormat);
+  const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [demo, setDemo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockers, setBlockers] = useState<{ code: string; message: string }[]>([]);
@@ -54,8 +78,56 @@ export function CreateView({ ready }: { ready: Readiness }) {
   const [chosen, setChosen] = useState<Record<string, number>>({});
 
   const stream = useJobStream(jobId, emptyStages(), attempt);
+
+  // Fetched after mount rather than in the Server Component: it costs a model
+  // call and an autocomplete sweep per candidate, and blocking the first paint of
+  // the app's main screen on that would be the wrong trade. Engine-side it is
+  // cached for half an hour, so coming back here is free.
+  useEffect(() => {
+    if (jobId || demo) return;
+    let cancelled = false;
+    ideaSuggestions().then((r) => {
+      if (!cancelled && r.ok && r.data) setIdeas(r.data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, demo]);
   const stages: Stage[] = demo ? DEMO_JOB.stages : stream.stages;
   const cost = demo ? DEMO_JOB.cost_usd : stream.cost_usd;
+
+  /**
+   * Sharpen the fragment in the box into a topic the pipeline can research.
+   *
+   * Deliberately its own state rather than `startTransition`: `pending` gates
+   * Generate, and borrowing it here would disable the primary action while a
+   * different, optional call was in flight.
+   *
+   * A failure leaves the field exactly as typed. This is an assist, and an
+   * assist that clears your input when the model is unreachable is worse than
+   * no assist.
+   */
+  async function improve() {
+    const rough = topic.trim();
+    if (rough.length < 3 || improving) return;
+
+    setError(null);
+    setImproving(true);
+    try {
+      const result = await improveTopic(rough, format);
+      if (!result.ok || !result.data) {
+        setError(result.error ?? "could not improve that — the topic is unchanged");
+        return;
+      }
+      setImproved({ why: result.data.why, previous: topic, previousFormat: format });
+      setTopic(result.data.topic);
+      if (result.data.format === "short" || result.data.format === "long") {
+        setFormat(result.data.format);
+      }
+    } finally {
+      setImproving(false);
+    }
+  }
 
   function start() {
     if (topic.trim().length < 3) return;
@@ -101,6 +173,13 @@ export function CreateView({ ready }: { ready: Readiness }) {
     setBlockers([]);
     setNotice(null);
     setTopic("");
+    setImproved(null);
+    // Drop `?job=` as well, or New clears the screen and the next reload
+    // reopens the project that was just left. `replace` rather than `push` so
+    // Back does not walk into a blank Create.
+    if (typeof window !== "undefined" && window.location.search) {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
   }
 
   if (jobId || demo) {
@@ -123,7 +202,10 @@ export function CreateView({ ready }: { ready: Readiness }) {
               <Button variant="ghost" onClick={reset}>
                 New
               </Button>
-              <Button onClick={onPublish} disabled={demo || pending || stream.status !== "completed"}>
+              <Button
+                onClick={onPublish}
+                disabled={demo || pending || stream.status !== "completed"}
+              >
                 Publish
               </Button>
             </div>
@@ -140,10 +222,19 @@ export function CreateView({ ready }: { ready: Readiness }) {
             </div>
           )}
 
+          {/* Above the pipeline, not inside it. Once the render exists it is the
+              thing you came for, and burying it in the eleventh stage row of
+              seventeen makes you hunt for it. Renders nothing until there is a
+              finished video to play. */}
+          {!demo && <VideoPreview stages={stages} jobId={jobId} />}
+
           <Pipeline
             stages={stages}
+            jobId={demo ? null : jobId}
             chosen={chosen}
-            canRerun={!demo && stream.status !== "running" && stream.status !== "connecting"}
+            canRerun={
+              !demo && stream.status !== "running" && stream.status !== "connecting"
+            }
             onChoose={(stage, index) => setChosen({ ...chosen, [stage]: index })}
             onRerun={(name) => {
               if (!jobId) return;
@@ -174,7 +265,9 @@ export function CreateView({ ready }: { ready: Readiness }) {
               role="alert"
               className="mt-4 flex items-center gap-3 rounded-lg border border-[var(--color-warn)]/40 p-4"
             >
-              <p className="flex-1 text-[13px] text-[var(--color-warn)]">{stream.error}</p>
+              <p className="flex-1 text-[13px] text-[var(--color-warn)]">
+                {stream.error}
+              </p>
               <Button variant="ghost" onClick={() => setAttempt(attempt + 1)}>
                 Reconnect
               </Button>
@@ -205,8 +298,7 @@ export function CreateView({ ready }: { ready: Readiness }) {
           )}
 
           <p className="mt-4 text-[12px] text-[var(--color-faint)]">
-            This job keeps running if you close the tab. Progress is restored on
-            return.
+            This job keeps running if you close the tab. Progress is restored on return.
           </p>
         </Page>
       </>
@@ -237,6 +329,28 @@ export function CreateView({ ready }: { ready: Readiness }) {
           className="mt-3 w-full border-b border-[var(--color-line)] bg-transparent pb-3 text-[28px] font-semibold outline-none transition-colors duration-150 placeholder:text-[var(--color-faint)] focus:border-[var(--color-accent)]"
         />
 
+        {/* What the model changed, and the way back. Shown only after Improve has
+            run, and it says the previous topic in full: this rewrites the field
+            someone was about to press Generate on, and a rewrite you cannot undo
+            or inspect is one you stop trusting after it guesses wrong once. */}
+        {improved && (
+          <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <p className="flex-1 text-[13px] leading-relaxed text-[var(--color-muted)]">
+              {improved.why}
+            </p>
+            <button
+              onClick={() => {
+                setTopic(improved.previous);
+                setFormat(improved.previousFormat);
+                setImproved(null);
+              }}
+              className="text-[12px] text-[var(--color-faint)] underline decoration-[var(--color-line-hover)] underline-offset-4 transition-colors duration-150 hover:text-[var(--color-ink)]"
+            >
+              Undo
+            </button>
+          </div>
+        )}
+
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <Chip
             active={format === "short"}
@@ -251,21 +365,69 @@ export function CreateView({ ready }: { ready: Readiness }) {
           {/* "From a series…" was here with an empty onClick. Nothing serves series
               yet, so it was a chip that swallowed the click and changed nothing. */}
 
+          {/* A chip, not a second Button. Generate is this screen's one primary
+              action (UI-DESIGN #1) and two filled buttons side by side is exactly
+              the "which do I press?" this design avoids. */}
+          <Chip
+            active={false}
+            onClick={improve}
+            disabled={blocked || improving || pending || topic.trim().length < 3}
+            label={improving ? "Thinking…" : "Improve with AI"}
+          />
+
           <div className="ml-auto">
             <Button
               onClick={start}
               disabled={blocked || pending || topic.trim().length < 3}
-              title={blocked ? "Add an LLM key and a footage key in Setup first" : undefined}
+              title={
+                blocked ? "Add an LLM key and a footage key in Setup first" : undefined
+              }
             >
               {pending ? "Starting…" : "Generate"}
             </Button>
           </div>
         </div>
 
+        {/* Ideas, not predictions. Every number under these comes from YouTube
+            autocomplete — queries people actually typed — scored by the same
+            `ideas.score_idea` the channel backlog uses. Nothing here claims to know
+            what will go viral, because nothing can. Hidden entirely on a first run:
+            with no videos to be adjacent to there is no niche to suggest within,
+            and generic filler would be worse than blank. */}
+        {ideas.length > 0 && (
+          <section className="mt-10">
+            <h2 className="text-[13px] font-semibold text-[var(--color-muted)]">
+              Worth making next
+            </h2>
+            <p className="mt-1 text-[12px] text-[var(--color-faint)]">
+              Based on what you have made, ranked by real search demand.
+            </p>
+            <ul className="mt-3 grid gap-1.5">
+              {ideas.map((idea) => (
+                <li key={idea.topic}>
+                  <button
+                    onClick={() => {
+                      setTopic(idea.topic);
+                      setImproved(null);
+                    }}
+                    className="flex w-full items-baseline gap-3 rounded-[var(--radius-btn)] border border-transparent px-3 py-2.5 text-left transition-colors duration-150 hover:border-[var(--color-line)] hover:bg-[var(--color-surface)]"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[14px] text-[var(--color-ink)]">
+                      {idea.topic}
+                    </span>
+                    <span className="mono shrink-0 text-[11px] text-[var(--color-faint)]">
+                      {idea.why}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         <p className="mt-8 text-[13px] leading-relaxed text-[var(--color-faint)]">
-          Research runs first — the script is built from sources, not from what the
-          model already believes. Every stage is editable before anything is
-          published.
+          Research runs first — the script is built from sources, not from what the model
+          already believes. Every stage is editable before anything is published.
         </p>
       </div>
     </>
@@ -340,16 +502,19 @@ function Chip({
   active,
   onClick,
   label,
+  disabled = false,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       aria-pressed={active}
-      className={`rounded-full border px-3.5 py-1.5 text-[13px] transition-colors duration-150 ${
+      className={`rounded-full border px-3.5 py-1.5 text-[13px] transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${
         active
           ? "border-[var(--color-ink)] text-[var(--color-ink)]"
           : "border-[var(--color-line)] text-[var(--color-muted)] hover:border-[var(--color-line-hover)]"

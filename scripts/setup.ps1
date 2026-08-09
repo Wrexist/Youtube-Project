@@ -25,9 +25,115 @@ $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 $Root = (Get-Location).Path
 
-function Step($text) { Write-Host ""; Write-Host $text -ForegroundColor White }
-function Note($text) { Write-Host "  $text" -ForegroundColor DarkGray }
-function Die($text) { Write-Host "X $text" -ForegroundColor Red; exit 1 }
+# -- how this looks ----------------------------------------------------------
+#
+# Everything is drawn in a single gutter: a numbered heading at four columns,
+# its detail at seven, so the eye has one edge to follow down a screen that
+# takes minutes to fill. The step counter matters more than it looks - most of
+# the runtime is three steps that print nothing while they work, and "3/8" is
+# the difference between waiting and wondering whether it has hung.
+#
+# ASCII only, including the marks. See the note at the top of the file: this
+# script is read using the machine's ANSI code page, so a tick or a box-drawing
+# character is not a rendering question, it is a parse error waiting for the
+# wrong locale.
+
+$script:StepNumber = 0
+$script:StepTotal = 8
+
+function Step($text) {
+    $script:StepNumber++
+    Write-Host ""
+    Write-Host ("  {0}/{1} " -f $script:StepNumber, $script:StepTotal) -ForegroundColor DarkGray -NoNewline
+    Write-Host $text -ForegroundColor White
+}
+
+function Note($text) { Write-Host "       $text" -ForegroundColor DarkGray }
+
+# A step that finished, with what it cost. Only used where the wait was long
+# enough that finishing is itself news.
+function Done($text, $elapsed) {
+    Write-Host "       ok " -ForegroundColor Green -NoNewline
+    Write-Host $text -ForegroundColor DarkGray -NoNewline
+    if ($elapsed) { Write-Host ("  " + (Format-Elapsed $elapsed)) -ForegroundColor DarkGray -NoNewline }
+    Write-Host ""
+}
+
+function Die($text) {
+    Write-Host ""
+    Write-Host "  X  $text" -ForegroundColor Red
+    Write-Host ""
+    exit 1
+}
+
+function Format-Elapsed([TimeSpan] $span) {
+    if ($span.TotalSeconds -lt 60) { return "{0}s" -f [int] $span.TotalSeconds }
+    return "{0}m {1:00}s" -f [int] $span.TotalMinutes, $span.Seconds
+}
+
+# Whether it is worth animating anything at all. A redirected stream - a CI log,
+# `> setup.log`, anything piping this into a file - records every frame of a
+# spinner as literal text, so the carriage returns that make it an animation on
+# a console make it unreadable there instead.
+$script:Animate = -not [Console]::IsOutputRedirected
+
+function Show-Header {
+    Write-Host ""
+    Write-Host "  Studio" -ForegroundColor Cyan
+    Write-Host "  Setting up. A few minutes, mostly downloads - you can leave it." -ForegroundColor DarkGray
+}
+
+<#
+Resolve a command name to a real executable, stepping around PowerShell shims.
+
+Not defensive PATH paranoia - one specific, load-bearing bug. Node installs
+`npm.ps1` next to `npm.cmd`, and PowerShell resolves a bare `npm` to the *.ps1*
+because scripts outrank applications. That shim does not read `$args`. It
+reconstructs the command line from the caller's own source text:
+
+    $NPM_ARGS = $COMMAND.Substring($MyInvocation.InvocationName.Length).Trim()
+    Invoke-Expression "& `"$NODE_EXE`" `"$NPM_CLI_JS`" $NPM_ARGS"
+
+Every call in this file goes through `& $Exe @Arguments`. The shim chopped
+`"npm".Length` - three characters - off the front of that literal text, leaving
+`Exe @Arguments`, and passed it on. So npm was invoked as `npm Exe install ...`
+and answered:
+
+    Unknown command: "Exe"
+
+followed by this script's own "npm install failed", on a machine where npm, Node
+and the lockfile were all perfectly fine. Nothing about the arguments could have
+fixed it; the shim never saw them.
+
+Preferring the Application entry avoids the whole mechanism - npm.cmd takes its
+arguments the ordinary way. Extension order matters too: Node also installs an
+extensionless `npm` (a bash script) that Windows cannot execute at all.
+#>
+$script:ExeCache = @{}
+function Resolve-Exe([string] $name) {
+    if ($script:ExeCache.ContainsKey($name)) { return $script:ExeCache[$name] }
+
+    # Already a path - there is nothing to disambiguate, and Get-Command on a
+    # path would only hand back what we gave it.
+    $resolved = $name
+    if ($name -notmatch "[\\/]") {
+        $apps = @(
+            Get-Command $name -All -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandType -eq "Application" }
+        )
+        if ($apps.Count -gt 0) {
+            $preferred = @(".exe", ".com", ".cmd", ".bat")
+            $best = $apps | Sort-Object @{ Expression = {
+                $i = $preferred.IndexOf([IO.Path]::GetExtension($_.Source).ToLowerInvariant())
+                if ($i -lt 0) { 99 } else { $i }
+            } } | Select-Object -First 1
+            $resolved = $best.Source
+        }
+    }
+
+    $script:ExeCache[$name] = $resolved
+    return $resolved
+}
 
 <#
 Run an external program with its output captured, and hand back both the text and
@@ -40,60 +146,130 @@ banner - has that line turned into a NativeCommandError, which then terminates
 the script regardless of the exit code. That is how a successful `py` invocation
 killed setup with "NotSpecified: (Python 3.14.6 ...) NativeCommandError".
 
-So every capturing call in this file goes through here, where the preference is
-lifted for exactly the length of the call and the exit code is read back
+So every capturing call in this file goes through here, on a runspace of its own
+where the preference is `Continue` from the start and the exit code is read back
 explicitly.
+
+The runspace is also what makes the waiting visible. Three of these calls -
+pip, npm, pytest - account for nearly all of the runtime and print nothing at
+all while they work, because their output is being captured. Run inline that is
+several silent minutes, which is indistinguishable from a hang; run on a
+runspace, this thread is free to draw a spinner and a clock against it. The
+program itself is still invoked exactly as it was, `& $path @Arguments 2>&1`,
+so none of the behaviour above changes - only who is watching it.
 #>
+$script:NativeWorker = @'
+param($Path, $Arguments, $Directory)
+
+# Not inherited from the caller: a fresh runspace starts at the default, which
+# is what this needs anyway. Stated rather than assumed, because the whole
+# NativeCommandError trap turns on it.
+$ErrorActionPreference = "Continue"
+
+if ($Directory) {
+    # Checked rather than attempted. Running the program in the wrong directory
+    # and reporting "npm install failed" is a lie; this is the truth.
+    if (-not (Test-Path -LiteralPath $Directory)) {
+        return @{ Lines = @("cannot enter $Directory"); Code = 9009 }
+    }
+    Set-Location -LiteralPath $Directory
+}
+
+# Pre-set, so a program that never launches at all cannot leave the previous
+# command's success code standing. 9009 is what cmd reports for "not found".
+$global:LASTEXITCODE = 9009
+try {
+    # `2>&1` merges stderr in; the ForEach flattens the ErrorRecords that
+    # merging produces down to their text, so callers get plain strings.
+    $lines = @(& $Path @Arguments 2>&1 | ForEach-Object { "$_" })
+    $code = $LASTEXITCODE
+} catch {
+    $lines = @("$_")
+    $code = 9009
+}
+return @{ Lines = $lines; Code = $code }
+'@
+
 function Invoke-Native {
     param(
         [Parameter(Mandatory = $true)][string] $Exe,
         [string[]] $Arguments = @(),
-        [string] $WorkingDirectory
+        [string] $WorkingDirectory,
+        # Present only for the slow ones. Naming the activity is what turns the
+        # spinner from decoration into information.
+        [string] $Activity
     )
 
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
+    # Resolved to a real executable first - see Resolve-Exe. Calling the name
+    # directly is what let npm's PowerShell shim read the call site as its own
+    # argument list.
+    $path = Resolve-Exe $Exe
+    $directory = if ($WorkingDirectory) { Join-Path $Root $WorkingDirectory } else { $null }
 
-    # Whether the push actually happened, rather than whether one was asked for.
-    # The preference is already `Continue` by this point, so a failed
-    # `Push-Location` is non-terminating: without this, a directory that does not
-    # exist would run the program in the caller's directory and then pop an
-    # unrelated entry off the stack on the way out. Reported as its own failure
-    # instead, because "npm install failed" from the wrong directory is a lie.
-    $pushed = $false
-    if ($WorkingDirectory) {
-        Push-Location $WorkingDirectory -ErrorAction SilentlyContinue
-        $pushed = $?
-        if (-not $pushed) {
-            $ErrorActionPreference = $previous
-            $message = "cannot enter $WorkingDirectory"
-            return @{ Lines = @($message); Text = $message; Code = 9009 }
-        }
-    }
-
-    # Pre-set, so a program that never launches at all cannot leave the previous
-    # command's success code standing. 9009 is what cmd reports for "not found".
-    $global:LASTEXITCODE = 9009
+    $started = Get-Date
+    $shell = [PowerShell]::Create()
     try {
-        # `2>&1` merges stderr in; the ForEach flattens the ErrorRecords that
-        # merging produces down to their text, so callers get plain strings.
-        $lines = @(& $Exe @Arguments 2>&1 | ForEach-Object { "$_" })
-        $code = $LASTEXITCODE
+        [void] $shell.AddScript($script:NativeWorker)
+        [void] $shell.AddArgument($path)
+        [void] $shell.AddArgument($Arguments)
+        [void] $shell.AddArgument($directory)
+
+        $handle = $shell.BeginInvoke()
+        Wait-Native $handle $Activity $started
+        $output = $shell.EndInvoke($handle)
     } catch {
-        $lines = @("$_")
-        $code = 9009
+        return @{ Lines = @("$_"); Text = "$_"; Code = 9009; Elapsed = ((Get-Date) - $started) }
     } finally {
-        if ($pushed) { Pop-Location }
-        $ErrorActionPreference = $previous
+        $shell.Dispose()
     }
 
-    return @{ Lines = $lines; Text = ($lines -join [Environment]::NewLine); Code = $code }
+    # The worker's single return value, however the collection wrapped it.
+    $result = @($output | Where-Object { $_ -is [hashtable] })[-1]
+    if (-not $result) {
+        $message = "$Exe produced no result"
+        return @{ Lines = @($message); Text = $message; Code = 9009; Elapsed = ((Get-Date) - $started) }
+    }
+
+    $lines = @($result.Lines)
+    return @{
+        Lines   = $lines
+        Text    = ($lines -join [Environment]::NewLine)
+        Code    = $result.Code
+        Elapsed = ((Get-Date) - $started)
+    }
+}
+
+<#
+Block until the call finishes, drawing a spinner and a clock if there is anyone
+to watch it.
+
+The line is rewritten in place with a carriage return and cleared on the way
+out, so the finished step gets to print its own one-line summary over the top
+rather than leaving a dead progress line in the transcript.
+#>
+function Wait-Native($handle, $activity, $started) {
+    if (-not $activity -or -not $script:Animate) {
+        [void] $handle.AsyncWaitHandle.WaitOne()
+        return
+    }
+
+    $frames = @("|", "/", "-", "\")
+    $i = 0
+    while (-not $handle.IsCompleted) {
+        $line = "  {0}  {1}  {2}" -f $frames[$i % $frames.Count], $activity, (Format-Elapsed ((Get-Date) - $started))
+        Write-Host ("`r     " + $line.PadRight(70)) -ForegroundColor DarkGray -NoNewline
+        $i++
+        # Slow enough not to burn a core drawing four characters, fast enough to
+        # read as motion rather than as a stutter.
+        [void] $handle.AsyncWaitHandle.WaitOne(130)
+    }
+    Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
 }
 
 # The tail of a captured run, for when it failed and the reason is in there.
 function Show-Output($result, $count = 20) {
     if (-not $result) { return }
-    $result.Lines | Select-Object -Last $count | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    $result.Lines | Select-Object -Last $count | ForEach-Object { Write-Host "       $_" -ForegroundColor DarkGray }
 }
 
 <#
@@ -147,6 +323,8 @@ function Offer($name, $why, $wingetId, $url, $headline) {
 }
 
 # -- prerequisites -----------------------------------------------------------
+
+Show-Header
 
 Step "Checking prerequisites"
 
@@ -341,28 +519,28 @@ if (-not (Test-Path $VenvPython)) {
     }
 }
 
-Note "installing Python dependencies (this is the slow part - a few minutes)"
-$pip = Invoke-Native $VenvPython @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--upgrade", "pip")
+$pip = Invoke-Native $VenvPython @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--upgrade", "pip") -Activity "updating pip"
 if ($pip.Code -ne 0) { Show-Output $pip; Die "pip upgrade failed" }
 
-$engine = Invoke-Native $VenvPython @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "-e", ".[dev]") -WorkingDirectory "apps\engine"
+$engine = Invoke-Native $VenvPython @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "-e", ".[dev]") -WorkingDirectory "apps\engine" -Activity "installing Python dependencies (the slow one)"
 if ($engine.Code -ne 0) {
     # 40 lines, because a wheel that failed to build buries the actual cause under
     # a long compiler transcript.
     Show-Output $engine 40
     Die "installing the engine failed"
 }
+Done "Python dependencies" $engine.Elapsed
 
 # -- web ---------------------------------------------------------------------
 
 Step "Setting up the web app"
-Note "installing npm workspaces (also slow)"
 # `--loglevel=error`, not `--silent`. Silent suppresses npm's own error reporting
 # as well as its progress, so a failed install printed forty lines of nothing
 # through Show-Output. Checked: a 404 on a missing package produces no output at
 # all under --silent, and the full `npm error 404` block under --loglevel=error.
-$npm = Invoke-Native "npm" @("install", "--loglevel=error", "--no-fund", "--no-audit")
+$npm = Invoke-Native "npm" @("install", "--loglevel=error", "--no-fund", "--no-audit") -Activity "installing npm workspaces"
 if ($npm.Code -ne 0) { Show-Output $npm 40; Die "npm install failed" }
+Done "npm workspaces" $npm.Elapsed
 
 # Tailwind v4 compiles CSS through native binaries, and npm records an optional
 # dependency only for the platform that generated the lockfile - which was Linux.
@@ -379,10 +557,11 @@ if ($toolchain.Code -ne 0) {
     # for anything inside that workspace, and deleting only the root leaves it in
     # place. That is how a machine ran Next 16 with a Next 10-era tree underneath,
     # and npm audit reported 107 findings against 14 on a clean tree.
-    $reinstall = Invoke-Native "node" @("scripts\reinstall.mjs")
+    $reinstall = Invoke-Native "node" @("scripts\reinstall.mjs") -Activity "reinstalling web dependencies"
     if ($reinstall.Code -ne 0) { Show-Output $reinstall 40; Die "web dependencies are still wrong" }
+    Done "web dependencies rebuilt for this platform" $reinstall.Elapsed
 } else {
-    Note "web dependencies OK"
+    Done "platform binaries"
 }
 
 # -- config ------------------------------------------------------------------
@@ -428,21 +607,37 @@ $env:STUDIO_PERSIST = "false"
 # captured run (rather than after piping pytest into a cmdlet) is what keeps a
 # failing suite from scrolling past and setup going on to print "Setup complete",
 # the one thing this step exists to stop.
-$tests = Invoke-Native $VenvPython @("-m", "pytest", "-q") -WorkingDirectory "apps\engine"
+$tests = Invoke-Native $VenvPython @("-m", "pytest", "-q") -WorkingDirectory "apps\engine" -Activity "running the test suite"
 Remove-Item Env:\STUDIO_PERSIST -ErrorAction SilentlyContinue
 
-Show-Output $tests 3
 if ($tests.Code -ne 0) {
+    Show-Output $tests 3
     Write-Host ""
-    Write-Host "The test suite failed. Full output:" -ForegroundColor Yellow
-    $tests.Lines | ForEach-Object { Write-Host "  $_" }
+    Write-Host "       The test suite failed. Full output:" -ForegroundColor Yellow
+    $tests.Lines | ForEach-Object { Write-Host "       $_" -ForegroundColor DarkGray }
     Die "the engine is not working on this machine - please open an issue with the output above"
 }
+# pytest's own summary line, minus the parts this line already carries. It says
+# "877 passed, 3 skipped, 1374 warnings in 121.48s (0:02:01)"; the duration is
+# printed alongside anyway, and a warning count is not news on a suite that
+# passed. What is left - "877 passed, 3 skipped" - is preferred over a count of
+# our own, because a suite that passed with skips should say so.
+$summary = @($tests.Lines | Where-Object { $_ -match "passed|no tests ran" })[-1]
+$summary = ($summary -replace "\s+in\s+[\d.]+s.*$", "") -replace ",?\s*\d+ warnings?", ""
+$summary = ($summary -replace "\s+", " ").Trim()
+# A pytest that changes its summary wording should not blank this line out. The
+# exit code is what decided we are here; the summary only decorates it.
+if (-not $summary) { $summary = "the test suite passed" }
+Done $summary $tests.Elapsed
 
 Step "Adding a launcher"
 # Never fatal - see the note in setup.sh.
 $shortcut = Invoke-Native "node" @("scripts\install-shortcut.mjs")
-Show-Output $shortcut 5
+# Trimmed and re-indented rather than passed to Show-Output, which preserves
+# leading whitespace on purpose (a pytest traceback is unreadable without it).
+# The script prints its own two-space gutter for the sh installer, and stacking
+# that on top of this one's seven left the only line of the step hanging.
+$shortcut.Lines | Select-Object -Last 5 | ForEach-Object { Note $_.Trim() }
 
 Remove-Item $ProbeScript -ErrorAction SilentlyContinue
 
@@ -454,31 +649,42 @@ Step "Checking what is still missing"
 & $VenvPython (Join-Path $Root "apps\engine\scripts\doctor.py")
 $Doctor = $LASTEXITCODE
 
+# One rule below the checklist, so "what is left to do" is visually separate
+# from "here is the thing you came for". Without it the doctor's list and the
+# next step run together into one wall at the exact moment someone stops reading.
+Write-Host ""
+Write-Host ("  " + ("-" * 66)) -ForegroundColor DarkGray
 Write-Host ""
 if ($Doctor -eq 0) {
-    Write-Host "Setup complete and nothing is missing." -ForegroundColor Green
+    Write-Host "  Setup complete." -ForegroundColor Green -NoNewline
+    Write-Host " Nothing is missing."
 } else {
-    Write-Host "Setup complete." -NoNewline
-    Write-Host " The items marked X above need an API key - see SETUP.md."
+    Write-Host "  Setup complete." -ForegroundColor Green -NoNewline
+    # Deliberately does not name the mark. The doctor prints a real tick and
+    # cross; this file is pure ASCII and cannot, and "the items marked X" in
+    # front of a list marked with something else is worse than not saying.
+    Write-Host " The items listed above still need an API key."
+    Write-Host "  You can add them on the Setup screen, or see SETUP.md." -ForegroundColor DarkGray
 }
 
 Write-Host ""
-Write-Host "Next:"
-Write-Host "  Double-click the Studio shortcut on your Desktop." -ForegroundColor Cyan
-Write-Host "  (or Studio.cmd in this folder - same thing)"
+Write-Host "  Start Studio" -ForegroundColor White
+Write-Host "    Double-click the " -NoNewline
+Write-Host "Studio" -ForegroundColor Cyan -NoNewline
+Write-Host " shortcut on your Desktop."
+Write-Host "    (or Studio.cmd in this folder - same thing)" -ForegroundColor DarkGray
 Write-Host ""
 if ($Doctor -eq 0) {
-    Write-Host "  Your browser opens by itself. Type a topic and press Generate."
+    Write-Host "    Your browser opens by itself. Type a topic and press Generate." -ForegroundColor DarkGray
 } else {
-    Write-Host "  Your browser opens by itself, on the setup screen. Paste your"
-    Write-Host "  keys in there - it says what each one unlocks and links to"
-    Write-Host "  where to get it."
+    Write-Host "    Your browser opens by itself, on the setup screen. Paste your keys" -ForegroundColor DarkGray
+    Write-Host "    in there - it says what each one unlocks and links to where to get it." -ForegroundColor DarkGray
 }
 Write-Host ""
 # `npm start` runs both halves. Kept here for when you want to restart one on its
 # own - and the leading .\ is required, because PowerShell looks a bare `apps\...`
 # up as a command name and fails with "The module 'apps' could not be loaded".
-Write-Host "To run the two halves separately instead:" -ForegroundColor DarkGray
-Write-Host "  npm run dev" -ForegroundColor DarkGray
-Write-Host "  .\apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080" -ForegroundColor DarkGray
+Write-Host "  To run the two halves separately instead:" -ForegroundColor DarkGray
+Write-Host "    npm run dev" -ForegroundColor DarkGray
+Write-Host "    .\apps\engine\.venv\Scripts\python -m uvicorn engine.main:app --reload --port 8080" -ForegroundColor DarkGray
 Write-Host ""

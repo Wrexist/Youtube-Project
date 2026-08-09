@@ -21,7 +21,13 @@ import {
   beginYouTubeAuth,
   cancelJob,
   createJob,
+  refineBrief,
   getDiagnostics,
+  getIdeaSuggestions,
+  getThumbnails,
+  regenerateThumbnail,
+  sharpenThumbnailInstruction,
+  getDiagnosticReport,
   isLive,
   publishJob,
   saveKeys,
@@ -30,11 +36,13 @@ import {
   rerunStage,
   scheduleVideo,
   unscheduleVideo,
+  recommendRoutes,
   resetRoutes,
   setAllRoutes,
   setRoute,
 } from "@/lib/engine";
 import { ONBOARDED_COOKIE, ONBOARDED_MAX_AGE } from "@/lib/onboarding";
+import type { ThumbnailSet } from "@/lib/engine";
 import type { Diagnostics, JobRequest, PublishRequest } from "@studio/contracts";
 
 export interface ActionResult<T = unknown> {
@@ -43,6 +51,74 @@ export interface ActionResult<T = unknown> {
   error?: string;
   /** Publish blockers, each with a readable reason. Shown as a list, never summarised. */
   blockers?: { code: string; message: string }[];
+}
+
+/**
+ * Sharpen what the creator typed into a topic the pipeline can research.
+ *
+ * The Create screen's one AI affordance before Generate. Everything downstream
+ * inherits this string — keyword grounding seeds autocomplete with it, research
+ * searches for it, the angle and hook stages are handed it as the premise — so a
+ * vague one does not fail loudly, it produces a competent video about nothing in
+ * particular.
+ */
+export async function improveTopic(
+  rough: string,
+  format: "short" | "long",
+): Promise<ActionResult<{ topic: string; format: string; why: string }>> {
+  try {
+    const brief = await refineBrief(rough, format);
+    return { ok: true, data: brief };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+/**
+ * Ideas worth making next. Empty on a first run — there is nothing to be
+ * adjacent to yet, and inventing a niche for someone who has not chosen one is
+ * worse than showing nothing.
+ */
+export async function ideaSuggestions(): Promise<
+  ActionResult<{ topic: string; score: number; demand: number; why: string }[]>
+> {
+  const data = await getIdeaSuggestions(4);
+  if (!data) return { ok: false, error: "the engine did not answer" };
+  return { ok: true, data: data.suggestions };
+}
+
+// ── thumbnails ──────────────────────────────────────────────────────────────
+//
+// The thumbnail is the only artifact a viewer sees before deciding whether to
+// watch, and the pipeline used to report it as "3 items".
+
+export async function loadThumbnails(jobId: string): Promise<ActionResult<ThumbnailSet>> {
+  const data = await getThumbnails(jobId);
+  if (!data) return { ok: false, error: "the engine did not answer" };
+  return { ok: true, data };
+}
+
+export async function remakeThumbnail(
+  jobId: string,
+  instruction: string,
+  baseIndex: number,
+): Promise<ActionResult<ThumbnailSet>> {
+  try {
+    return { ok: true, data: await regenerateThumbnail(jobId, instruction, baseIndex) };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+export async function sharpenInstruction(
+  jobId: string,
+  instruction: string,
+): Promise<ActionResult<{ instruction: string; why: string }>> {
+  try {
+    return { ok: true, data: await sharpenThumbnailInstruction(jobId, instruction) };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
 }
 
 export async function startJob(input: {
@@ -93,7 +169,8 @@ export async function publish(
   } catch (error) {
     if (error instanceof EngineError && error.status === 409) {
       const detail = (error.detail as { detail?: { blockers?: unknown } })?.detail;
-      const blockers = (detail as { blockers?: { code: string; message: string }[] })?.blockers;
+      const blockers = (detail as { blockers?: { code: string; message: string }[] })
+        ?.blockers;
       if (blockers?.length) {
         return { ok: false, error: "This video is not ready to publish", blockers };
       }
@@ -116,10 +193,7 @@ function message(error: unknown): string {
 // a routing choice survived until the next reload and the header quoted a monthly
 // cost for a configuration that was never in force.
 
-export async function routeTask(
-  task: string,
-  model: string,
-): Promise<ActionResult> {
+export async function routeTask(task: string, model: string): Promise<ActionResult> {
   try {
     await setRoute(task, model);
     revalidatePath("/models");
@@ -151,6 +225,22 @@ export async function routeEverything(model: string): Promise<ActionResult> {
   }
 }
 
+export async function applyRecommendedRoutes(): Promise<ActionResult> {
+  try {
+    await recommendRoutes();
+    revalidatePath("/models");
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof EngineError
+          ? error.message
+          : "Could not reach the engine — nothing was changed.",
+    };
+  }
+}
+
 export async function restoreDefaultRoutes(): Promise<ActionResult> {
   try {
     await resetRoutes();
@@ -166,7 +256,6 @@ export async function restoreDefaultRoutes(): Promise<ActionResult> {
     };
   }
 }
-
 
 // ── stage re-runs ───────────────────────────────────────────────────────────
 
@@ -212,7 +301,6 @@ export async function editStageValue(
     };
   }
 }
-
 
 // ── scheduling ──────────────────────────────────────────────────────────────
 //
@@ -367,9 +455,23 @@ export async function replayOnboarding(): Promise<ActionResult> {
  * turns on the keyword-grounding probe, which is slow enough that it only belongs
  * behind a button press.
  */
-export async function runDiagnostics(
-  network = true,
-): Promise<ActionResult<Diagnostics>> {
+/**
+ * The diagnostic report as text, for the Copy report button.
+ *
+ * A Server Action rather than a fetch from the browser, like everything else
+ * here: the web app is the only thing that talks to the engine, and the engine
+ * is unauthenticated (KNOWN-ISSUES §6) — reaching it from page JavaScript would
+ * mean exposing its address to anything running in the tab.
+ */
+export async function fetchDiagnosticReport(): Promise<ActionResult<string>> {
+  const text = await getDiagnosticReport();
+  if (!text) {
+    return { ok: false, error: "The engine did not answer. Is it still running?" };
+  }
+  return { ok: true, data: text };
+}
+
+export async function runDiagnostics(network = true): Promise<ActionResult<Diagnostics>> {
   const data = await getDiagnostics(network);
   if (!data) {
     return { ok: false, error: "The engine did not answer. Is it still running?" };

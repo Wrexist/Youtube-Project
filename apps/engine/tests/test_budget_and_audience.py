@@ -113,7 +113,7 @@ def test_nothing_constructs_or_reads_a_weekday_attribute():
     offenders = [
         f"{p.name}:{i}"
         for p in engine.rglob("*.py")
-        for i, line in enumerate(p.read_text().splitlines(), 1)
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
         if re.search(r"AudienceProfile\([^)]*weekday=|profile\.weekday\b", line)
     ]
     assert not offenders, f"AudienceProfile has no `weekday` field: {offenders}"

@@ -178,12 +178,22 @@ def _check_tts_trust(report: Report) -> None:
         )
         return
 
+    # No hand-configured bundle, which is the normal case. What matters then is
+    # whether the platform verifier is in play, because that is what makes an
+    # intercepting antivirus or proxy work without anyone exporting anything.
+    from engine import tls
+
     report.add(
         Check(
             key="tts_trust",
-            name="Voiceover TLS",
-            level="ok",
-            detail="using the default certificate roots",
+            name="Certificate trust",
+            level="ok" if tls.STATUS == "using the system certificate store" else "warn",
+            detail=tls.STATUS,
+            fix=(
+                "Outbound calls verify against certifi's fixed bundle, which does not "
+                "include the root your antivirus or proxy re-signs with. Reinstall the "
+                "engine so truststore is present: see Install Studio.cmd."
+            ),
         )
     )
 

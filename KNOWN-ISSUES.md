@@ -254,17 +254,26 @@ the 3.11 the project claims to support.
 
 ## 5. Known-imperfect, working as intended for now
 
-### 5.1 Subtitles lose punctuation
-edge-tts word boundaries strip punctuation, so cues read
-`On purpose Here is why` instead of `On purpose. Here is why`. Cosmetic for burned-in
-subtitles; **noticeably worse for the SRT uploaded as a caption track**, which is a
-real ranking signal.
+### 5.1 ~~Subtitles lose punctuation~~ — fixed, by aligning to the written script
+edge-tts reports what it *said*, not what it read. That cost punctuation
+(`On purpose Here is why`) and, worse, every numeral: a script saying `$50,000 on
+October 5, 2018` produced the on-screen caption **"fifty thousand dollars"** and
+**"October fifth twenty eighteen"**. Both were visible in rendered frames from a real
+job. Numerals matter twice over — a caption track that spells them out reads like a
+transcript of a phone call, and width is the scarcest thing on a 9:16 frame.
 
-**Proper fix:** realign cue text against the original script — match each cue's words
-back to the source sentence and restore the punctuation. MoneyPrinterTurbo does a
-version of this in `vendor/moneyprinterturbo/app/services/voice.py:_match_script_line`.
-`media._restore_punctuation` is our take on it; it recovers terminal `.!?` but not
-commas or quotes.
+`media._restore_written_forms` now walks the written script as the authority and
+consumes cues to match, emitting the token *as written*. Punctuation comes back free,
+because the written token already carries it. A token containing a digit or a currency
+symbol swallows the spoken run that follows — capped by `_spoken_word_count`, because
+greedy consumption let `5,` eat "fifth twenty eighteen" and the following `2018.` then
+ate a real word out of the script. Timing is taken from the first and last spoken word,
+so nothing drifts, and badly-drifted alignment falls back to the old punctuation-only
+pass rather than shipping captions out of sync.
+
+Still not recovered: commas and quotes *inside* a sentence, when the alignment falls
+back. MoneyPrinterTurbo's version is in
+`vendor/moneyprinterturbo/app/services/voice.py:_match_script_line`.
 
 ### 5.2 Publish-time scheduling is a heuristic
 YouTube exposes no hourly "when your viewers are online" dimension publicly. The
@@ -272,15 +281,23 @@ scheduler measures **weekday** from real data and **estimates hour-of-day** from
 built-in evening-weighted curve. The API labels this `measured_weekday_only` and the
 UI says "estimated" rather than implying precision it does not have.
 
-### 5.3 Thumbnail backgrounds are generated but the image APIs are unproven
-Backgrounds now come from GPT Image (or Imagen), through
+### 5.3 Thumbnail backgrounds are generated — and so is B-roll for unmatched beats
+Backgrounds come from Gemini 3 Pro Image, also sold as Nano Banana Pro, through
 [providers/images.py](apps/engine/engine/providers/images.py), reusing
 `OPENAI_API_KEY`/`GEMINI_API_KEY` rather than adding a key. With neither set the
 composition falls back to a flat panel, so a keyless clone still gets a thumbnail.
 
-**Neither transport has been called against a live API** — the request and response
-shapes are covered by tests against recorded envelopes, not by a real key. Same
-standing as the Google clients in §1.1.
+Both transports have now been called against a live API and both work, so the
+"unproven" caveat that used to sit here is gone. Gemini 3 Pro Image is preferred over
+GPT Image 1 on all three counts that matter: better output, cheaper ($0.134 against
+$0.19), and native 16:9 where GPT Image returns 3:2 and has to be cropped.
+
+`MaterialsStage` also generates when a beat has no stock match, which satisfies
+CLAUDE.md's "hero shots get generative B-roll". This is not a nicety — no stock
+library has footage of a named person, so a video about a specific creator used to
+fill its beats with whatever a truncated query happened to return. One real beat
+asked for a subscriber counter and got coloured paper clips. Generation is metered
+per image and reported in the stage's `cost_usd`, so the per-video ceiling sees it.
 
 Five archetypes with genuinely different layouts live in
 [render/templates.py](apps/engine/engine/render/templates.py), and the three variants
@@ -363,6 +380,31 @@ append the block to the description with 5000-char guarding, or reorder the grap
 dependency declaration *was* wrong and is fixed — it read `ctx.get("subtitles")` while
 declaring only `("titles",)`, so re-running the voiceover left chapter timestamps
 pointing at cues that no longer existed.
+
+### 5.9 On Windows, the `0o600` on `.env` and the key file does nothing
+Both writers ask for owner-only access — `api/setup.py` chmods the temp file before
+the atomic rename, and `crypto.py` creates the key with `O_EXCL` and mode `0o600`.
+On Windows neither takes effect. `os.chmod` there only toggles the read-only
+attribute, and `os.stat` synthesises `st_mode` as `0o666` for every writable file
+regardless of who can actually open it. So the mode bits are neither honoured nor
+observable, and the two tests that assert on them
+(`test_the_file_is_not_world_readable`, `test_the_generated_key_is_not_readable_by_other_users`)
+are skipped on `os.name == "nt"` — they were failing every Windows install, and
+passing them would have meant testing Python's emulation rather than the file.
+
+What actually protects both files on Windows is the NTFS ACL inherited from the
+directory they sit in. Under a user profile — `C:\Users\<you>\...`, where anyone who
+double-clicked `Install Studio.cmd` from their Downloads folder ends up — that
+already excludes other non-administrator users, which is the same practical
+guarantee `0o600` gives. It is *not* equivalent anywhere world-writable: a clone
+under `C:\ProgramData`, a shared drive, or the root of `C:\` inherits a permissive
+ACL and every local user can read the credentials.
+
+Closing it properly means setting an explicit DACL (`icacls /inheritance:r
+/grant:r <SID>:F`, or the Win32 API through `ctypes`) at both write sites, and the
+tests then have to assert on the ACL rather than on `st_mode`. Not done: it is a
+security feature rather than a portability fix, and CLAUDE.md #4's "never
+committed, never logged" is unaffected either way.
 
 ---
 

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Header, Page, Card } from "@/components/ui";
 import { LiveBadge } from "@/components/live-badge";
 import { fileUrl, getJobs } from "@/lib/engine";
@@ -79,56 +80,66 @@ function JobRow({ job }: { job: JobSummary }) {
   const total = job.stages_total || 1;
   const percent = Math.round((job.stages_done / total) * 100);
 
+  // The whole row is the link. Jobs are persisted and every stage can be
+  // re-run, but the id only ever lived in Create's client state — so a project
+  // you navigated away from was gone, and this screen listed videos you had
+  // paid to make with no way to open any of them. The note above about buttons
+  // that do nothing applies just as well to a list that goes nowhere.
   return (
-    <Card className="flex items-center gap-4 p-4">
-      <div
-        className={`h-14 w-24 shrink-0 overflow-hidden rounded-[var(--radius-btn)] ${
-          job.status === "running" ? "skeleton" : "bg-[var(--color-raised)]"
-        }`}
-      >
-        {job.thumbnail_keys?.[0] && (
-          // eslint-disable-next-line @next/next/no-img-element -- served by the engine, not Next's optimiser
-          <img
-            src={fileUrl(job.thumbnail_keys[0])}
-            alt=""
-            className="h-full w-full object-cover"
-          />
-        )}
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[14px] font-semibold">{job.topic || "Untitled"}</p>
-        <p className="mt-1 text-[12px] text-[var(--color-faint)]">
-          {job.status === "running" ? (
-            <>
-              {job.current_stage ?? "starting"} · {job.stages_done}/{job.stages_total}
-            </>
-          ) : job.error ? (
-            // The reason, not just the state. A bare "failed" is not something to
-            // show someone who then has to decide what to do about it.
-            <span style={{ color: TONE.failed }}>{job.error}</span>
-          ) : (
-            <span style={{ color: TONE[job.status] ?? "inherit" }}>{job.status}</span>
+    <Link
+      href={`/?job=${encodeURIComponent(job.id)}`}
+      className="block rounded-[var(--radius-card)] transition-colors duration-150 hover:bg-[var(--color-raised)]"
+    >
+      <Card className="flex items-center gap-4 p-4">
+        <div
+          className={`h-14 w-24 shrink-0 overflow-hidden rounded-[var(--radius-btn)] ${
+            job.status === "running" ? "skeleton" : "bg-[var(--color-raised)]"
+          }`}
+        >
+          {job.thumbnail_keys?.[0] && (
+            // eslint-disable-next-line @next/next/no-img-element -- served by the engine, not Next's optimiser
+            <img
+              src={fileUrl(job.thumbnail_keys[0])}
+              alt=""
+              className="h-full w-full object-cover"
+            />
           )}
-        </p>
-        {job.status === "running" && (
-          <div
-            className="mt-2 h-0.5 w-full overflow-hidden rounded-full bg-[var(--color-raised)]"
-            role="progressbar"
-            aria-valuenow={percent}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-label={`${job.topic || "Job"} progress`}
-          >
-            <div className="h-full bg-[var(--color-accent)]" style={{ width: `${percent}%` }} />
-          </div>
-        )}
-      </div>
+        </div>
 
-      <span className="mono shrink-0 text-[12px] text-[var(--color-faint)]">
-        ${(job.cost_usd ?? 0).toFixed(2)}
-      </span>
-    </Card>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[14px] font-semibold">{job.topic || "Untitled"}</p>
+          <p className="mt-1 text-[12px] text-[var(--color-faint)]">
+            {job.status === "running" ? (
+              <>
+                {job.current_stage ?? "starting"} · {job.stages_done}/{job.stages_total}
+              </>
+            ) : job.error ? (
+              // The reason, not just the state. A bare "failed" is not something to
+              // show someone who then has to decide what to do about it.
+              <span style={{ color: TONE.failed }}>{job.error}</span>
+            ) : (
+              <span style={{ color: TONE[job.status] ?? "inherit" }}>{job.status}</span>
+            )}
+          </p>
+          {job.status === "running" && (
+            <div
+              className="mt-2 h-0.5 w-full overflow-hidden rounded-full bg-[var(--color-raised)]"
+              role="progressbar"
+              aria-valuenow={percent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`${job.topic || "Job"} progress`}
+            >
+              <div className="h-full bg-[var(--color-accent)]" style={{ width: `${percent}%` }} />
+            </div>
+          )}
+        </div>
+
+        <span className="mono shrink-0 text-[12px] text-[var(--color-faint)]">
+          ${(job.cost_usd ?? 0).toFixed(2)}
+        </span>
+      </Card>
+    </Link>
   );
 }
 

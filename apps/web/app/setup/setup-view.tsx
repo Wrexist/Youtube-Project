@@ -211,6 +211,35 @@ const GROUP_NOTE: Record<string, string> = {
 function ConnectError({ code }: { code: string }) {
   const denied = code === "access_denied";
 
+  // Two different things arrive in this one parameter, and they read completely
+  // differently. Google's refusals are short machine tokens — `access_denied`,
+  // `redirect_uri_mismatch`. The engine's own failures are sentences, sent here
+  // rather than rendered as a bare "Internal Server Error" at an API address the
+  // operator has no way back from. A sentence in the mono chip beside the heading
+  // is unreadable, and "that is Google's own error code" underneath one is simply
+  // false, so they are told apart on the only signal that separates them: a token
+  // has no spaces.
+  if (/\s/.test(code)) {
+    return (
+      <div
+        role="alert"
+        className="mb-6 rounded-[var(--radius-card)] border border-[var(--color-bad)]/40 bg-[var(--color-surface)] p-5"
+      >
+        <p className="text-[14px] font-semibold text-[var(--color-bad)]">
+          The connection could not be completed
+        </p>
+        <p className="mt-2 max-w-[70ch] text-[13px] leading-relaxed text-[var(--color-muted)]">
+          You approved access, but Studio could not finish the exchange with Google.
+          Nothing was changed here, and pressing Connect YouTube again is safe once the
+          cause below is dealt with.
+        </p>
+        <p className="mt-3 max-w-[70ch] text-[13px] leading-relaxed text-[var(--color-ink)]">
+          {code}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div
       role="alert"

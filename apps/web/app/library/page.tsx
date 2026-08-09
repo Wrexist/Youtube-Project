@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Header, Page, Card } from "@/components/ui";
 import { LiveBadge } from "@/components/live-badge";
 import { fileUrl, getJobs } from "@/lib/engine";
@@ -42,19 +43,28 @@ export default async function LibraryPage() {
             {live
               ? jobs.map((video) => (
                   <article key={video.id}>
-                    <div className="relative aspect-video overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-raised)]">
-                      {video.thumbnail_keys?.[0] && (
-                        // eslint-disable-next-line @next/next/no-img-element -- the engine serves these, not Next's optimiser
-                        <img
-                          src={fileUrl(video.thumbnail_keys[0])}
-                          alt=""
-                          className="h-full w-full object-cover"
-                        />
-                      )}
-                    </div>
-                    <h3 className="mt-2.5 line-clamp-2 text-[14px] leading-snug font-semibold">
-                      {video.topic || "Untitled"}
-                    </h3>
+                    {/* Opens the project rather than only the file. Every stage is
+                        re-runnable, so this is the way back in to change a title
+                        or re-render — the "watch" link below is for the video
+                        itself. */}
+                    <Link
+                      href={`/?job=${encodeURIComponent(video.id)}`}
+                      className="group block"
+                    >
+                      <div className="relative aspect-video overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-raised)] transition-colors duration-150 group-hover:border-[var(--color-line-hover)]">
+                        {video.thumbnail_keys?.[0] && (
+                          // eslint-disable-next-line @next/next/no-img-element -- the engine serves these, not Next's optimiser
+                          <img
+                            src={fileUrl(video.thumbnail_keys[0])}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        )}
+                      </div>
+                      <h3 className="mt-2.5 line-clamp-2 text-[14px] leading-snug font-semibold">
+                        {video.topic || "Untitled"}
+                      </h3>
+                    </Link>
                     <p className="mono mt-1 text-[12px] text-[var(--color-faint)]">
                       ${(video.cost_usd ?? 0).toFixed(2)}
                       {video.render_key && (

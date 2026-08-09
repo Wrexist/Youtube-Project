@@ -64,17 +64,35 @@ def _video_stages() -> list:
         script.DraftStage(),
         script.CritiqueStage(),
         script.RevisionStage(),
-        # Production.
-        media.VoiceoverStage(),
-        media.SubtitlesStage(),
-        media.MaterialsStage(),
-        media.RenderStage(),
-        # Packaging — after the script exists, so promises stay honest.
+        # Packaging — after the script exists, so promises stay honest, and
+        # *before* the render, which is the expensive irreversible one.
+        #
+        # These four and the thumbnail need the script and nothing else: their
+        # declared dependencies are grounding, each other, and `revision`. None of
+        # them reads the finished video. Running them after the render meant
+        # sitting through the single slowest stage in the pipeline — measured at
+        # over half an hour on a 2:41 vertical — before seeing the title and the
+        # thumbnail, which are the two things that decide whether the video is
+        # watched at all. Rejecting either one then cost a render that had already
+        # been paid for in full.
+        #
+        # This way the cheap judgement calls all land first, and the last thing
+        # that happens is the one thing you cannot usefully interrupt.
         _Titles(),
         _Description(),
         seo.TagsStage(),
-        _Chapters(),
         media.ThumbnailStage(),
+        # Production. Order within the block is forced: materials and subtitles
+        # both need the voiceover's real duration, and the render needs all three.
+        media.VoiceoverStage(),
+        media.MaterialsStage(),
+        media.SubtitlesStage(),
+        # Chapters stays down here, unlike the rest of the packaging: it is the one
+        # SEO stage that needs real timestamps, so it reads `subtitles` as well as
+        # `titles`. Moving it up with the others is what `Workflow._validate`
+        # catches at import — which is the whole reason that check exists.
+        _Chapters(),
+        media.RenderStage(),
     ]
 
 

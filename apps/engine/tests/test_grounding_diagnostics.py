@@ -93,7 +93,11 @@ async def test_gather_records_which_source_failed(monkeypatch):
     evidence = await gather("bridges", youtube_client=None)
     assert not evidence.is_grounded
     assert "youtube_autocomplete" in evidence.failures
-    assert "youtube_search" in evidence.failures  # skipped, no channel
+    # `skipped`, not `failures`. No channel connected is a configuration state,
+    # and recording it as a failure made `diagnosis()` tell an operator whose
+    # network was fine to go and check their firewall.
+    assert "youtube_search" in evidence.skipped
+    assert "youtube_search" not in evidence.failures
 
 
 async def test_a_working_source_is_not_recorded_as_failed(monkeypatch):
@@ -125,8 +129,20 @@ def test_diagnosis_points_at_the_network_when_sources_failed():
 def test_diagnosis_points_at_the_topic_when_nothing_failed():
     """Every source answered and had nothing — that is a topic problem."""
     message = KeywordEvidence(seed="asdkjhasd").diagnosis()
-    assert "obscure" in message
+    assert "asdkjhasd" in message
+    assert "spelling" in message, "the commonest cause should be the named one"
     assert "network" not in message.lower()
+
+
+def test_a_skipped_source_does_not_turn_the_diagnosis_into_a_network_problem():
+    """The exact message a real job produced: autocomplete worked, no channel was
+    connected, and the operator was told to check outbound network access."""
+    message = KeywordEvidence(
+        seed="hwo did mrbeast take over youtube",
+        skipped={"youtube_search": "skipped (no channel connected)"},
+    ).diagnosis()
+    assert "network" not in message.lower()
+    assert "no channel connected" in message
 
 
 def test_diagnosis_lists_every_failed_source():
@@ -261,3 +277,115 @@ async def test_the_fallback_accepts_the_common_response_shapes(
         assert failure == ""
     finally:
         get_settings.cache_clear()
+
+
+# ── shortening the seed ─────────────────────────────────────────────────────
+#
+# Autocomplete is a prefix API over queries people actually typed. A whole video
+# topic is not one of those, so a real job died at stage one on a single typo:
+# "hwo did mrbeast take over youtube" matched nothing, and the pipeline refused
+# to write ungrounded SEO rather than carry on. "mrbeast youtube" matches 237.
+
+
+def test_the_topic_itself_is_always_tried_first():
+    from engine.research.keywords import _seed_candidates
+
+    assert _seed_candidates("roman concrete")[0] == "roman concrete"
+
+
+def test_a_leading_typo_does_not_survive_into_every_candidate():
+    from engine.research.keywords import _seed_candidates
+
+    assert "mrbeast youtube" in _seed_candidates("hwo did mrbeast take over youtube")
+
+
+def test_the_subject_of_a_sentence_is_preferred_over_its_longest_words():
+    """Length alone chose "concrete longer" here, whose top suggestions were about
+    a Concrete Blonde song."""
+    from engine.research.keywords import _seed_candidates
+
+    candidates = _seed_candidates("why roman concrete lasts longer than modern concrete")
+    assert "roman concrete" in candidates
+    assert candidates.index("roman concrete") < candidates.index("concrete longer")
+
+
+def test_a_repeated_word_never_becomes_a_seed_of_its_own():
+    """ "concrete concrete" is a phrase nobody has typed, and it still matched."""
+    from engine.research.keywords import _seed_candidates
+
+    # From index 1: the topic itself is the operator's own words, tried verbatim,
+    # and this one genuinely says "concrete" twice. The rule is about the seeds
+    # derived from it.
+    derived = _seed_candidates("why roman concrete lasts longer than modern concrete")[1:]
+    for candidate in derived:
+        words = candidate.split()
+        assert len(words) == len(set(words)), candidate
+
+
+def test_no_candidate_degrades_to_a_single_common_word():
+    """One word is too blunt to be evidence about a specific video: "qzxwv nonsense
+    topic nobody searches" degraded to "nonsense" and returned 252 suggestions
+    about a pop song, every one of which passed the relevance filter."""
+    from engine.research.keywords import _seed_candidates
+
+    for candidate in _seed_candidates("qzxwv nonsense topic nobody searches")[1:]:
+        assert len(candidate.split()) > 1, candidate
+
+
+def test_a_one_word_topic_is_left_alone():
+    from engine.research.keywords import _seed_candidates
+
+    assert _seed_candidates("mrbeast") == ["mrbeast"]
+
+
+def test_suggestions_about_something_else_are_not_evidence():
+    """Autocomplete cannot say "no". Given a prefix that matches nothing it returns
+    what it would offer an empty box, which is personalised and regional — probing
+    "qzxwv nonsense topic" from a Swedish IP returned suggestions about a potato
+    merchant, and every one of them counted as grounding."""
+    from engine.research.keywords import _relevant
+
+    assert _relevant(["potatishandlaren soffan", "svensklararen"], "qzxwv nonsense topic") == []
+
+
+def test_a_morphological_variant_still_counts():
+    from engine.research.keywords import _relevant
+
+    kept = _relevant(["mrbeast youtubers", "mr beast youtuber"], "mrbeast youtube")
+    assert len(kept) == 2, "youtube/youtuber/youtubers are the long tail worth having"
+
+
+async def test_a_topic_that_only_matches_when_shortened_still_grounds(monkeypatch):
+    """The whole point: the job that failed now runs."""
+    answers = {"mrbeast youtube": ["mrbeast youtube rewind", "mrbeast youtube advice"]}
+
+    async def suggest_one(client, query):
+        for seed, phrases in answers.items():
+            if query.startswith(seed):
+                return phrases
+        return []
+
+    monkeypatch.setattr("engine.research.keywords._suggest_one", suggest_one)
+
+    evidence = await gather("hwo did mrbeast take over youtube", youtube_client=None)
+    assert evidence.is_grounded
+    assert evidence.effective_seed == "mrbeast youtube"
+    assert not evidence.failures
+
+
+async def test_shortening_is_not_attempted_when_the_network_is_the_problem(monkeypatch):
+    """Every retry would fail the same way and cost 27 more requests doing it."""
+    calls: list[str] = []
+
+    async def boom(client, query):
+        calls.append(query)
+        raise httpx.ConnectError("blocked")
+
+    monkeypatch.setattr("engine.research.keywords._suggest_one", boom)
+
+    evidence = await gather("hwo did mrbeast take over youtube", youtube_client=None)
+    assert not evidence.is_grounded
+    assert "youtube_autocomplete" in evidence.failures
+    assert not any(q.startswith("mrbeast youtube") for q in calls), (
+        "a blocked network was retried with a shorter seed"
+    )

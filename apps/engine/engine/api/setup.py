@@ -31,12 +31,15 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from engine.models import routing
 from engine.settings import get_settings
 
 router = APIRouter(prefix="/v1/setup", tags=["setup"])
@@ -393,6 +396,57 @@ async def diagnostics(network: bool = True) -> Diagnostics:
         blockers=len(report.blockers),
         warnings=len(report.warnings),
     )
+
+
+@router.get("/report", response_class=PlainTextResponse)
+async def report() -> str:
+    """Everything needed to diagnose this install, as one paste-able block.
+
+    Exists because the honest answer to "what went wrong" was previously spread
+    across four places — the doctor script, a console window that had scrolled,
+    the one-line error on a failed stage row, and a `.env` nobody should paste.
+    Reporting a problem meant knowing which of those mattered.
+
+    Plain text rather than JSON: the destination is a chat window or an issue,
+    not a parser.
+
+    No credential values appear here, only whether each one is set. That is a
+    property of what is assembled below, and it is the reason this returns a
+    fixed report rather than anything the caller can select.
+    """
+    import platform
+    import sys
+
+    from engine import diagnostics as diag
+    from engine import logs, tls
+
+    settings = get_settings()
+    checks = await diag.run(include_network=True)
+
+    lines = [
+        "STUDIO DIAGNOSTIC REPORT",
+        f"generated   {datetime.now(UTC).isoformat(timespec='seconds')}",
+        f"python      {sys.version.split()[0]} on {platform.system()} {platform.release()}",
+        f"tls         {tls.STATUS}",
+        f"persist     {settings.persist}",
+        "",
+        "CHECKS",
+    ]
+    for check in checks.checks:
+        mark = {"ok": "ok  ", "warn": "warn", "fail": "FAIL"}[check.level]
+        lines.append(f"  {mark} {check.name}: {check.detail}")
+        if check.level != "ok" and check.fix:
+            lines.append(f"       fix: {check.fix}")
+
+    lines += ["", "ROUTING"]
+    for task, model in sorted(routing.routes.items()):
+        lines.append(f"  {task}: {model}")
+
+    recent = logs.tail(settings.storage_root, "engine", lines=120)
+    lines += ["", f"ENGINE LOG (last {len(recent)} lines)"]
+    lines += [f"  {line}" for line in recent] or ["  (nothing logged yet)"]
+
+    return "\n".join(lines) + "\n"
 
 
 def write_env(path: Path, updates: dict[str, str]) -> None:

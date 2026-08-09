@@ -2,7 +2,12 @@
 
 import { useState, useTransition } from "react";
 import { Card, Button } from "@/components/ui";
-import { routeEverything, routeTask, restoreDefaultRoutes } from "@/app/actions";
+import {
+  applyRecommendedRoutes,
+  routeEverything,
+  routeTask,
+  restoreDefaultRoutes,
+} from "@/app/actions";
 
 /** The shape both the engine and `lib/demo.ts` are normalised into by the page. */
 export interface ModelSpec {
@@ -73,8 +78,8 @@ export function ModelsView({
       {!live && (
         <Card className="mb-6 p-4">
           <p className="text-[12px] text-[var(--color-muted)]">
-            The engine is not reachable, so this shows the default routing rather
-            than what is in force. Changes are disabled.
+            The engine is not reachable, so this shows the default routing rather than
+            what is in force. Changes are disabled.
           </p>
         </Card>
       )}
@@ -90,11 +95,25 @@ export function ModelsView({
         </div>
       )}
 
-      <div className="mb-6 flex gap-2">
+      {/* Three presets, all ghost. The screen's one primary action is choosing a
+          route, and promoting any of these would compete with eighteen of them.
+          Recommended leads on reading order alone, because it is the one that is
+          right for most people — Reset restores the built-in defaults whether or
+          not the keys to run them exist. */}
+      <div className="mb-6 flex flex-wrap gap-2">
+        <Button
+          variant="ghost"
+          disabled={!live || pending}
+          onClick={() => run(() => applyRecommendedRoutes())}
+          title="Best model for each task, among the providers you have a key for"
+        >
+          Recommended
+        </Button>
         <Button
           variant="ghost"
           disabled={!live || pending || !localModel}
           onClick={() => localModel && run(() => routeEverything(localModel))}
+          title="Route everything to a local Ollama model — free and private"
         >
           All local
         </Button>
@@ -102,6 +121,7 @@ export function ModelsView({
           variant="ghost"
           disabled={!live || pending}
           onClick={() => run(() => restoreDefaultRoutes())}
+          title="Restore the built-in defaults"
         >
           Reset
         </Button>
@@ -114,14 +134,18 @@ export function ModelsView({
           </p>
           <ul className="mt-2 grid gap-1.5">
             {problems.map((p, i) => (
-              <li key={i} className="text-[12px] leading-relaxed text-[var(--color-muted)]">
-                <span className="mono text-[var(--color-faint)]">{p.task}</span> — {p.message}
+              <li
+                key={i}
+                className="text-[12px] leading-relaxed text-[var(--color-muted)]"
+              >
+                <span className="mono text-[var(--color-faint)]">{p.task}</span> —{" "}
+                {p.message}
               </li>
             ))}
           </ul>
           <p className="mt-3 text-[12px] text-[var(--color-faint)]">
-            These are warnings, not errors. Running everything locally is a
-            legitimate choice — this is just what it costs you.
+            These are warnings, not errors. Running everything locally is a legitimate
+            choice — this is just what it costs you.
           </p>
         </Card>
       )}
@@ -136,7 +160,10 @@ export function ModelsView({
               const spec = specOf(t.model);
               const flagged = problems.some((p) => p.task === t.task);
               return (
-                <Card key={t.task} className="flex flex-wrap items-center gap-4 px-4 py-3">
+                <Card
+                  key={t.task}
+                  className="flex flex-wrap items-center gap-4 px-4 py-3"
+                >
                   <div className="min-w-[180px] flex-1">
                     <p className="text-[13px] font-semibold">{t.task}</p>
                     <p className="mono mt-0.5 text-[11px] text-[var(--color-faint)]">

@@ -153,6 +153,91 @@ async def test_a_job_running_at_shutdown_comes_back_interrupted(database):
     assert restored["j1"]["status"] == "interrupted"
 
 
+async def test_the_stage_that_was_running_comes_back_actionable(database):
+    """Marking the *job* interrupted was only half of it.
+
+    The stage it died inside stayed `running`, and the UI does not let you touch a
+    running stage — the row does not expand, so "Re-run from here" is unreachable.
+    A render interrupted at sixteen of seventeen stages, with every expensive
+    stage above it saved and paid for, had no way to ask for the last one again.
+    """
+    from engine.workflows import video
+    from engine.workflows.base import Provenance, StageOutput
+
+    job = _job(status="running")
+    job["states"]["grounding"].status = StageStatus.DONE
+    # With an output: a DONE stage carrying none is refused by the restore and
+    # comes back STALE, which would make this test about the wrong thing.
+    job["states"]["grounding"].output = StageOutput(value={"a": 1}, provenance=Provenance())
+    job["states"]["render"].status = StageStatus.RUNNING
+    await repository.save_job(job)
+
+    restored = await repository.load_jobs(video.get)
+    render = restored["j1"]["states"]["render"]
+    assert render.status is StageStatus.FAILED, "a running stage must not survive a restart"
+    assert "interrupted" in (render.error or "")
+    # And the work above it is untouched — that is the whole point of resuming.
+    assert restored["j1"]["states"]["grounding"].status is StageStatus.DONE
+
+
+async def test_the_interruption_is_written_back_to_the_row(database):
+    """Correcting the mirror alone did not survive contact with a read.
+
+    `_resync` re-reads the row on the read endpoints and takes its status at face
+    value — correctly, because for a worker-run job the row is the truth. So a row
+    left saying "running" reverted the mirror moments after startup fixed it, and
+    the correction never reached a screen. The row has to change too.
+    """
+    from engine.workflows import video
+    from engine.workflows.base import Provenance, StageOutput
+
+    job = _job(status="running")
+    job["states"]["grounding"].status = StageStatus.DONE
+    job["states"]["grounding"].output = StageOutput(value={"a": 1}, provenance=Provenance())
+    job["states"]["render"].status = StageStatus.RUNNING
+    await repository.save_job(job)
+
+    await repository.load_jobs(video.get)
+
+    # A second read, as a fresh process would do it: the row itself must now say
+    # interrupted, not just the mirror the first call happened to return.
+    again = await repository.reload_jobs(["j1"], video.get)
+    assert again["j1"]["status"] == "interrupted"
+    assert again["j1"]["states"]["render"].status is StageStatus.FAILED
+
+
+async def test_the_event_log_ends_the_interrupted_stage(database):
+    """The pipeline view rebuilds every row from the replayed *event log*, not from
+    `states`. Fixing only the states left a spinner on a stage that stopped hours
+    ago — which is how a recoverable job goes on looking unrecoverable."""
+    from engine.workflows import video
+
+    job = _job(status="running")
+    job["states"]["render"].status = StageStatus.RUNNING
+    job["events"].append({"type": "stage.started", "job_id": "j1", "stage": "render"})
+    await repository.save_job(job)
+
+    restored = await repository.load_jobs(video.get)
+    render_events = [e for e in restored["j1"]["events"] if e.get("stage") == "render"]
+    assert render_events[-1]["type"] == "stage.failed"
+    assert "interrupted" in render_events[-1]["error"]
+
+
+async def test_stages_that_were_not_running_are_left_alone(database):
+    """Only the one that died. A pending stage is still pending."""
+    from engine.workflows import video
+    from engine.workflows.base import Provenance, StageOutput
+
+    job = _job(status="running")
+    job["states"]["grounding"].status = StageStatus.DONE
+    job["states"]["grounding"].output = StageOutput(value={"a": 1}, provenance=Provenance())
+    await repository.save_job(job)
+
+    restored = await repository.load_jobs(video.get)
+    assert restored["j1"]["states"]["grounding"].status is StageStatus.DONE
+    assert restored["j1"]["states"]["render"].status is StageStatus.PENDING
+
+
 async def test_a_finished_job_keeps_its_status(database):
     from engine.workflows import video
 

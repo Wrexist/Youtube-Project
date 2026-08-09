@@ -23,9 +23,37 @@ red=$(tput setaf 1 2>/dev/null || echo "")
 green=$(tput setaf 2 2>/dev/null || echo "")
 reset=$(tput sgr0 2>/dev/null || echo "")
 
-step() { echo; echo "${bold}$1${reset}"; }
-note() { echo "  ${dim}$1${reset}"; }
-die()  { echo "${red}✗ $1${reset}" >&2; exit 1; }
+# Kept in step with scripts/setup.ps1: a numbered heading at four columns and its
+# detail at seven, so both platforms produce the same shape of transcript and a
+# screenshot from either one is worth the same in an issue. The counter earns its
+# place on the three steps that print nothing for minutes at a time — "3/8" is the
+# difference between waiting and wondering whether it has hung.
+STEP_NUMBER=0
+STEP_TOTAL=8
+
+step() {
+  STEP_NUMBER=$((STEP_NUMBER + 1))
+  echo
+  echo "  ${dim}${STEP_NUMBER}/${STEP_TOTAL}${reset} ${bold}$1${reset}"
+}
+note() { echo "       ${dim}$1${reset}"; }
+# A step that finished, with what it cost. Only where the wait was long enough
+# that finishing is itself news. $2 is elapsed seconds, and is optional.
+good() {
+  if [ -n "${2:-}" ]; then
+    echo "       ${green}ok${reset} ${dim}$1  $(elapsed "$2")${reset}"
+  else
+    echo "       ${green}ok${reset} ${dim}$1${reset}"
+  fi
+}
+elapsed() {
+  if [ "$1" -lt 60 ]; then echo "${1}s"; else printf '%dm %02ds\n' $(($1 / 60)) $(($1 % 60)); fi
+}
+die()  { echo; echo "  ${red}✗  $1${reset}" >&2; exit 1; }
+
+echo
+echo "  ${bold}Studio${reset}"
+echo "  ${dim}Setting up. A few minutes, mostly downloads — you can leave it.${reset}"
 
 # Windows puts the interpreter somewhere else; everything below is otherwise
 # identical, so resolve it once rather than branching throughout.
@@ -115,15 +143,24 @@ else
   note "apps/engine/.venv exists"
 fi
 
-note "installing Python dependencies (this is the slow part)"
+note "installing Python dependencies (the slow one)"
+started=$SECONDS
 "$ROOT/$VENV_BIN/python" -m pip install --quiet --upgrade pip
 (cd apps/engine && "$ROOT/$VENV_BIN/python" -m pip install --quiet -e ".[dev]")
+good "Python dependencies" $((SECONDS - started))
 
 # ── web ─────────────────────────────────────────────────────────────────────
 
 step "Setting up the web app"
 note "installing npm workspaces"
-npm install --silent
+# `--loglevel=error`, not `--silent` — the same fix setup.ps1 carries, for the
+# same reason. Silent suppresses npm's own error reporting along with its
+# progress, so a failed install here printed nothing at all before `set -e` took
+# the script down. Checked: a 404 on a missing package produces no output under
+# --silent and the full `npm error 404` block under --loglevel=error.
+started=$SECONDS
+npm install --loglevel=error --no-fund --no-audit
+good "npm workspaces" $((SECONDS - started))
 
 # Tailwind v4 compiles CSS through native binaries, and npm records an optional
 # dependency only for the platform that generated the lockfile. A node_modules
@@ -137,8 +174,10 @@ if ! node scripts/check-web-toolchain.mjs >/dev/null 2>&1; then
   # for anything inside that workspace, and deleting only the root leaves it in
   # place. That is how a machine ran Next 16 with a Next 10-era tree underneath it.
   node scripts/reinstall.mjs || die "web dependencies are still wrong"
+  good "web dependencies rebuilt for this platform"
+else
+  good "platform binaries"
 fi
-note "web dependencies OK"
 
 # ── config ──────────────────────────────────────────────────────────────────
 
@@ -161,7 +200,7 @@ step "Creating the database schema"
 import asyncio, os
 os.environ.setdefault('STUDIO_PERSIST', 'true')
 from engine import db
-print('  ' + asyncio.run(db.ensure_schema()))
+print('       ' + asyncio.run(db.ensure_schema()))
 ")
 
 # ── verify ──────────────────────────────────────────────────────────────────
@@ -171,24 +210,30 @@ step "Running the test suite"
 # status tail's, which is always 0 — so a failing suite scrolled three lines past
 # and setup went on to print "Setup complete", the one thing this step exists to
 # stop. (The same bug was in setup.ps1.)
+started=$SECONDS
 set +e
 TEST_OUTPUT=$(cd apps/engine && STUDIO_PERSIST=false "$ROOT/$VENV_BIN/python" -m pytest -q 2>&1)
 TESTS=$?
 set -e
-echo "$TEST_OUTPUT" | tail -3 | sed 's/^/  /'
 if [ $TESTS -ne 0 ]; then
+  echo "$TEST_OUTPUT" | tail -3 | sed 's/^/       /'
   echo
-  echo "${bold}The test suite failed.${reset} Full output:"
-  echo "$TEST_OUTPUT" | sed 's/^/  /'
+  echo "       ${bold}The test suite failed.${reset} Full output:"
+  echo "$TEST_OUTPUT" | sed 's/^/       /'
   echo
-  echo "The engine is not working on this machine — please open an issue with the above."
-  exit 1
+  die "the engine is not working on this machine — please open an issue with the output above"
 fi
+# pytest's own summary line, which already reads as a sentence: "868 passed, 2
+# skipped in 144.10s". Preferred over a count of our own, because a suite that
+# passed with skips should say so.
+good "$(echo "$TEST_OUTPUT" | grep -E 'passed|no tests ran' | tail -1)" $((SECONDS - started))
 
 step "Adding a launcher"
 # Never fatal: a missing shortcut is a small inconvenience, and a setup script
 # that aborts over one having already installed everything is a much bigger one.
-node scripts/install-shortcut.mjs || true
+# Re-indented into this script's gutter — install-shortcut.mjs prints its own
+# two spaces, which is right when it is run on its own and wrong here.
+node scripts/install-shortcut.mjs 2>&1 | sed 's/^ *//; s/^/       /' || true
 
 step "Checking what is still missing"
 set +e
@@ -196,27 +241,33 @@ set +e
 DOCTOR=$?
 set -e
 
+# One rule below the checklist, so "what is left to do" is visually separate from
+# "here is the thing you came for". Without it the doctor's list and the next step
+# run together into one wall at the exact moment someone stops reading.
+echo
+echo "  ${dim}------------------------------------------------------------------${reset}"
 echo
 if [ $DOCTOR -eq 0 ]; then
-  echo "${green}${bold}Setup complete and nothing is missing.${reset}"
+  echo "  ${green}Setup complete.${reset} Nothing is missing."
 else
-  echo "${bold}Setup complete.${reset} The items marked ✗ above need an API key."
+  echo "  ${green}Setup complete.${reset} The items marked ✗ above still need an API key."
+  echo "  ${dim}You can add them on the Setup screen, or see SETUP.md.${reset}"
 fi
 echo
 # Setup used to end here, having installed everything and never said how to start
 # it. The next command is the whole point of having run this one.
-echo "${bold}Next:${reset}"
+echo "  ${bold}Start Studio${reset}"
 if [ "$(uname -s)" = "Darwin" ]; then
-  echo "  Open ${bold}Studio${reset} from your Applications folder."
+  echo "    Open ${bold}Studio${reset} from your Applications folder."
 else
-  echo "  Double-click the ${bold}Studio${reset} launcher on your Desktop."
+  echo "    Double-click the ${bold}Studio${reset} launcher on your Desktop."
 fi
-echo "  (or run ${bold}npm start${reset} here — same thing)"
+echo "    ${dim}(or run ${bold}npm start${reset}${dim} here — same thing)${reset}"
 echo
 if [ $DOCTOR -ne 0 ]; then
-  echo "  Your browser opens by itself, on the setup screen. Paste your keys in"
-  echo "  there — it says what each one unlocks and links to where to get it."
+  echo "    ${dim}Your browser opens by itself, on the setup screen. Paste your keys${reset}"
+  echo "    ${dim}in there — it says what each one unlocks and links to where to get it.${reset}"
 else
-  echo "  Your browser opens by itself. Type a topic and press Generate."
+  echo "    ${dim}Your browser opens by itself. Type a topic and press Generate.${reset}"
 fi
 echo

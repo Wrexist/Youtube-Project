@@ -102,8 +102,27 @@ class TestExtractJson:
             _extract_json("")
 
     def test_malformed_json_raises_rather_than_returning_partial(self):
-        with pytest.raises(ValueError, match="no JSON found"):
+        """Still a ValueError, now a more specific one: a response that opens with
+        a delimiter and never closes it ran out of room rather than being badly
+        formatted, and the remedy is a bigger budget, not a firmer instruction."""
+        from engine.providers.llm import Truncated
+
+        with pytest.raises(Truncated, match="cut off"):
             _extract_json('{"a": 1,')
+
+    def test_a_truncated_array_is_not_salvaged_into_its_first_element(self):
+        """The silent half of the bug. The old salvage scanned for any `{`...`}`
+        span, so a beats array cut off at twenty items found the first object and
+        returned it — parsed cleanly, and every stage downstream believed the
+        script had one beat."""
+        from engine.providers.llm import Truncated
+
+        with pytest.raises(Truncated):
+            _extract_json('[{"purpose": "hook"}, {"purpose": "pro')
+
+    def test_prose_around_real_json_is_still_salvaged(self):
+        """The case the salvage exists for, and the reason it is kept."""
+        assert _extract_json('Sure! {"ok": true} hope that helps') == {"ok": True}
 
     def test_the_error_quotes_the_response_so_the_log_is_diagnosable(self):
         with pytest.raises(ValueError, match="cannot help"):
@@ -159,6 +178,66 @@ class TestOpenAiCompatible:
             {"role": "system", "content": "be brief"},
             {"role": "user", "content": "say hi"},
         ]
+
+    @respx.mock
+    async def test_a_reasoning_model_gets_the_body_it_will_accept(self):
+        """Three 400s, verified against the live API rather than inferred:
+
+            max_tokens + temperature       -> 'max_tokens' is not supported with
+                                              this model. Use 'max_completion_tokens'
+            max_completion_tokens + temp   -> 'temperature' does not support 0.2
+                                              with this model. Only the default (1)
+            max_completion_tokens alone    -> 200
+
+        So a route to GPT-5 failed on its first call while GPT-4o, on identical
+        code, worked — which reads as "the model is broken" rather than "the
+        request shape changed".
+        """
+        route = respx.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+                },
+            )
+        )
+        await LLM(spec("openai", model="gpt-5.6-sol")).complete(
+            "say hi", max_tokens=100, temperature=0.2
+        )
+
+        body = _json(route.calls.last.request)
+        assert "max_tokens" not in body, "the old spelling is a 400 on this model"
+        # The caller's 100 plus the reasoning reserve: on these models the
+        # thinking is drawn from the same budget as the answer, so handing the
+        # number straight through returns an empty completion.
+        assert body["max_completion_tokens"] > 100
+        assert "temperature" not in body, "only the default is accepted"
+
+    @respx.mock
+    async def test_a_gateway_still_gets_the_old_spelling(self):
+        """`base_url` points this same transport at Groq, DeepSeek and vLLM, none
+        of which followed OpenAI's rename."""
+        route = respx.post("https://api.groq.com/openai/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+                },
+            )
+        )
+        await LLM(
+            spec(
+                "openai_compatible",
+                model="llama-3.3-70b",
+                base_url="https://api.groq.com/openai/v1",
+            )
+        ).complete("say hi", max_tokens=100, temperature=0.2)
+
+        body = _json(route.calls.last.request)
+        assert body["max_tokens"] == 100
+        assert body["temperature"] == 0.2
 
     @respx.mock
     async def test_no_system_prompt_sends_only_the_user_turn(self):

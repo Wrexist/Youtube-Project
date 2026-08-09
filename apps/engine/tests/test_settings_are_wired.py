@@ -34,8 +34,15 @@ _SWEEP_EXEMPT = {
 
 
 def _read_engine_source(*, skip: set[str] = frozenset()) -> str:
+    # `encoding` is not optional here, and every source-sweeping test in this
+    # suite needs it. Bare read_text() decodes with the machine's preferred
+    # encoding, which on Windows is the ANSI code page (cp1252) rather than
+    # UTF-8 - so the first em dash in an engine docstring raises
+    # UnicodeDecodeError and the test errors out instead of reporting on the
+    # code it was meant to sweep. It passes on Linux and macOS, whose preferred
+    # encoding is already UTF-8, which is why it survived this long.
     return "\n".join(
-        p.read_text()
+        p.read_text(encoding="utf-8")
         for p in ENGINE.rglob("*.py")
         if p.name != "settings.py" and p.name not in skip
     )
@@ -175,7 +182,7 @@ def test_the_exemption_list_stays_honest():
 
 def test_env_example_documents_only_real_settings():
     """.env.example drifting from Settings is how GOOGLE_REDIRECT_URI got lost."""
-    example = (Path(__file__).resolve().parents[3] / ".env.example").read_text()
+    example = (Path(__file__).resolve().parents[3] / ".env.example").read_text(encoding="utf-8")
     documented = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", example, re.MULTILINE))
 
     expected = set()
@@ -227,7 +234,7 @@ def test_nothing_reads_os_environ_directly():
     for path in ENGINE.rglob("*.py"):
         if path.name == "settings.py":
             continue
-        source = _code_only(path.read_text())
+        source = _code_only(path.read_text(encoding="utf-8"))
         rel = path.relative_to(ENGINE).as_posix()
         if rel in _MAY_WRITE_ENV:
             source = _ENV_WRITE.sub("", source)
@@ -246,7 +253,7 @@ def test_only_the_setup_endpoint_writes_the_environment():
     writers = [
         p.relative_to(ENGINE).as_posix()
         for p in ENGINE.rglob("*.py")
-        if p.name != "settings.py" and _ENV_WRITE.search(_code_only(p.read_text()))
+        if p.name != "settings.py" and _ENV_WRITE.search(_code_only(p.read_text(encoding="utf-8")))
     ]
     assert set(writers) <= _MAY_WRITE_ENV, f"unexpected environment writer: {writers}"
 

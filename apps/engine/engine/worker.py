@@ -313,8 +313,14 @@ async def startup(_ctx: dict) -> None:
     stage had done all its work; hydrating here is what makes the pre-flight
     `check()` mean anything.
     """
+    from engine import logs
     from engine.models import hydrate_routing
     from engine.quota import ledger
+
+    # Its own file, not the API's: renders happen here, so this is where the
+    # interesting tracebacks are, and two processes appending to one log
+    # interleave into something nobody can read.
+    logs.install(get_settings().storage_root, "worker")
 
     hydrate_routing()
 

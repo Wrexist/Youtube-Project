@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import string
 from dataclasses import dataclass, field
 
@@ -35,6 +36,15 @@ class KeywordEvidence:
     # Why each source produced nothing, e.g. {"youtube_autocomplete": "27/27
     # requests failed (ConnectError)"}. Empty when everything worked.
     failures: dict[str, str] = field(default_factory=dict)
+    # Sources that were never consulted, and why. Kept apart from `failures`
+    # because the two need opposite advice and conflating them gave the wrong one:
+    # "skipped (no channel connected)" is a *configuration* state, and recording
+    # it as a failure made `diagnosis()` tell an operator whose network was
+    # perfectly fine to go and check their firewall.
+    skipped: dict[str, str] = field(default_factory=dict)
+    #: The seed autocomplete actually answered on, when it was not the topic. A
+    #: full sentence is a poor query for a prefix API; see `_seed_candidates`.
+    effective_seed: str = ""
 
     @property
     def is_grounded(self) -> bool:
@@ -52,10 +62,20 @@ class KeywordEvidence:
         workflow, so it is the first thing every new user meets.
         """
         if not self.failures:
+            # Everything that ran, ran. So this is the topic, not the machine —
+            # and saying otherwise sends people to debug a working network. The
+            # shortened seeds have already been tried by this point, so "try a
+            # shorter phrasing" is advice about the *words*, not the length.
+            skipped = ""
+            if self.skipped:
+                notes = "; ".join(f"{s} {w}" for s, w in sorted(self.skipped.items()))
+                skipped = f" ({notes})"
             return (
-                f"no keyword evidence for {self.seed!r}: every source responded but "
-                "returned nothing. The topic may be too obscure or too long — try a "
-                "shorter, more common phrasing."
+                f"no keyword evidence for {self.seed!r}: YouTube autocomplete answered "
+                f"and had no suggestions for it, including for shorter forms of the "
+                f"same topic{skipped}. Nobody is searching this phrasing. Try the words "
+                f"a viewer would actually type - a spelling mistake or an unusual "
+                f"wording is the usual cause."
             )
         detail = "; ".join(f"{source} {why}" for source, why in sorted(self.failures.items()))
         return (
@@ -123,7 +143,31 @@ def _describe(exc: Exception) -> str:
         return f"HTTP {exc.response.status_code}"
     if isinstance(exc, httpx.TimeoutException):
         return "timed out"
+    if _is_certificate_failure(exc):
+        # Named, because the bare class name is what made this one expensive.
+        # A machine running antivirus HTTPS scanning reported "ConnectError" here
+        # and "Internal Server Error" from the OAuth callback, with the browser
+        # reaching both services perfectly well — three symptoms, one cause, and
+        # nothing on screen connecting them to a certificate. See engine/tls.py.
+        return "TLS certificate not trusted - antivirus or proxy is intercepting HTTPS"
     return type(exc).__name__
+
+
+def _is_certificate_failure(exc: BaseException) -> bool:
+    """Whether this is a verification failure rather than a network problem.
+
+    Matched on the message rather than the type: httpx wraps the underlying
+    `ssl.SSLCertVerificationError` in `ConnectError`, and the chain it arrives
+    through differs between the sync and async transports.
+    """
+    seen = 0
+    current: BaseException | None = exc
+    while current is not None and seen < 5:
+        if "CERTIFICATE_VERIFY_FAILED" in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+        seen += 1
+    return False
 
 
 async def _suggest_one(client: httpx.AsyncClient, query: str) -> list[str]:
@@ -157,13 +201,128 @@ async def competitors(keyword: str, youtube_client=None, limit: int = 20) -> lis
     ]
 
 
+#: Words that carry no search intent. Deliberately short: the goal is to find the
+#: subject of a sentence, not to do linguistics, and every word wrongly removed
+#: here is a word the viewer might actually have typed.
+_STOPWORDS = frozenset(
+    """a an the this that these those and or but if then than so
+    how what why when where who which whose is are was were be been being am
+    do does did doing have has had of in on at to for from by with about into
+    over under again i you he she it we they my your his her its our their
+    me him them us""".split()
+)
+
+
+def _seed_candidates(seed: str) -> list[str]:
+    """Progressively shorter queries to ask autocomplete, best first.
+
+    Autocomplete is a *prefix* API over queries real people typed. A whole video
+    topic is not one of those: "how mrbeast overtook youtube" returns two
+    suggestions and "hwo did mrbeast take over youtube" returns none at all,
+    which failed the entire job at its first stage over a typo. "mrbeast" returns
+    a page of them.
+
+    So the topic is tried first — when it does match, it is the most specific
+    evidence available — and then the subject of it, which is what a keyword tool
+    would have been seeded with in the first place. Everything returned is still
+    real autocomplete data; nothing here invents a keyword.
+    """
+    words = re.findall(r"[\w']+", seed.lower())
+    # Deduplicated, order preserved. Without this, "why roman concrete lasts
+    # longer than modern concrete" produced the seed "concrete concrete" — a
+    # phrase nobody has ever typed, which then matched autocomplete's suggestions
+    # for the *word* concrete and looked like it had worked.
+    content = list(dict.fromkeys(w for w in words if w not in _STOPWORDS and len(w) > 2))
+
+    # Two different guesses at "what is this about", because neither wins alone
+    # and each is one cheap request.
+    #
+    #   * Leading words. A topic usually states its subject first, so "why roman
+    #     concrete lasts longer than modern concrete" gives "roman concrete" —
+    #     exactly right.
+    #   * Longest words. Which is what rescues a topic whose opening is a typo:
+    #     "hwo did mrbeast take over youtube" leads with the misspelling, and
+    #     only length finds "mrbeast youtube".
+    #
+    # Leading first: when both produce something, the subject beats the two
+    # biggest words. Length alone chose "concrete longer" for the topic above,
+    # whose top suggestions were about a Concrete Blonde song.
+    candidates = [seed.strip()]
+    if len(content) > 3:
+        candidates.append(" ".join(content[:3]))
+    if len(content) > 2:
+        candidates.append(" ".join(content[:2]))
+    if len(content) > 1:
+        longest = set(sorted(content, key=len, reverse=True)[:2])
+        candidates.append(" ".join(w for w in content if w in longest))
+
+    # Deliberately no single-word last resort. One common word is too blunt to be
+    # evidence about a specific video: "qzxwv nonsense topic nobody searches"
+    # degraded to "nonsense" and came back with 252 suggestions about a pop song,
+    # every one of which passed the relevance filter because they all contain the
+    # word. Two words keep enough of the topic to fail honestly when the topic is
+    # not a thing. A genuinely one-word topic is the full seed already, and that
+    # is tried first.
+    return list(dict.fromkeys(c for c in candidates if c))
+
+
+def _relevant(phrases: list[str], seed: str) -> list[str]:
+    """Only the suggestions that are actually about the thing we asked for.
+
+    Autocomplete does not answer "no". Given a prefix that matches nothing it
+    falls back to whatever it would have offered an empty box — which is
+    personalised and regional, so probing "qzxwv nonsense topic" from this
+    machine returned twenty-three Swedish suggestions about a potato merchant.
+    Every one of them counted as evidence, `is_grounded` went true, and the SEO
+    chain would have written a keyword-optimised description of the wrong
+    subject entirely. Failing the job is much better than that, and it is what
+    the operator would have got before the shortening above existed.
+
+    Substring rather than word equality, so "youtube" still matches "youtuber"
+    and "youtubers" — the morphological variants are the long tail worth having.
+    """
+    words = [w for w in re.findall(r"[\w']+", seed.lower()) if w not in _STOPWORDS and len(w) > 2]
+    if not words:
+        return phrases
+    return [p for p in phrases if any(w in p.lower() for w in words)]
+
+
+async def _suggest_with_shortening(seed: str) -> tuple[list[str], str, str]:
+    """Autocomplete for the topic, falling back to shorter forms of it.
+
+    Returns the phrases, the failure description, and the seed that answered.
+    """
+    phrases, failure = await suggest_with_failures(seed)
+    if failure:
+        # A failure is a network problem and shortening will not help it — every
+        # retry would fail the same way and cost 27 more requests doing it.
+        return phrases, failure, seed
+    if _relevant(phrases, seed):
+        return phrases, "", seed
+
+    for candidate in _seed_candidates(seed)[1:]:
+        # `expand=False` while probing: one request instead of 27, because most
+        # of these will also come back empty and only the winner is worth the
+        # alphabet sweep.
+        probe, probe_failure = await suggest_with_failures(candidate, expand=False)
+        if probe_failure:
+            return [], probe_failure, candidate
+        if not _relevant(probe, candidate):
+            continue
+        logger.info("no autocomplete for {!r}; grounding on {!r} instead", seed, candidate)
+        full, _ = await suggest_with_failures(candidate)
+        return _relevant(full or probe, candidate), "", candidate
+
+    return [], "", seed
+
+
 async def gather(
     seed: str, *, youtube_client=None, use_competitors: bool = True
 ) -> KeywordEvidence:
     """Everything we can learn about a topic before writing a single title."""
     evidence = KeywordEvidence(seed=seed)
 
-    suggestions_task = suggest_with_failures(seed)
+    suggestions_task = _suggest_with_shortening(seed)
     competitor_task = competitors(seed, youtube_client) if use_competitors else _empty()
     suggestions, competitor_list = await asyncio.gather(
         suggestions_task, competitor_task, return_exceptions=True
@@ -172,10 +331,12 @@ async def gather(
     if isinstance(suggestions, Exception):
         evidence.failures["youtube_autocomplete"] = _describe(suggestions)
     else:
-        phrases, failure = suggestions
+        phrases, failure, used = suggestions
         evidence.suggestions = phrases
         if phrases:
             evidence.sources.append("youtube_autocomplete")
+            if used != seed:
+                evidence.effective_seed = used
         if failure:
             evidence.failures["youtube_autocomplete"] = failure
 
@@ -185,7 +346,11 @@ async def gather(
         evidence.competitor_titles = competitor_list
         evidence.sources.append("youtube_search")
     elif youtube_client is None:
-        evidence.failures["youtube_search"] = "skipped (no channel connected)"
+        # `skipped`, not `failures`. Connecting a channel is optional and costs
+        # 100 quota units a call when it is connected; recording its absence as a
+        # failure is what made a job with a working network report a network
+        # problem. See `diagnosis`.
+        evidence.skipped["youtube_search"] = "skipped (no channel connected)"
 
     # Only when the free sources produced nothing. Both are unauthenticated
     # endpoints that routinely block datacenter IPs, which is precisely where this

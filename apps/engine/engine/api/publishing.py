@@ -266,13 +266,28 @@ async def finish_auth(
     if not _claim_state(state):
         raise HTTPException(400, "unrecognised, expired or reused state")
 
+    # Everything, not just YouTubeError. This branch used to catch that one class
+    # and let the rest become a bare "Internal Server Error" in the browser — no
+    # message, no traceback the operator could see, on the last step of setup. The
+    # cause on the machine this was found on was a certificate failure inside
+    # `exchange_code`: an httpx ConnectError, which is not a YouTubeError and so
+    # went straight to FastAPI's 500 handler. Anything that reaches here has
+    # already cost the operator a round trip through Google's consent screen, so
+    # it is worth reporting properly whatever it turns out to be.
     try:
         creds = await youtube.exchange_code(code)
-    except youtube.YouTubeError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-    CHANNELS["default"] = creds
-    await repository.save_channel("default", creds)
+        CHANNELS["default"] = creds
+        await repository.save_channel("default", creds)
+    except Exception as exc:  # noqa: BLE001 - deliberately the whole surface
+        # Logged with the traceback before it is flattened into a redirect: the
+        # message on screen has to be short, and the thing that gets debugged has
+        # to be complete. Both, rather than either.
+        logger.opt(exception=True).error("connecting a channel failed")
+        reason = str(exc).strip() or type(exc).__name__
+        # Back to the Setup screen, the same as Google's own refusal above, and
+        # for the same reason: that is where the button they pressed lives. A
+        # bare error page at an API address is a dead end with no way back.
+        return RedirectResponse(f"{web}/setup?connect_error={quote(reason)}")
     # Back to the screen that sent them, not to the calendar. Connecting a channel
     # is the last step of setup, and landing on an unrelated screen left someone
     # with no confirmation that the thing they just did had worked.

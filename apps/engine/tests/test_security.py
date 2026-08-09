@@ -9,6 +9,7 @@ ever grew.
 from __future__ import annotations
 
 import asyncio
+import os
 import stat
 import time
 from datetime import UTC, datetime, timedelta
@@ -59,7 +60,7 @@ def test_env_example_does_not_ship_a_usable_looking_key():
     """The regression that made the default unreachable in the first place."""
     from pathlib import Path
 
-    example = (Path(__file__).resolve().parents[3] / ".env.example").read_text()
+    example = (Path(__file__).resolve().parents[3] / ".env.example").read_text(encoding="utf-8")
     for line in example.splitlines():
         stripped = line.strip()
         if stripped.startswith("STUDIO_SECRET_KEY="):
@@ -73,10 +74,22 @@ def test_a_key_is_generated_and_reused(sandbox):
     first = crypto._resolve_secret()
     second = crypto._resolve_secret()
     assert first == second, "a new key each call would orphan every stored token"
-    assert (sandbox / crypto.KEY_FILE).read_text().strip() == first
+    assert (sandbox / crypto.KEY_FILE).read_text(encoding="utf-8").strip() == first
     assert len(first) >= 32
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "Windows has no POSIX mode bits to assert on. os.stat synthesises st_mode "
+        "as 0o666 for every writable file regardless of who can actually open it, "
+        "and os.chmod only toggles the read-only attribute - so this assertion "
+        "fails there while saying nothing about the real permissions. Access is "
+        "governed by the NTFS ACL the file inherits from its directory, which "
+        "under a user profile already excludes other non-administrator users. "
+        "See KNOWN-ISSUES.md 5.9 for the case that inheritance does not cover."
+    ),
+)
 def test_the_generated_key_is_not_readable_by_other_users(sandbox):
     from engine import crypto
 
@@ -249,12 +262,22 @@ def test_the_allowlist_matches_what_the_code_writes():
     from engine.main import _SERVABLE_ROOTS
 
     source = "\n".join(
-        p.read_text() for p in (Path(__file__).resolve().parents[1] / "engine").rglob("*.py")
+        p.read_text(encoding="utf-8")
+        for p in (Path(__file__).resolve().parents[1] / "engine").rglob("*.py")
     )
     written = {f"{m}/" for m in re.findall(r'store\.put_\w+\([^,]+,\s*f?"([a-z_]+)/', source)}
 
-    # `materials/` is written and deliberately not served: third-party stock footage.
-    undecided = written - set(_SERVABLE_ROOTS) - {"materials/"}
+    # Written and deliberately not served:
+    #
+    #   materials/  third-party stock footage, whose licence is not ours to
+    #               redistribute from an unauthenticated endpoint.
+    #   broll/      generated shots for beats no stock library could fill. Ours,
+    #               so there is no licence argument — excluded because nothing
+    #               links to them. They reach the viewer inside the finished
+    #               render, and every served prefix is attack surface on the one
+    #               route that turns a client string into a filesystem read. Add
+    #               it here the day something in the UI needs to show them.
+    undecided = written - set(_SERVABLE_ROOTS) - {"materials/", "broll/"}
     assert not undecided, f"new artifact prefix, neither served nor excluded: {sorted(undecided)}"
 
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ThumbnailPanel } from "@/components/thumbnail-panel";
 import type { Stage, StageStatus, Variant } from "@/lib/types";
 
 /** The stage row — the pipeline primitive.
@@ -16,6 +17,7 @@ export function StageRow({
   onChoose,
   chosen,
   canRerun = true,
+  jobId = null,
 }: {
   stage: Stage;
   expanded: boolean;
@@ -25,6 +27,8 @@ export function StageRow({
   chosen?: number;
   /** False while the job is running — the engine 409s a re-run on a live job. */
   canRerun?: boolean;
+  /** Needed by the stages that fetch their own detail. Null on the demo pipeline. */
+  jobId?: string | null;
 }) {
   const interactive = stage.status === "done" || stage.status === "failed";
 
@@ -85,7 +89,16 @@ export function StageRow({
 
       {expanded && interactive && (
         <div className="border-t border-[var(--color-line)] bg-[var(--color-bg)] px-4 py-4">
-          {stage.variants ? (
+          {/* The thumbnail is the only artifact a viewer sees before deciding
+              whether to watch, and this row reported it as "3 items". It gets a
+              panel of its own rather than the generic detail dump. */}
+          {stage.name === "thumbnail" && jobId ? (
+            <ThumbnailPanel
+              jobId={jobId}
+              chosen={chosen}
+              onChoose={onChoose ? (i) => onChoose(stage.name, i) : undefined}
+            />
+          ) : stage.variants ? (
             <VariantPicker
               variants={stage.variants}
               chosen={chosen}
@@ -96,7 +109,7 @@ export function StageRow({
               {stage.detail ?? stage.summary ?? "No detail captured for this stage."}
             </pre>
           )}
-          <div className="mt-4 flex items-center gap-3">
+          <div className="mt-4 flex flex-wrap items-center gap-3">
             <button
               onClick={() => onRerun(stage.name)}
               disabled={!canRerun}
@@ -104,6 +117,22 @@ export function StageRow({
             >
               Re-run from here
             </button>
+            {/* Only on a failure, where there is something worth reporting. The
+                row truncates its one line to fit, so the full text was visible
+                nowhere — and retyping a stack of provider errors by hand from a
+                screenshot is how bug reports end up missing the useful half. */}
+            {stage.status === "failed" && (
+              <CopyButton
+                label="Copy error"
+                text={[
+                  `stage: ${stage.name}`,
+                  `error: ${stage.error ?? "failed"}`,
+                  stage.detail ? `detail:\n${stage.detail}` : "",
+                ]
+                  .filter(Boolean)
+                  .join("\n")}
+              />
+            )}
             <p className="text-[12px] text-[var(--color-faint)]">
               {canRerun
                 ? "Everything below this stage regenerates. Nothing above it is touched."
@@ -113,6 +142,43 @@ export function StageRow({
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * Copy some text, and say so.
+ *
+ * The confirmation is the whole point: a button that copies silently is
+ * indistinguishable from a button that did nothing, and the usual response is to
+ * press it again and paste twice. Reverts on a timer rather than staying
+ * "Copied", so a second press later reads as a second copy.
+ *
+ * `navigator.clipboard` needs a secure context, which localhost is. It can still
+ * be refused by permissions policy, so the failure is reported rather than
+ * swallowed — being told "could not copy" beats pasting the previous clipboard
+ * into an issue and not noticing.
+ */
+export function CopyButton({ label, text }: { label: string; text: string }) {
+  const [state, setState] = useState<"idle" | "done" | "failed">("idle");
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setState("done");
+    } catch {
+      setState("failed");
+    }
+    setTimeout(() => setState("idle"), 2000);
+  }
+
+  return (
+    <button
+      onClick={copy}
+      aria-live="polite"
+      className="rounded-[var(--radius-btn)] border border-[var(--color-line)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--color-muted)] transition-colors duration-150 hover:border-[var(--color-line-hover)] hover:text-[var(--color-ink)]"
+    >
+      {state === "done" ? "Copied" : state === "failed" ? "Could not copy" : label}
+    </button>
   );
 }
 
@@ -228,6 +294,7 @@ export function Pipeline({
   onChoose,
   chosen,
   canRerun = true,
+  jobId = null,
 }: {
   stages: Stage[];
   onRerun: (name: string) => void;
@@ -235,6 +302,7 @@ export function Pipeline({
   /** Chosen variant index per stage, so the Create screen can publish the pick. */
   chosen?: Record<string, number>;
   canRerun?: boolean;
+  jobId?: string | null;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const done = stages.filter((s) => s.status === "done").length;
@@ -258,6 +326,7 @@ export function Pipeline({
             onChoose={onChoose}
             chosen={chosen?.[stage.name]}
             canRerun={canRerun}
+            jobId={jobId}
           />
         ))}
       </ul>

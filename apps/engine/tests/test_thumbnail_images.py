@@ -17,7 +17,7 @@ import pytest
 from PIL import Image
 
 from engine.providers import images
-from engine.render import compose, templates
+from engine.render import compose
 from engine.settings import get_settings
 
 CONCEPT = {
@@ -58,16 +58,30 @@ def test_auto_picks_whichever_key_exists(monkeypatch):
     assert spec is not None and spec.provider == "openai"
 
 
-def test_gpt_image_wins_a_tie(monkeypatch):
-    """The better thumbnail model wins, even though it is the dearer one.
+def test_the_better_thumbnail_model_wins_a_tie(monkeypatch):
+    """The thumbnail is the asset that decides whether the video gets clicked, so
+    this is the one place in the pipeline where quality outranks cost per call.
 
-    The thumbnail is the asset that decides whether the video gets clicked, so this
-    is the one place in the pipeline where quality outranks cost per call.
+    It no longer costs anything to say so. This test asserted `openai` while GPT
+    Image 1 was the better model and the dearer one; Gemini 3 Pro Image is now
+    both stronger and cheaper ($0.134 against $0.19), and returns 16:9 natively
+    where GPT Image returns 3:2 and has to be cropped. The rule is unchanged —
+    only which model satisfies it.
     """
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("GEMINI_API_KEY", "g-test")
     spec = images.selected()
-    assert spec is not None and spec.provider == "openai"
+    assert spec is not None and spec.provider == "gemini"
+    assert spec.model == "gemini-3-pro-image"
+
+
+def test_the_preference_order_is_the_catalogue_order(monkeypatch):
+    """These were two separate literals, so reordering the catalogue to put the
+    better model first changed nothing: "auto" kept choosing whichever provider
+    the other dict happened to list first."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    assert images.selected().provider == next(iter(images.CATALOGUE))
 
 
 def test_gemini_is_still_reachable_when_it_is_the_only_key(monkeypatch):
@@ -116,13 +130,49 @@ async def test_openai_decodes_base64(monkeypatch):
 
 
 async def test_gemini_decodes_its_own_envelope(monkeypatch):
+    """The `generateContent` shape, which is what the Gemini image models answer on.
+
+    Not interchangeable with Imagen's `:predict`: different endpoint, different
+    request body, and the image comes back as an inline part of a candidate
+    rather than as a prediction. Asking one on the other's URL is a 404.
+    """
     monkeypatch.setenv("STUDIO_IMAGE_PROVIDER", "gemini")
     monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    encoded = base64.b64encode(b"fake-bytes").decode()
+    payload = {"candidates": [{"content": {"parts": [{"inlineData": {"data": encoded}}]}}]}
+    _stub_post(monkeypatch, httpx.Response(200, json=payload))
+
+    result = await images.generate("a ridge at dawn")
+    assert result is not None and result.data == b"fake-bytes"
+
+
+async def test_an_imagen_model_still_decodes_the_predict_envelope(monkeypatch):
+    """`endpoint` is per model, not per provider — the Imagen family is still
+    served by :predict and anyone who has pinned one keeps working."""
+    monkeypatch.setenv("STUDIO_IMAGE_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    monkeypatch.setitem(
+        images.CATALOGUE,
+        "gemini",
+        images.ImageSpec("gemini", "imagen-4.0-generate-001", "Imagen 4", 0.04, "16:9"),
+    )
     payload = {"predictions": [{"bytesBase64Encoded": base64.b64encode(b"fake-bytes").decode()}]}
     _stub_post(monkeypatch, httpx.Response(200, json=payload))
 
     result = await images.generate("a ridge at dawn")
     assert result is not None and result.data == b"fake-bytes"
+
+
+async def test_a_text_only_answer_is_reported_rather_than_returned(monkeypatch):
+    """generateContent answers a refusal or a safety block with a text part and a
+    200, so "no inline data" is a normal response to handle, not a malformed one."""
+    monkeypatch.setenv("STUDIO_IMAGE_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "g-test")
+    payload = {"candidates": [{"content": {"parts": [{"text": "I cannot draw that."}]}}]}
+    _stub_post(monkeypatch, httpx.Response(200, json=payload))
+
+    with pytest.raises(images.ImageUnavailable, match="no image"):
+        await images.generate("a ridge at dawn")
 
 
 async def test_a_provider_error_raises_rather_than_silently_degrading(monkeypatch):
@@ -268,18 +318,45 @@ async def test_the_type_stays_out_of_the_focal_column(monkeypatch, tmp_path):
     assert right <= compose.TEXT_RIGHT + 20
 
 
-async def test_more_words_are_set_smaller(monkeypatch, tmp_path):
+def test_more_words_are_set_smaller():
     """Fitting means shrinking, not clipping.
 
-    Both overlays are within the fallback template's three-word cap, deliberately.
-    Comparing a two-word render against a five-word one divided the long bbox by
-    five when only three words had been drawn — the cap silently removed the other
-    two, so the arithmetic described a render that never existed.
+    Asked of `_fit_type` directly, because the rendered image cannot answer it.
+    Two earlier versions of this test tried and both measured something else:
+
+    - The first compared a two-word render against a five-word one and divided the
+      long block by five, when the template's three-word cap meant only three had
+      been drawn.
+    - The second stayed inside the cap, at two words against three — but at the
+      current constants those both set at the 150px maximum (3 x 159px of line
+      still fits the 560px band), so there is no shrink between them to find. It
+      "passed" only by miscounting: `_type_bbox` thresholds at grey > 200 and
+      `_layout_left_column` draws the first word in the accent, which for the
+      fallback template is amber at luminance 186. The first word was therefore
+      invisible to the measurement while still counted in the divisor, and the
+      arithmetic came out differently depending on which font the machine
+      happened to resolve. It failed on Windows for that reason and nothing else.
+
+    Word counts that genuinely exceed the band are what exercise the behaviour, and
+    those are past the cap - so this asks the fitter, where the cap does not apply.
     """
-    assert templates.get(None).max_words == 3, "this test's word counts assume the cap"
-    short = await _type_bbox(monkeypatch, tmp_path, "Two Words")
-    long_ = await _type_bbox(monkeypatch, tmp_path, "It Gets Worse")
-    assert (long_[3] - long_[1]) / 3 < (short[3] - short[1]) / 2
+    from PIL import Image, ImageDraw
+
+    draw = ImageDraw.Draw(Image.new("RGB", (compose.THUMB_W, compose.THUMB_H)))
+    max_w = compose.TEXT_RIGHT - compose.TEXT_LEFT
+    max_h = compose.TEXT_BOTTOM - compose.TEXT_TOP
+
+    # Short words, so the height constraint is what decides the size on every
+    # machine. A long one would let font width shrink the two-word case too and
+    # make the comparison depend on which face got resolved.
+    def size_for(count: int) -> int:
+        font, line_h = compose._fit_type(draw, ["WORD"] * count, max_w, max_h)
+        assert line_h * count <= max_h, f"{count} words do not fit the band"
+        return font.size
+
+    sizes = [size_for(n) for n in (2, 3, 4, 5, 6)]
+    assert sizes == sorted(sizes, reverse=True), f"not monotonic: {sizes}"
+    assert sizes[-1] < sizes[0], f"six words set no smaller than two: {sizes}"
 
 
 async def test_words_past_the_cap_are_dropped_rather_than_shrunk_into_illegibility(
