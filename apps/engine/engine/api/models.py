@@ -7,7 +7,14 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from engine.models import CATALOGUE, DEFAULT_ROUTES, TASKS, ModelSpec, routing
+from engine.models import (
+    CATALOGUE,
+    DEFAULT_ROUTES,
+    TASKS,
+    ModelSpec,
+    recommended_routes,
+    routing,
+)
 from engine.providers.llm import DEFAULT_OLLAMA_URL, LLM, ProviderUnavailable, probe_ollama
 from engine.settings import CREDENTIAL_ENV_SUFFIXES, get_settings, is_credential_env_name
 
@@ -245,6 +252,35 @@ async def reset() -> dict:
     routing.catalogue.update(CATALOGUE)
     routing.save(_config_path())
     return {"reset": True}
+
+
+@router.post("/route/recommended")
+async def route_recommended() -> dict:
+    """Route every task to the best model among the providers that have a key.
+
+    Distinct from `/route/reset`, which restores the built-in defaults whether or
+    not they can run: those name Anthropic throughout, so on an install with an
+    OpenAI key and no Anthropic one, Reset produces eighteen stages that fail at
+    their first call.
+    """
+    settings = get_settings()
+    configured = {
+        name
+        for name, key in (
+            ("anthropic", settings.anthropic_api_key),
+            ("openai", settings.openai_api_key),
+            ("gemini", settings.gemini_api_key),
+        )
+        if key
+    }
+    routing.catalogue.update(CATALOGUE)
+    routing.routes = recommended_routes(configured)
+    routing.save(_config_path())
+    return {
+        "routed": len(routing.routes),
+        "providers": sorted(configured),
+        "problems": routing.problems(),
+    }
 
 
 @router.post("/catalogue")

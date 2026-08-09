@@ -10,13 +10,13 @@ import base64
 import hashlib
 import os
 import secrets
-import stat
 from functools import lru_cache
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 from loguru import logger
 
+from engine import secretfile
 from engine.settings import PLACEHOLDER_SECRETS, get_settings
 
 
@@ -89,8 +89,9 @@ def _resolve_secret() -> str:
         fh.write(generated)
     # Belt and braces: O_CREAT honours the umask, so 0o600 can still come out
     # narrower than asked but never wider than the umask allows. Setting it
-    # explicitly afterwards is the only way to be certain of the mode.
-    path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    # explicitly afterwards is the only way to be certain of the mode — and on
+    # Windows the mode is not the mechanism at all, which is what `restrict` is for.
+    secretfile.restrict(path)
     logger.info(
         "generated a channel-encryption key at {} — back it up: without it, "
         "connected channels have to be re-authorised",

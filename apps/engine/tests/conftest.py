@@ -67,10 +67,28 @@ def scratch_state(tmp_path, monkeypatch):
     values win for the test and this one is restored around it.
     """
     from engine import db
-    from engine.settings import get_settings
+    from engine.settings import Settings, get_settings
 
     monkeypatch.setenv("STUDIO_PERSIST", "false")
     monkeypatch.setenv("STUDIO_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'scratch.db'}")
+
+    # And never the developer's `.env`, for the same reason and with a sharper
+    # edge. `Settings.model_config` names `(".env", "../../.env")`, so every
+    # `Settings()` in the suite read the operator's real credentials file —
+    # against which `monkeypatch.delenv("PEXELS_API_KEY")` does nothing at all,
+    # because the value is not coming from the process environment.
+    #
+    # That made a group of tests pass only on a machine with no keys configured.
+    # `test_not_ready_when_there_is_no_footage_source` deletes both footage keys
+    # and asserts `can_render is False`; with a real Pexels key in `.env` it
+    # fails. Which would be a curiosity, except `scripts/setup.ps1` runs the test
+    # suite — so the moment anyone saved a key on the Setup screen, re-running
+    # Install Studio.cmd started failing, on an install that was working.
+    #
+    # A path in tmp_path rather than an empty tuple: `settings.credential_value`
+    # iterates this to read a key `.env` has and the environment does not, and
+    # emptying it would remove that lookup from the suite rather than isolate it.
+    monkeypatch.setitem(Settings.model_config, "env_file", (str(tmp_path / ".env"),))
     # Both caches are read-through-once: `get_settings` for the URL, `db.engine` for
     # the connection built from it. Leaving either warm would hand this test the
     # previous one's database.

@@ -85,7 +85,9 @@ def test_a_308_that_never_advances_gives_up_instead_of_spinning():
     import re
     from pathlib import Path
 
-    source = (Path(__file__).resolve().parents[1] / "engine/providers/youtube.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "engine/providers/youtube.py").read_text(
+        encoding="utf-8"
+    )
     block = source[source.index("if resp.status_code == 308") :]
     block = block[: block.index("if resp.status_code in (500")]
     assert "attempts += 1" in block
@@ -112,7 +114,9 @@ def test_quota_is_recorded_before_the_first_chunk_not_after_the_last():
     import re
     from pathlib import Path
 
-    source = (Path(__file__).resolve().parents[1] / "engine/providers/youtube.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "engine/providers/youtube.py").read_text(
+        encoding="utf-8"
+    )
     upload = source[source.index("async def upload(") :]
 
     booking = re.search(_BOOKS_THE_UPLOAD, upload)

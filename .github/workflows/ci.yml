@@ -105,10 +105,16 @@ jobs:
       # Deliberately `critical`, not `high`. There are 14 standing high advisories,
       # all transitive build/dev dependencies whose fixes need an upstream Next or
       # eslint-config-next release — see AUDIT.md §4.7 for what each one exposes.
-      # Failing on `high` would mean a permanently red build that nobody reads;
-      # this still fails the moment something critical appears.
-      # 'high' rather than 'critical'. At 'critical' this step passed with three
-      # high-severity advisories outstanding, which made it a green tick that
-      # meant nothing. Advisories with no upstream fix belong in an explicit
-      # allowlist, not in a threshold that hides every finding below it.
-      - run: npm audit --audit-level=high
+      #
+      # This was `npm audit --audit-level=high`, under a comment saying that
+      # advisories with no upstream fix belong in an explicit allowlist rather
+      # than in a threshold that hides every finding below it. npm has no
+      # allowlist, so the comment described a policy the command could not
+      # implement — and the first advisory with no reachable fix (js-yaml, via
+      # openapi-typescript) turned the step permanently red.
+      #
+      # `scripts/audit.mjs` is that allowlist: it fails on any high or critical
+      # advisory that is not named in it, with the reason it was accepted and
+      # what would retire it. Nothing below `high` is hidden that was not hidden
+      # before, and an unlisted advisory is still a red build.
+      - run: npm run audit

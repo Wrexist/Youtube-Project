@@ -21,14 +21,17 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from engine import automation, db, feedback, models, repository, worker
+from engine import automation, db, feedback, logs, models, repository, worker
 from engine.api import publishing as channels
+from engine.api.brief import router as brief_router
 from engine.api.channels import router as channels_router
+from engine.api.ideas import router as ideas_router
 from engine.api.insights import RECORDS
 from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
 from engine.api.setup import router as setup_router
+from engine.api.thumbnails import router as thumbnails_router
 from engine.insights import VideoRecord, analyze, beats_to_payload
 from engine.providers import youtube
 from engine.quota import QuotaExceeded, ledger
@@ -47,6 +50,10 @@ async def lifespan(_: FastAPI):
     overran Google's ceiling on the next upload. `STUDIO_PERSIST=false` skips it
     for tests and for anyone who genuinely wants a scratch instance.
     """
+    # First, so that anything failing below is written down rather than only
+    # printed at a console nobody is watching. Never fatal - see engine/logs.py.
+    logs.install(get_settings().storage_root, "engine")
+
     # Before anything else, and outside the `persist` branch: `routing.save()` is
     # written by the Models screen whether or not the database is on, so the read
     # has to be unconditional too. Without this the singleton every stage resolves
@@ -80,11 +87,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Studio Engine", version="0.1.0", lifespan=lifespan)
+app.include_router(brief_router)
+app.include_router(ideas_router)
 app.include_router(publishing_router)
 app.include_router(insights_router)
 app.include_router(channels_router)
 app.include_router(models_router)
 app.include_router(setup_router)
+app.include_router(thumbnails_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -851,7 +861,11 @@ async def list_jobs(
                 stages_total=len(states),
                 current_stage=running,
                 error=job.get("error") or None,
-                render_key=artifacts.get("render"),
+                # "video" is what `RenderStage` emitted before the key was
+                # corrected to match its stage name. Jobs rendered before that
+                # are already in people's databases, and dropping the fallback
+                # would un-link videos that currently work.
+                render_key=artifacts.get("render") or artifacts.get("video"),
                 thumbnail_keys=[
                     v for k, v in sorted(artifacts.items()) if k.startswith("thumbnail")
                 ],

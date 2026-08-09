@@ -18,6 +18,7 @@
  */
 
 import type {
+  Brief,
   Calendar,
   CalendarSlots,
   Channels,
@@ -32,7 +33,10 @@ import type {
   Models,
   PublishRequest,
   Quota,
+  Sharpened,
   SetupStatus,
+  Suggestions,
+  Thumbnails,
   WorkflowGraph,
 } from "@studio/contracts";
 
@@ -195,7 +199,8 @@ export async function isLive(): Promise<boolean> {
 
 export const getQuota = () => get<Quota>("/v1/quota");
 export const getCalendar = () => get<Calendar>("/v1/calendar");
-export const getSlots = (days = 14) => get<CalendarSlots>(`/v1/calendar/slots?days=${days}`);
+export const getSlots = (days = 14) =>
+  get<CalendarSlots>(`/v1/calendar/slots?days=${days}`);
 export const getChannels = () => get<Channels>("/v1/channels");
 export const getInsights = () => get<Insights>("/v1/insights");
 export const getMonetisation = () => get<Monetisation>("/v1/analytics/monetisation");
@@ -248,6 +253,15 @@ export const setAllRoutes = (model: string) =>
 export const resetRoutes = () => post<unknown>("/v1/models/route/reset");
 
 /**
+ * Route every task to the best model among the providers that have a key.
+ *
+ * Not the same as `resetRoutes`, which restores the built-in defaults whether or
+ * not they can run — those name Anthropic throughout, so on an install with only
+ * an OpenAI key Reset leaves every stage failing at its first call.
+ */
+export const recommendRoutes = () => post<unknown>("/v1/models/route/recommended");
+
+/**
  * Re-run one stage and everything below it.
  *
  * Distinct from an edit, which replaces a value and keeps the stage done. The
@@ -259,7 +273,10 @@ export const rerunStage = (id: string, stage: string) =>
 
 /** Replace a stage's value, keeping it done and regenerating what depended on it. */
 export const editStage = (id: string, stage: string, value: unknown) =>
-  post<{ invalidated: string[]; status: string }>(`/v1/jobs/${id}/edit`, { stage, value });
+  post<{ invalidated: string[]; status: string }>(`/v1/jobs/${id}/edit`, {
+    stage,
+    value,
+  });
 
 // ── scheduling ──────────────────────────────────────────────────────────────
 //
@@ -297,6 +314,70 @@ export const getSetup = () => get<SetupStatus>("/v1/setup");
  */
 export const getDiagnostics = (network = false) =>
   get<Diagnostics>(`/v1/setup/diagnostics?network=${network}`);
+
+/**
+ * The whole diagnostic report as one block of text, for pasting into an issue.
+ *
+ * Its own fetch rather than `get`, which parses JSON — this endpoint serves
+ * plain text on purpose, because the destination is a chat window rather than a
+ * parser. A longer timeout than the shared one, because it runs the network
+ * probe and reads the tail of the engine log; a report is worth waiting for in a
+ * way that a page render is not.
+ */
+export async function getDiagnosticReport(): Promise<string | null> {
+  try {
+    const response = await fetch(`${BASE}/v1/setup/report`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(30_000),
+      headers: { accept: "text/plain" },
+    });
+    if (!response.ok) {
+      console.warn(`engine ${response.status} for /v1/setup/report`);
+      return null;
+    }
+    return await response.text();
+  } catch (error) {
+    console.warn(`engine unreachable for /v1/setup/report: ${(error as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * Sharpen a typed fragment into a topic the pipeline can research.
+ *
+ * POST because it costs a model call — this is not a lookup, and it must not be
+ * retried by anything that treats GET as safe.
+ */
+export const refineBrief = (rough: string, format: string) =>
+  post<Brief>("/v1/brief", { rough, format });
+
+/**
+ * Video ideas worth making next, scored against real autocomplete demand.
+ *
+ * Cached engine-side for half an hour — it costs a model call plus a sweep per
+ * candidate, and the Create screen must not pay for that on every page load.
+ */
+export const getIdeaSuggestions = (limit = 4) =>
+  get<Suggestions>(`/v1/ideas/suggestions?limit=${limit}`);
+
+/** The composed thumbnail variants for a job, as pictures rather than a count. */
+export const getThumbnails = (jobId: string) =>
+  get<Thumbnails>(`/v1/jobs/${jobId}/thumbnails`);
+
+/** Apply an instruction to a concept and compose another variant. Appends. */
+export const regenerateThumbnail = (
+  jobId: string,
+  instruction: string,
+  baseIndex: number,
+) =>
+  post<Thumbnails>(`/v1/jobs/${jobId}/thumbnails`, {
+    instruction,
+    base_index: baseIndex,
+  });
+
+/** Turn a rough note into something an image model can act on. */
+export const sharpenThumbnailInstruction = (jobId: string, instruction: string) =>
+  post<Sharpened>(`/v1/jobs/${jobId}/thumbnails/sharpen`, { instruction });
 
 /** Save credentials. Only the names passed are touched; absent means unchanged. */
 export const saveKeys = (values: Record<string, string>) =>

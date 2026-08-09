@@ -40,9 +40,23 @@ BANNED_OPENERS = (
 class Beat:
     purpose: str
     text_direction: str
-    visual_direction: str  # drives per-beat material matching in the render
+    #: What is literally on screen, written as a prompt for an image model.
+    visual_direction: str
     energy: str  # high | medium | low — drives clip pacing
     est_seconds: float
+    #: Two to four plain words to type into a stock library, which is a different
+    #: thing from `visual_direction` and was for a long time the same string.
+    #:
+    #: A real beat asked for "Animated subscriber counter graphic flipping from
+    #: T-Series to MrBeast at the exact crossover point, then rapid number ticker
+    #: climbing to 300,000,000 with a digital odometer effect". That is a good
+    #: generative prompt and a hopeless search query: Pexels matched nothing, the
+    #: fallback cut it to "Animated subscriber counter", and the beat was filled
+    #: with footage of coloured paper clips.
+    #:
+    #: Defaulted rather than required, because `Beat(**b)` parses model output and
+    #: jobs saved before this field existed still have to load.
+    stock_query: str = ""
 
 
 @dataclass
@@ -255,15 +269,25 @@ Break the body into beats. {
                 "device around the 40% mark, where drop-off concentrates."
             }
 
-Every beat needs a `visual_direction`: what is literally on screen. This drives
-footage selection, and it is the difference between a video that looks intentional
-and one that looks like random stock clips. Be concrete — "close-up of hands
-counting cash" not "money imagery".
+Every beat needs two separate visual fields, and they are not the same string.
+
+`visual_direction` — what is literally on screen, written as a prompt for an image
+model. Be concrete and cinematic: "close-up of hands counting banded cash under a
+desk lamp", not "money imagery".
+
+`stock_query` — two to four plain words to type into a stock footage library, for
+the same beat. Libraries hold generic footage of ordinary things, so name the
+ordinary thing: "counting cash", "empty stadium", "server room". Never a sentence,
+never a named person, brand or product — no stock library has footage of a
+specific creator, and asking for one returns something random instead. If the beat
+is only meaningful with a specific subject in it, still give the nearest generic
+scene, and say so precisely in `visual_direction`.
 
 Do not hold energy constant. Alternate it; the renderer uses `energy` to set clip
 pacing.
 
 Return: {{"beats": [{{"purpose": str, "text_direction": str, "visual_direction": str,
+                     "stock_query": str,
                      "energy": "high"|"medium"|"low", "est_seconds": float}}]{
                 ', "chapters": [{"title": str, "beat_indexes": [int]}]' if fmt == "long" else ""
             }}}""",

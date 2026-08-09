@@ -578,6 +578,51 @@ def _mirror_of(row: Job, workflow) -> dict:
     }
 
 
+def _fail_running_stages(entry: dict, job_id: str) -> None:
+    """Mark the stage that died with the process, so it can be acted on.
+
+    Marking the *job* interrupted was only half of it. The stage it was inside
+    stayed `running` forever, and a running stage is not something the UI lets
+    you touch: the row does not expand, so "Re-run from here" is unreachable, and
+    the pipeline shows a spinner for work that stopped when the process did.
+
+    That left the one recovery path unreachable on the one job that needed it —
+    a render interrupted at sixteen of seventeen stages, with every expensive
+    stage above it already paid for and saved, and no way to ask for the last one
+    again.
+
+    `FAILED` rather than a new status: it is accurate (the stage did not finish),
+    every screen already renders it, and `failed` is exactly the state the
+    re-run affordance is built for. The message says which kind of failure it
+    was, because "interrupted" and "this stage threw" want different reactions.
+    """
+    reason = (
+        "interrupted — the engine stopped while this stage was running. "
+        "Everything above it is still saved; re-run from here."
+    )
+    for name, state in entry.get("states", {}).items():
+        if state.status is StageStatus.RUNNING:
+            state.status = StageStatus.FAILED
+            state.error = reason
+            # And an event to match, because the two are read by different things
+            # and disagreeing is worse than either being wrong. `states` answers
+            # `GET /v1/jobs/{id}`; the *event log* is what the SSE stream replays,
+            # and it is what the pipeline view rebuilds every stage row from. Fix
+            # only the states and the Create screen still shows a spinner on a
+            # stage that stopped hours ago — which is exactly how a recoverable
+            # job goes on looking unrecoverable.
+            entry.setdefault("events", []).append(
+                {
+                    "type": "stage.failed",
+                    "job_id": job_id,
+                    "stage": name,
+                    "error": reason,
+                    "message": reason,
+                }
+            )
+            logger.warning("job {}: stage {!r} was interrupted; marked failed", job_id, name)
+
+
 async def load_jobs(get_workflow) -> dict[str, dict]:
     """Rebuild the in-process job mirror from rows. Called once at startup.
 
@@ -590,6 +635,7 @@ async def load_jobs(get_workflow) -> dict[str, dict]:
         rows = (await s.execute(select(Job).order_by(Job.created_at))).scalars().all()
 
     interrupted = 0
+    interrupted_rows: list[dict] = []
     for row in rows:
         try:
             workflow = get_workflow(row.workflow)
@@ -600,8 +646,23 @@ async def load_jobs(get_workflow) -> dict[str, dict]:
         entry = _mirror_of(row, workflow)
         if entry["status"] == "running":
             entry["status"] = "interrupted"
+            _fail_running_stages(entry, row.id)
             interrupted += 1
+            # Written back, not just corrected in memory. The row is the durable
+            # record and it is still claiming `running` for a job that provably
+            # is not — this process has only just started. Leaving it is not a
+            # harmless inaccuracy: `_resync` re-reads the row on the read
+            # endpoints and takes its status at face value, so the mirror was
+            # being reverted to "running" moments after being fixed, and the
+            # correction never survived long enough to reach a screen.
+            interrupted_rows.append(entry)
         mirror[row.id] = entry
+
+    for entry in interrupted_rows:
+        try:
+            await save_job(entry)
+        except Exception:  # noqa: BLE001 - a stale row must not stop the engine booting
+            logger.exception("could not persist the interrupted status of job {}", entry["id"])
 
     if interrupted:
         logger.warning("{} job(s) were mid-run at shutdown; marked interrupted", interrupted)

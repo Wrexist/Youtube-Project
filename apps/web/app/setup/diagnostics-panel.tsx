@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Card, Button } from "@/components/ui";
-import { runDiagnostics } from "@/app/actions";
+import { fetchDiagnosticReport, runDiagnostics } from "@/app/actions";
 import type { Diagnostics, DiagnosticCheck } from "@studio/contracts";
 
 /**
@@ -24,6 +24,24 @@ export function DiagnosticsPanel({ initial }: { initial: Diagnostics | null }) {
   const [error, setError] = useState<string | null>(null);
   const [ranFull, setRanFull] = useState(false);
   const [pending, start] = useTransition();
+  const [copying, setCopying] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "done" | "failed">("idle");
+
+  async function copyReport() {
+    setCopying(true);
+    setCopyState("idle");
+    try {
+      const result = await fetchDiagnosticReport();
+      if (!result.ok || !result.data) throw new Error(result.error ?? "no report");
+      await navigator.clipboard.writeText(result.data);
+      setCopyState("done");
+    } catch {
+      setCopyState("failed");
+    } finally {
+      setCopying(false);
+      setTimeout(() => setCopyState("idle"), 2500);
+    }
+  }
 
   function check() {
     setError(null);
@@ -41,10 +59,11 @@ export function DiagnosticsPanel({ initial }: { initial: Diagnostics | null }) {
   return (
     <section className="mb-8">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 pb-1">
-        <h2 className="text-[13px] font-semibold text-[var(--color-muted)]">System check</h2>
+        <h2 className="text-[13px] font-semibold text-[var(--color-muted)]">
+          System check
+        </h2>
         <p className="text-[12px] text-[var(--color-faint)]">
-          Everything Studio needs in order to run, and what to do about anything
-          missing.
+          Everything Studio needs in order to run, and what to do about anything missing.
         </p>
       </div>
 
@@ -52,6 +71,19 @@ export function DiagnosticsPanel({ initial }: { initial: Diagnostics | null }) {
         <div className="mb-4 flex flex-wrap items-center gap-4">
           <Button variant="ghost" onClick={check} disabled={pending}>
             {pending ? "Checking…" : ranFull ? "Check again" : "Run checks"}
+          </Button>
+          {/* The whole report as text, for pasting into an issue or a chat. The
+              checks above are readable but not copyable, and a screenshot of
+              them loses the engine log underneath — which is usually the half
+              with the traceback in it. No credential values appear in it. */}
+          <Button variant="ghost" onClick={copyReport} disabled={copying}>
+            {copyState === "done"
+              ? "Copied"
+              : copyState === "failed"
+                ? "Could not copy"
+                : copying
+                  ? "Collecting…"
+                  : "Copy report"}
           </Button>
           <p aria-live="polite" className="text-[12px] text-[var(--color-muted)]">
             {!report ? "The engine did not answer." : summarise(report)}
@@ -76,8 +108,8 @@ export function DiagnosticsPanel({ initial }: { initial: Diagnostics | null }) {
           // Said plainly rather than silently omitted: a green report that skipped
           // a check is not the same as a green report.
           <p className="mt-4 text-[11px] text-[var(--color-faint)]">
-            The keyword-grounding probe is skipped on load because it waits up to
-            six seconds on a network call. Run checks includes it.
+            The keyword-grounding probe is skipped on load because it waits up to six
+            seconds on a network call. Run checks includes it.
           </p>
         )}
       </Card>
@@ -127,7 +159,12 @@ function Row({ check }: { check: DiagnosticCheck }) {
         {MARK[check.level]}
       </span>
       <span className="sr-only">
-        {check.level === "ok" ? "Passing" : check.level === "warn" ? "Warning" : "Failing"}:
+        {check.level === "ok"
+          ? "Passing"
+          : check.level === "warn"
+            ? "Warning"
+            : "Failing"}
+        :
       </span>
 
       <div className="min-w-0 flex-1">

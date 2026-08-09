@@ -758,7 +758,7 @@ async def test_captions_upload_an_srt_built_from_the_cues(stage_context):
     output = await CaptionsStage().run(ctx)
 
     assert fake.caption_calls[0]["video_id"] == "yt-1"
-    written = fake.caption_calls[0]["path"].read_text()
+    written = fake.caption_calls[0]["path"].read_text(encoding="utf-8")
     assert written.startswith("1\n00:00:00,000 --> 00:00:01,000\nHi.")
     assert output.provenance.params["cue_count"] == 1
 

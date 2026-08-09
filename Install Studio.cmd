@@ -20,14 +20,12 @@ rem ===========================================================================
 cd /d "%~dp0"
 title Installing Studio
 
-echo.
-echo   Installing Studio. This takes a couple of minutes.
-echo.
+rem No banner here. setup.ps1 prints its own, and two of them - one from cmd and
+rem one from PowerShell, in different styles - was the first thing anyone saw.
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\setup.ps1"
 set SETUP_EXIT=%errorlevel%
 
-echo.
 if %SETUP_EXIT% neq 0 (
   echo   Setup did not finish. The reason is above.
   echo.
@@ -35,7 +33,8 @@ if %SETUP_EXIT% neq 0 (
   exit /b %SETUP_EXIT%
 )
 
-echo   Done. Start Studio by double-clicking Studio.cmd in this folder,
-echo   or the Studio shortcut on your Desktop.
-echo.
+rem Nothing restated on success either: setup.ps1's closing block already says
+rem what to do next, and repeating it four lines later reads as a second, subtly
+rem different instruction. The pause is still needed - a double-clicked window
+rem closes the instant this file ends.
 pause

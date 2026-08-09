@@ -15,7 +15,20 @@ from urllib.parse import parse_qs, quote, urlparse
 import httpx
 from loguru import logger
 
-USER_AGENT = "StudioBot/0.1 (+research; contact via project owner)"
+#: Wikimedia's User-Agent policy is enforced, not advisory, and this string is the
+#: whole of what satisfies it: a name, a version, and a URL someone could actually
+#: use to get in touch. The previous value said "contact via project owner", which
+#: is not a contact, and every Wikipedia request came back:
+#:
+#:     403 Please respect our robot policy https://w.wiki/4wJS when crawling us.
+#:
+#: That was the *floor* under the two DuckDuckGo backends failing, so losing it
+#: meant losing research entirely. Worth knowing if you are tempted to "fix" a 403
+#: by pretending to be a browser: a Chrome user agent is refused here too. The
+#: policy wants identification, not disguise.
+#:
+#: https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy
+USER_AGENT = "Studio/0.1 (https://github.com/Wrexist/Youtube-Project) python-httpx"
 
 #: Hosts that are never a source: the search engine's own pages, and the ad and
 #: redirect domains its result lists carry.
@@ -71,6 +84,7 @@ async def _search(topic: str, *, limit: int) -> tuple[list[str], str]:
     to be able to research something.
     """
     attempts: list[str] = []
+    query = _query(topic)
 
     for name, backend in (
         # Lite first: the same index, markup simple enough that it does not rot.
@@ -80,24 +94,83 @@ async def _search(topic: str, *, limit: int) -> tuple[list[str], str]:
         ("wikipedia", _wikipedia),
     ):
         try:
-            urls = await backend(topic, limit)
+            urls = await backend(query, limit)
+        except SearchBlocked as exc:
+            attempts.append(f"{name}: {exc}")
+            continue
         except Exception as exc:  # noqa: BLE001 — one backend failing is not fatal
             attempts.append(f"{name}: {type(exc).__name__}: {exc}")
             continue
         if urls:
-            logger.info("research: {} returned {} source(s) for {!r}", name, len(urls), topic)
+            logger.info("research: {} returned {} source(s) for {!r}", name, len(urls), query)
             return urls, ""
         attempts.append(f"{name}: parsed 0 results")
 
     problem = "; ".join(attempts)
-    logger.warning("research: every search backend failed for {!r} — {}", topic, problem)
+    logger.warning("research: every search backend failed for {!r} — {}", query, problem)
     return [], problem
+
+
+#: The instruction someone types in front of the actual subject. The Create screen
+#: asks "What's the video about?", and people answer the question they were asked —
+#: "Make a video about how mrbeast overtook youtube" — so the words "make a video
+#: about" were being sent to a search engine as if they were part of the topic.
+#: Harmless on Wikipedia, which ranks past them; not harmless on a keyword search.
+_INSTRUCTION = re.compile(
+    r"""^\s*
+    (?:please\s+)?
+    (?:can\s+you\s+|i\s+(?:want|need)\s+(?:you\s+to\s+)?)?
+    (?:make|create|write|generate|do|build)?\s*
+    (?:me\s+)?(?:a|an|the)?\s*
+    (?:short|video|script|youtube\s+video|explainer)?\s*
+    (?:about|on|explaining|covering|regarding)\s+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _query(topic: str) -> str:
+    """The searchable subject of a topic, with any instruction stripped off.
+
+    Conservative on purpose: it only strips when the phrase ends in an explicit
+    "about"/"on"/"explaining", so a topic that merely *begins* with one of these
+    verbs — "Build a shed from pallets" — is left alone. Falls back to the
+    original whenever stripping would leave nothing behind.
+    """
+    stripped = _INSTRUCTION.sub("", topic, count=1).strip()
+    return stripped or topic.strip()
+
+
+class SearchBlocked(RuntimeError):
+    """The endpoint answered, but with a bot check rather than with results."""
+
+
+def _reject_challenge(resp: httpx.Response, name: str) -> None:
+    """Tell a bot check apart from a genuinely empty result page.
+
+    DuckDuckGo does not refuse a scraper with an error status. It returns **202**
+    and a 14KB anomaly page, so `raise_for_status()` is satisfied, the regexes
+    match nothing, and the backend reported "parsed 0 results" — which reads as
+    "nobody has written about this topic" and sent the reader off to rephrase a
+    perfectly good one. Both endpoints do it, for every user agent tried
+    including a current Chrome, by GET and by POST; it is the IP being scored,
+    and nothing about the request will talk it round.
+
+    Saying so is the entire fix available here. There is no version of this that
+    gets results back out of DuckDuckGo.
+    """
+    if resp.status_code == 202 or "anomaly" in resp.text[:4000].lower():
+        raise SearchBlocked(
+            f"{name} served a bot check (HTTP {resp.status_code}), not results - "
+            "this IP is rate-limited or flagged"
+        )
 
 
 async def _ddg_lite(topic: str, limit: int) -> list[str]:
     async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": USER_AGENT}) as client:
         resp = await client.post("https://lite.duckduckgo.com/lite/", data={"q": topic})
         resp.raise_for_status()
+    _reject_challenge(resp, "duckduckgo-lite")
     # The class first, then every link on the page: the markup is not a contract,
     # and `_unwrap` already rejects anything that is not a result destination.
     linked = re.findall(r'<a[^>]+href="([^"]+)"[^>]*class="result-link"', resp.text)
@@ -108,6 +181,7 @@ async def _ddg_html(topic: str, limit: int) -> list[str]:
     async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": USER_AGENT}) as client:
         resp = await client.post("https://html.duckduckgo.com/html/", data={"q": topic})
         resp.raise_for_status()
+    _reject_challenge(resp, "duckduckgo-html")
     linked = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"', resp.text)
     return _pick(linked, limit) or _pick(re.findall(r'href="([^"]+)"', resp.text), limit)
 

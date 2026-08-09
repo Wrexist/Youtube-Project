@@ -212,3 +212,89 @@ def test_saved_config_is_readable_json(tmp_path):
     Routing().save(path)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert set(data) == {"routes", "catalogue"}
+
+
+# ── the recommended preset ──────────────────────────────────────────────────
+#
+# `DEFAULT_ROUTES` names Anthropic for every task, which is the right default and
+# useless to someone holding only an OpenAI key: every stage fails at its first
+# call, and the manual fix is eighteen dropdowns. These cover the button that
+# replaces that.
+
+
+@pytest.mark.parametrize(
+    ("configured", "provider"),
+    [
+        ({"anthropic", "openai", "gemini"}, "anthropic"),
+        ({"openai", "gemini"}, "openai"),
+        ({"gemini"}, "gemini"),
+    ],
+)
+def test_the_recommendation_uses_a_provider_that_is_configured(configured, provider):
+    from engine.models import recommended_routes
+
+    routes = recommended_routes(configured)
+    assert routes, "every task must be routed"
+    assert all(model.startswith(f"{provider}:") for model in routes.values()), routes
+
+
+def test_the_recommendation_covers_every_task():
+    from engine.models import recommended_routes
+
+    assert set(recommended_routes({"openai"})) == set(TASKS)
+
+
+def test_every_recommended_model_exists_in_the_catalogue():
+    """A route naming a model with no catalogue entry silently falls back."""
+    from engine.models import recommended_routes
+
+    for configured in ({"anthropic"}, {"openai"}, {"gemini"}):
+        for task, model in recommended_routes(configured).items():
+            assert model in CATALOGUE, f"{configured} routes {task} to unknown {model}"
+
+
+def test_the_recommendation_still_tiers_by_what_the_task_needs():
+    """The point is the best model *per task*, not one model everywhere."""
+    from engine.models import recommended_routes
+
+    routes = recommended_routes({"openai"})
+    assert routes["hook"] != routes["tags"], "a critical task and a mechanical one matched"
+
+
+def test_nothing_configured_falls_back_to_the_defaults():
+    """A fresh install shows the opinionated default, not an empty table."""
+    from engine.models import recommended_routes
+
+    assert recommended_routes(set()) == DEFAULT_ROUTES
+
+
+# ── provider quirks that are 400s, not ignored parameters ───────────────────
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-5.6-luna", "o3", "o4-mini"])
+def test_openai_reasoning_models_rename_the_output_ceiling(model):
+    """Verified against the live API: `max_tokens` is a 400 on these, not a no-op."""
+    spec = ModelSpec("openai", model, model)
+    assert spec.max_tokens_field == "max_completion_tokens"
+    assert spec.temperature_policy == "default-only"
+    assert spec.thinks_by_default, "reasoning tokens come out of the same budget"
+
+
+def test_openai_compatible_gateways_keep_the_old_spelling():
+    """`base_url` points this transport at Groq, DeepSeek, OpenRouter and vLLM,
+    none of which followed the rename — sending them the new one breaks all of them."""
+    spec = ModelSpec(
+        "openai_compatible",
+        "llama-3.3-70b",
+        "Groq Llama 3.3",
+        base_url="https://api.groq.com/openai/v1",
+    )
+    assert spec.max_tokens_field == "max_tokens"
+    assert spec.temperature_policy == "any"
+
+
+def test_the_older_openai_models_are_unaffected():
+    spec = CATALOGUE["openai:gpt-4o"]
+    assert spec.max_tokens_field == "max_tokens"
+    assert spec.temperature_policy == "any"
+    assert not spec.thinks_by_default

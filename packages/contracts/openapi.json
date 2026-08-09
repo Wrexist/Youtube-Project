@@ -112,6 +112,59 @@
         "title": "AutoScheduleRequest",
         "type": "object"
       },
+      "Brief": {
+        "properties": {
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "format": {
+            "title": "Format",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "format",
+          "why",
+          "model",
+          "cost_usd"
+        ],
+        "title": "Brief",
+        "type": "object"
+      },
+      "BriefRequest": {
+        "properties": {
+          "format": {
+            "default": "short",
+            "title": "Format",
+            "type": "string"
+          },
+          "rough": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Rough",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rough"
+        ],
+        "title": "BriefRequest",
+        "type": "object"
+      },
       "BulkRoute": {
         "properties": {
           "model": {
@@ -816,6 +869,26 @@
         "title": "QuotaResponse",
         "type": "object"
       },
+      "Regenerate": {
+        "properties": {
+          "base_index": {
+            "default": 0,
+            "title": "Base Index",
+            "type": "integer"
+          },
+          "instruction": {
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instruction"
+        ],
+        "title": "Regenerate",
+        "type": "object"
+      },
       "RerunRequest": {
         "properties": {
           "stage": {
@@ -964,6 +1037,39 @@
         "title": "SetupStatus",
         "type": "object"
       },
+      "Sharpen": {
+        "properties": {
+          "instruction": {
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instruction"
+        ],
+        "title": "Sharpen",
+        "type": "object"
+      },
+      "Sharpened": {
+        "properties": {
+          "instruction": {
+            "title": "Instruction",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instruction",
+          "why"
+        ],
+        "title": "Sharpened",
+        "type": "object"
+      },
       "ShortCandidateOut": {
         "properties": {
           "duration_s": {
@@ -1048,6 +1154,63 @@
           "note"
         ],
         "title": "ShortsOut",
+        "type": "object"
+      },
+      "Suggestion": {
+        "properties": {
+          "competition": {
+            "title": "Competition",
+            "type": "number"
+          },
+          "demand": {
+            "title": "Demand",
+            "type": "number"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "score",
+          "demand",
+          "competition",
+          "why"
+        ],
+        "title": "Suggestion",
+        "type": "object"
+      },
+      "Suggestions": {
+        "properties": {
+          "based_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Based On",
+            "type": "array"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/Suggestion"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "suggestions",
+          "based_on"
+        ],
+        "title": "Suggestions",
         "type": "object"
       },
       "TaskRoute": {
@@ -1154,6 +1317,32 @@
         "title": "ThresholdOut",
         "type": "object"
       },
+      "Thumbnails": {
+        "properties": {
+          "chosen": {
+            "title": "Chosen",
+            "type": "integer"
+          },
+          "cost_per_generation": {
+            "title": "Cost Per Generation",
+            "type": "number"
+          },
+          "variants": {
+            "items": {
+              "$ref": "#/components/schemas/Variant"
+            },
+            "title": "Variants",
+            "type": "array"
+          }
+        },
+        "required": [
+          "variants",
+          "chosen",
+          "cost_per_generation"
+        ],
+        "title": "Thumbnails",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -1192,6 +1381,54 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "Variant": {
+        "properties": {
+          "accent": {
+            "title": "Accent",
+            "type": "string"
+          },
+          "image_model": {
+            "title": "Image Model",
+            "type": "string"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "overlay_text": {
+            "title": "Overlay Text",
+            "type": "string"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "template": {
+            "title": "Template",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "url",
+          "key",
+          "template",
+          "overlay_text",
+          "accent",
+          "rationale",
+          "image_model"
+        ],
+        "title": "Variant",
         "type": "object"
       },
       "engine__api__channels__ApplyRequest": {
@@ -1546,6 +1783,47 @@
         "summary": "Finish Auth",
         "tags": [
           "publishing"
+        ]
+      }
+    },
+    "/v1/brief": {
+      "post": {
+        "operationId": "refine_v1_brief_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BriefRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Brief"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refine",
+        "tags": [
+          "brief"
         ]
       }
     },
@@ -2010,6 +2288,59 @@
         "summary": "Get File"
       }
     },
+    "/v1/ideas/suggestions": {
+      "get": {
+        "operationId": "suggestions_v1_ideas_suggestions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 4,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Suggestions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Suggestions",
+        "tags": [
+          "ideas"
+        ]
+      }
+    },
     "/v1/insights": {
       "get": {
         "description": "Findings, each carrying its verdict and sample size.\n\nSuggestive findings are returned so the user can see them; only confirmed ones\nare ever fed back into generation.",
@@ -2470,6 +2801,152 @@
         "summary": "Rerun Stage"
       }
     },
+    "/v1/jobs/{job_id}/thumbnails": {
+      "get": {
+        "operationId": "list_thumbnails_v1_jobs__job_id__thumbnails_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Thumbnails"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Thumbnails",
+        "tags": [
+          "thumbnails"
+        ]
+      },
+      "post": {
+        "description": "Apply an instruction to an existing concept and compose a new variant.\n\nAppends rather than replaces. The originals cost real money and the operator\nmay well prefer one of them after seeing the alternative \u2014 overwriting the\nthing they were comparing against is the one behaviour that cannot be undone.",
+        "operationId": "regenerate_v1_jobs__job_id__thumbnails_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Regenerate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Thumbnails"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Regenerate",
+        "tags": [
+          "thumbnails"
+        ]
+      }
+    },
+    "/v1/jobs/{job_id}/thumbnails/sharpen": {
+      "post": {
+        "description": "Turn a rough note into an instruction an image model can act on.\n\n\"make it better\" is not actionable and produces a random different thumbnail.\nThis is the same idea as the Create screen's Improve button, applied to the\nthing being asked for rather than to the topic \u2014 and it is deliberately a\nseparate press, because rewriting someone's words without being asked is the\nfastest way to make them stop trusting the box they typed into.",
+        "operationId": "sharpen_v1_jobs__job_id__thumbnails_sharpen_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Sharpen"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sharpened"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sharpen",
+        "tags": [
+          "thumbnails"
+        ]
+      }
+    },
     "/v1/models": {
       "get": {
         "description": "Everything the Models screen needs in one call.",
@@ -2715,6 +3192,30 @@
         ]
       }
     },
+    "/v1/models/route/recommended": {
+      "post": {
+        "description": "Route every task to the best model among the providers that have a key.\n\nDistinct from `/route/reset`, which restores the built-in defaults whether or\nnot they can run: those name Anthropic throughout, so on an install with an\nOpenAI key and no Anthropic one, Reset produces eighteen stages that fail at\ntheir first call.",
+        "operationId": "route_recommended_v1_models_route_recommended_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Route Recommended V1 Models Route Recommended Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Route Recommended",
+        "tags": [
+          "models"
+        ]
+      }
+    },
     "/v1/models/route/reset": {
       "post": {
         "operationId": "reset_v1_models_route_reset_post",
@@ -2906,6 +3407,28 @@
           }
         },
         "summary": "Save Keys",
+        "tags": [
+          "setup"
+        ]
+      }
+    },
+    "/v1/setup/report": {
+      "get": {
+        "description": "Everything needed to diagnose this install, as one paste-able block.\n\nExists because the honest answer to \"what went wrong\" was previously spread\nacross four places \u2014 the doctor script, a console window that had scrolled,\nthe one-line error on a failed stage row, and a `.env` nobody should paste.\nReporting a problem meant knowing which of those mattered.\n\nPlain text rather than JSON: the destination is a chat window or an issue,\nnot a parser.\n\nNo credential values appear here, only whether each one is set. That is a\nproperty of what is assembled below, and it is the reason this returns a\nfixed report rather than anything the caller can select.",
+        "operationId": "report_v1_setup_report_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Report",
         "tags": [
           "setup"
         ]

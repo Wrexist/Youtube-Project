@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { getSetup } from "@/lib/engine";
+import { getJob, getSetup } from "@/lib/engine";
 import { ONBOARDED_COOKIE } from "@/lib/onboarding";
 import { CreateView, type Readiness } from "./create-view";
 
@@ -18,8 +18,18 @@ import { CreateView, type Readiness } from "./create-view";
  * from "not set up" — a stopped engine must not be reported as missing keys, so
  * the screen falls back to the demo pipeline exactly as it did before.
  */
-export default async function CreatePage() {
+export default async function CreatePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ job?: string }>;
+}) {
   const setup = await getSetup();
+  // `?job=<id>` reopens a project. Everything needed was already there — jobs are
+  // persisted and restored on boot, `GET /v1/jobs/{id}` returns their stages, and
+  // "Re-run from here" works — but the id lived only in Create's client state, so
+  // a reload or a click on any other screen lost the project for good. There was
+  // no way back to a video you had already paid to make.
+  const { job } = await searchParams;
 
   // A genuinely fresh install goes to the welcome flow instead. The condition is
   // narrow on purpose: *nothing at all* configured, and the tour not yet
@@ -27,7 +37,9 @@ export default async function CreatePage() {
   // better served by the Create screen's inline prompt, and an unreachable engine
   // must never trigger it — being unable to ask is not the same as the answer
   // being "new here".
-  if (setup && setup.credentials.every((c) => !c.configured)) {
+  // Not when reopening a project: arriving with a job id is proof this install
+  // has already made something, whatever the credential check happens to say.
+  if (!job && setup && setup.credentials.every((c) => !c.configured)) {
     const jar = await cookies();
     if (!jar.get(ONBOARDED_COOKIE)) redirect("/welcome");
   }
@@ -40,5 +52,22 @@ export default async function CreatePage() {
       }
     : { known: false, canRender: false, missing: [] };
 
-  return <CreateView ready={ready} />;
+  // The topic and format come from the engine rather than from client state,
+  // which by definition no longer has them: reopening a project is exactly the
+  // case where the browser has forgotten everything. Without this the header
+  // showed the demo topic over a real job's pipeline.
+  const resumed = job ? await getJob(job) : null;
+  // `GET /v1/jobs/{id}` nests these under `inputs` — the list endpoint flattens
+  // `topic` to the top level and the detail endpoint does not, which is worth
+  // reading twice before trusting either shape.
+  const inputs = (resumed?.inputs ?? {}) as { topic?: string; format?: string };
+
+  return (
+    <CreateView
+      ready={ready}
+      resumeJobId={resumed ? job! : null}
+      resumeTopic={inputs.topic ?? ""}
+      resumeFormat={inputs.format === "long" ? "long" : "short"}
+    />
+  );
 }

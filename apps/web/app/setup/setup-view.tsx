@@ -37,6 +37,9 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
   // an API error on a blank page. See `ConnectError` for why `access_denied` gets
   // a paragraph of its own.
   const connectError = params.get("connect_error");
+  // Which side produced it. Google's callback carries no such parameter, so its
+  // absence means Google; the engine sets it explicitly when its own half fails.
+  const connectErrorFromEngine = params.get("connect_error_source") === "engine";
 
   const groups = useMemo(() => {
     const out: Record<string, CredentialStatus[]> = {};
@@ -110,7 +113,7 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
         </div>
       )}
 
-      {connectError && <ConnectError code={connectError} />}
+      {connectError && <ConnectError code={connectError} fromEngine={connectErrorFromEngine} />}
 
       {Object.entries(groups).map(([group, credentials]) => (
         <section key={group} className="mb-8">
@@ -208,8 +211,40 @@ const GROUP_NOTE: Record<string, string> = {
  * list". Google's own page says so in a paragraph that reads like a dead end, and
  * the fix is one button on a console page most people have never opened.
  */
-function ConnectError({ code }: { code: string }) {
+function ConnectError({ code, fromEngine }: { code: string; fromEngine: boolean }) {
   const denied = code === "access_denied";
+
+  // Two different things arrive in this one parameter and they read completely
+  // differently. Google's refusals are short machine tokens — `access_denied`,
+  // `redirect_uri_mismatch`. The engine's own failures are usually sentences,
+  // sent here rather than rendered as a bare "Internal Server Error" at an API
+  // address the operator has no way back from.
+  //
+  // Told apart by an explicit flag, not by looking at the text. This tested for
+  // a space, which is wrong precisely where it matters: the engine falls back to
+  // the exception's class name when the message is empty, so a certificate
+  // failure arrives as the single word `ConnectError` and was rendered under
+  // "that is Google's own error code".
+  if (fromEngine) {
+    return (
+      <div
+        role="alert"
+        className="mb-6 rounded-[var(--radius-card)] border border-[var(--color-bad)]/40 bg-[var(--color-surface)] p-5"
+      >
+        <p className="text-[14px] font-semibold text-[var(--color-bad)]">
+          The connection could not be completed
+        </p>
+        <p className="mt-2 max-w-[70ch] text-[13px] leading-relaxed text-[var(--color-muted)]">
+          You approved access, but Studio could not finish the exchange with Google.
+          Nothing was changed here, and pressing Connect YouTube again is safe once the
+          cause below is dealt with.
+        </p>
+        <p className="mt-3 max-w-[70ch] text-[13px] leading-relaxed text-[var(--color-ink)]">
+          {code}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div

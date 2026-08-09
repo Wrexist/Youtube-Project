@@ -14,6 +14,7 @@ knows what every key is and it must report only that they exist.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,17 @@ def test_writing_to_a_file_that_does_not_exist_yet(env_file):
     assert "PEXELS_API_KEY=abc" in env_file.read_text(encoding="utf-8")
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "Windows synthesises st_mode - every writable file reports 0o666 whoever "
+        "can actually open it - and os.chmod there only toggles the read-only "
+        "attribute. The write path's chmod(0o600) is therefore neither honoured "
+        "nor measurable, and asserting on the result tests Python's emulation "
+        "rather than the file. What guards .env on Windows is the NTFS ACL "
+        "inherited from its directory. See KNOWN-ISSUES.md 5.9."
+    ),
+)
 def test_the_file_is_not_world_readable(env_file):
     import stat
 

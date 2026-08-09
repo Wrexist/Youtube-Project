@@ -156,6 +156,38 @@ class ChannelDisconnected(YouTubeError):
     """The refresh token is dead. Re-auth is required; retrying will not help."""
 
 
+def _transport_reason(exc: httpx.HTTPError) -> str:
+    """Why the call never reached Google, in terms with a fix attached."""
+    chain: list[str] = []
+    current: BaseException | None = exc
+    while current is not None and len(chain) < 5:
+        chain.append(str(current))
+        current = current.__cause__ or current.__context__
+
+    if any("CERTIFICATE_VERIFY_FAILED" in link for link in chain):
+        return (
+            "could not verify Google's TLS certificate. Antivirus HTTPS scanning "
+            "(AVG, Avast, Kaspersky, ESET, Bitdefender) or a corporate proxy is "
+            "intercepting the connection with a certificate this engine does not "
+            "trust. Your browser trusts it because it reads the Windows store. "
+            "Re-run Install Studio.cmd to pick up the fix, or turn off the "
+            "antivirus web shield"
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return "timed out reaching Google's token endpoint"
+    return f"could not reach Google's token endpoint: {type(exc).__name__}"
+
+
+def _error_detail(resp: httpx.Response) -> str:
+    """Google's own words for the refusal, when it gave any."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return resp.text[:200].strip()
+    parts = [str(body[k]) for k in ("error", "error_description") if body.get(k)]
+    return " - ".join(parts) or resp.text[:200].strip()
+
+
 @dataclass
 class Credentials:
     refresh_token_encrypted: str
@@ -196,19 +228,32 @@ def authorize_url(state: str) -> str:
 
 async def exchange_code(code: str) -> Credentials:
     s = get_settings()
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            TOKEN_URL,
-            data={
-                "code": code,
-                "client_id": s.google_client_id,
-                "client_secret": s.google_client_secret,
-                "redirect_uri": s.google_redirect_uri,
-                "grant_type": "authorization_code",
-            },
-        )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": s.google_client_id,
+                    "client_secret": s.google_client_secret,
+                    "redirect_uri": s.google_redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+            )
+    except httpx.HTTPError as exc:
+        # The exchange is server-to-server, so it fails on conditions the browser
+        # never meets — and the operator's browser has, by this point, just
+        # completed the same handshake against Google successfully. That makes
+        # "cannot reach Google" read as nonsense unless it says why.
+        raise YouTubeError(_transport_reason(exc)) from exc
+
     if resp.status_code != 200:
-        raise YouTubeError(f"token exchange failed: {resp.status_code}")
+        # Google's body names the actual problem - `redirect_uri_mismatch`,
+        # `invalid_client`, `invalid_grant` - and each has a different fix. The
+        # status code alone sent people to re-check the wrong half of a Cloud
+        # console setup. No token can appear in an error body, so this is safe
+        # to surface.
+        raise YouTubeError(f"token exchange failed: {resp.status_code} {_error_detail(resp)}")
 
     payload = resp.json()
     if "refresh_token" not in payload:

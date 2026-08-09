@@ -38,6 +38,22 @@ _NO_SAMPLING = ("claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-op
 #: Models that keep `temperature` but reject any value other than the default.
 _DEFAULT_SAMPLING_ONLY = ("claude-sonnet-5",)
 
+#: OpenAI's reasoning line, which made the same two changes Anthropic did and one
+#: more. Verified against the live API rather than inferred, because all three are
+#: 400s rather than ignored parameters:
+#:
+#:     max_tokens: 64, temperature: 0.7  -> 400 'max_tokens' is not supported with
+#:                                          this model. Use 'max_completion_tokens'
+#:     max_completion_tokens, temperature: 0.7
+#:                                       -> 400 'temperature' does not support 0.7
+#:                                          with this model. Only the default (1)
+#:     max_completion_tokens             -> 200
+#:
+#: `gpt-5-chat-latest` is non-reasoning and would tolerate a temperature, but it
+#: is not in the catalogue and treating it as reasoning only costs it the default
+#: sampling it would have used anyway.
+_OPENAI_REASONING = ("gpt-5", "o1", "o3", "o4")
+
 #: Models that reason before answering unless told otherwise. On these `max_tokens`
 #: is the ceiling for thinking *and* answer together, which is why `providers/llm.py`
 #: adds head-room rather than handing the caller's number straight to the API.
@@ -47,6 +63,12 @@ _THINKS_BY_DEFAULT = _NO_SAMPLING + _DEFAULT_SAMPLING_ONLY
 # guidance shown next to the picker — some of these genuinely do not need a big model.
 TASKS: dict[str, dict] = {
     # Script chain
+    #
+    # `brief` runs before the workflow does — it is the Create screen's "improve
+    # this" button, turning a typed fragment into a topic the rest of the chain
+    # can actually work with. Routed like everything else so it is visible and
+    # changeable on the Models screen rather than being a hidden model call.
+    "brief": {"group": "Script", "needs": "judgement, JSON", "quality": "high"},
     "research": {"group": "Script", "needs": "long context, JSON", "quality": "high"},
     "angle": {"group": "Script", "needs": "judgement", "quality": "high"},
     "hook": {"group": "Script", "needs": "judgement", "quality": "critical"},
@@ -116,6 +138,8 @@ class ModelSpec:
         written before this existed is fixed by upgrading rather than by re-saving it.
         Persisted catalogues are exactly where the stale entries live.
         """
+        if self.provider == "openai" and self.model.startswith(_OPENAI_REASONING):
+            return "default-only"
         if self.provider != "anthropic":
             return "any"
         if self.model.startswith(_NO_SAMPLING):
@@ -125,8 +149,30 @@ class ModelSpec:
         return "any"
 
     @property
+    def max_tokens_field(self) -> str:
+        """What this provider calls the output ceiling on /chat/completions.
+
+        OpenAI's reasoning models renamed it and reject the old spelling outright.
+        Decided per model rather than per provider because `base_url` points the
+        same transport at Groq, DeepSeek, OpenRouter, Together, LM Studio and
+        vLLM, none of which have followed the rename — sending them
+        `max_completion_tokens` would break every one.
+        """
+        if self.provider == "openai" and self.model.startswith(_OPENAI_REASONING):
+            return "max_completion_tokens"
+        return "max_tokens"
+
+    @property
     def thinks_by_default(self) -> bool:
-        """Whether this model reasons before answering with no prompting to do so."""
+        """Whether this model reasons before answering with no prompting to do so.
+
+        Load-bearing for OpenAI's reasoning line as well as Anthropic's: reasoning
+        tokens are drawn from the same `max_completion_tokens` budget as the
+        answer, so without the reserve a stage that asks for a short answer gets
+        its whole allowance spent on thinking and comes back empty.
+        """
+        if self.provider == "openai":
+            return self.model.startswith(_OPENAI_REASONING)
         return self.provider == "anthropic" and self.model.startswith(_THINKS_BY_DEFAULT)
 
     @property
@@ -192,8 +238,73 @@ CATALOGUE: dict[str, ModelSpec] = {
             output_per_m=25,
             context=1_000_000,
         ),
+        # OpenAI, best first. The 5.6 line is the current one; ids and prices were
+        # read from the live /v1/models listing and the published pricing table
+        # rather than remembered, because a wrong id is a 404 at stage three of
+        # seventeen and a wrong price silently corrupts the per-video cost ledger.
+        #
+        # All of these are reasoning models: `max_completion_tokens`, no
+        # temperature, and a thinking reserve. See `_OPENAI_REASONING`.
+        ModelSpec(
+            "openai", "gpt-5.6-sol", "GPT-5.6 Sol", input_per_m=5, output_per_m=30, context=272_000
+        ),
+        ModelSpec(
+            "openai",
+            "gpt-5.6-terra",
+            "GPT-5.6 Terra",
+            input_per_m=2,
+            output_per_m=12,
+            context=1_050_000,
+        ),
+        ModelSpec(
+            "openai",
+            "gpt-5.6-luna",
+            "GPT-5.6 Luna",
+            input_per_m=0.2,
+            output_per_m=1.2,
+            context=1_050_000,
+        ),
+        # Six times Sol's price. Here because someone will want it for a critique
+        # pass, not because the pipeline needs it.
+        ModelSpec(
+            "openai",
+            "gpt-5.5-pro",
+            "GPT-5.5 Pro",
+            input_per_m=30,
+            output_per_m=180,
+            context=1_050_000,
+        ),
+        # Kept for routes already saved on people's machines. A missing catalogue
+        # entry silently re-routes a stage, which is worse than a stale option.
         ModelSpec("openai", "gpt-4o", "GPT-4o", input_per_m=2.5, output_per_m=10),
         ModelSpec("openai", "gpt-4o-mini", "GPT-4o mini", input_per_m=0.15, output_per_m=0.6),
+        # Gemini. `-preview` in an id is the provider's own warning that it can be
+        # withdrawn; the Pro tier has no stable id yet, so it is offered with that
+        # caveat rather than left out of a table whose whole job is choice.
+        ModelSpec(
+            "gemini",
+            "gemini-3.1-pro-preview",
+            "Gemini 3.1 Pro (preview)",
+            input_per_m=2,
+            output_per_m=12,
+            context=1_000_000,
+        ),
+        ModelSpec(
+            "gemini",
+            "gemini-3.6-flash",
+            "Gemini 3.6 Flash",
+            input_per_m=1.5,
+            output_per_m=7.5,
+            context=1_000_000,
+        ),
+        ModelSpec(
+            "gemini",
+            "gemini-3.5-flash-lite",
+            "Gemini 3.5 Flash Lite",
+            input_per_m=0.3,
+            output_per_m=2.5,
+            context=1_000_000,
+        ),
         ModelSpec(
             "gemini", "gemini-2.0-flash", "Gemini 2.0 Flash", input_per_m=0.1, output_per_m=0.4
         ),
@@ -232,6 +343,61 @@ DEFAULT_ROUTES: dict[str, str] = {
     )
     for task, meta in TASKS.items()
 }
+
+#: The same three-tier shape as `DEFAULT_ROUTES`, expressed once per provider.
+#:
+#: Tiers, not individual tasks: what a task needs is already recorded in
+#: `TASKS[...]["quality"]`, and repeating that judgement per provider is how the
+#: table would drift.
+_TIERS: dict[Provider, dict[str, str]] = {
+    "anthropic": {
+        "critical": "anthropic:claude-opus-5",
+        "default": "anthropic:claude-sonnet-5",
+        "low": "anthropic:claude-haiku-4-5-20251001",
+    },
+    "openai": {
+        "critical": "openai:gpt-5.6-sol",
+        "default": "openai:gpt-5.6-terra",
+        "low": "openai:gpt-5.6-luna",
+    },
+    "gemini": {
+        "critical": "gemini:gemini-3.1-pro-preview",
+        "default": "gemini:gemini-3.6-flash",
+        "low": "gemini:gemini-3.5-flash-lite",
+    },
+}
+
+#: Which provider to prefer when more than one is configured. Anthropic first for
+#: the reasons argued above `DEFAULT_ROUTES`; the rest is a stable order rather
+#: than a claim that one is better than the next.
+_PROVIDER_PREFERENCE: tuple[Provider, ...] = ("anthropic", "openai", "gemini")
+
+
+def recommended_routes(configured: set[str]) -> dict[str, str]:
+    """The best model for each task among the providers that have a key.
+
+    `DEFAULT_ROUTES` names Anthropic for everything, which is the right default
+    and completely useless to someone who has an OpenAI key and no Anthropic one:
+    every stage fails at the first call, and the fix — eighteen dropdowns, one at
+    a time — is the kind of thing people give up in the middle of. This is that
+    fix as one button.
+
+    Falls back to `DEFAULT_ROUTES` when nothing is configured, so the screen shows
+    the opinionated default rather than an empty table on a fresh install.
+    """
+    provider = next((p for p in _PROVIDER_PREFERENCE if p in configured), None)
+    if provider is None:
+        return dict(DEFAULT_ROUTES)
+
+    tier = _TIERS[provider]
+    return {
+        task: tier["critical"]
+        if meta["quality"] == "critical"
+        else tier["low"]
+        if meta["quality"] == "low"
+        else tier["default"]
+        for task, meta in TASKS.items()
+    }
 
 
 @dataclass

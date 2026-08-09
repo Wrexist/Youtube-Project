@@ -7,6 +7,8 @@ Without this the sentence-break check in _group_cues() never fires.
 
 from __future__ import annotations
 
+import pytest
+
 from engine.workflows.media import _group_cues, _restore_punctuation
 
 
@@ -140,3 +142,118 @@ class TestGroupCuesWithRestoredPunctuation:
         # Groups must be non-overlapping in time
         for i in range(len(grouped) - 1):
             assert grouped[i]["end"] <= grouped[i + 1]["start"] + 0.01  # float tolerance
+
+
+# ── written forms ───────────────────────────────────────────────────────────
+#
+# edge-tts reports what it *said*, not what it read, so a script saying "$50,000"
+# produced the caption "fifty thousand dollars". Rendered frames from a real job
+# read "and fifty thousand / dollars." and "Lasagna on October / fifth twenty
+# eighteen." — a transcript of a phone call rather than a caption track, and
+# three times the width on the frame where width is scarcest.
+
+
+class TestSpokenWordCount:
+    """Only has to count, and only well enough to stop one number eating the next."""
+
+    @pytest.mark.parametrize(
+        ("token", "expected"),
+        [
+            ("$50,000", 3),  # fifty thousand dollars
+            ("2018", 2),  # twenty eighteen - a year is read as two pairs
+            ("300,000,000", 3),  # three hundred million
+            ("75%", 3),  # seventy five percent
+            ("12", 1),
+            ("5", 1),
+        ],
+    )
+    def test_counts_the_spoken_expansion(self, token, expected):
+        from engine.workflows.media import _spoken_word_count
+
+        assert _spoken_word_count(token) == expected
+
+    def test_a_token_with_no_digits_is_one_word(self):
+        from engine.workflows.media import _spoken_word_count
+
+        assert _spoken_word_count("subscribers") == 1
+
+
+class TestRestoreWrittenForms:
+    def test_a_currency_amount_is_written_not_spoken(self):
+        from engine.workflows.media import _restore_written_forms
+
+        cues = _spoken("He put up fifty thousand dollars today")
+        out = _restore_written_forms(cues, "He put up $50,000 today")
+        assert [c["text"] for c in out] == ["He", "put", "up", "$50,000", "today"]
+
+    def test_the_merged_cue_keeps_the_full_span(self):
+        """Timing has to come from the words that were actually spoken, or the
+        caption drifts away from the audio."""
+        from engine.workflows.media import _restore_written_forms
+
+        cues = _spoken("He put up fifty thousand dollars today")
+        out = _restore_written_forms(cues, "He put up $50,000 today")
+        amount = next(c for c in out if c["text"] == "$50,000")
+        assert amount["start"] == cues[3]["start"]
+        assert amount["end"] == cues[5]["end"]
+
+    def test_one_number_does_not_swallow_the_next(self):
+        """ "October 5, 2018" — the "5," took "fifth twenty eighteen" and "2018."
+        then ate the word after it, losing "That" out of the script."""
+        from engine.workflows.media import _restore_written_forms
+
+        cues = _spoken("on October fifth twenty eighteen That was")
+        out = _restore_written_forms(cues, "on October 5, 2018. That was")
+        assert [c["text"] for c in out] == ["on", "October", "5,", "2018.", "That", "was"]
+
+    def test_punctuation_comes_back_for_free(self):
+        """The written token already carries it, which is why this replaced the
+        separate punctuation pass rather than running alongside it."""
+        from engine.workflows.media import _restore_written_forms
+
+        out = _restore_written_forms(_spoken("the bridge fell"), "the bridge fell.")
+        assert out[-1]["text"] == "fell."
+
+    def test_badly_drifted_alignment_keeps_the_spoken_forms(self):
+        """A caption track missing its numerals beats one out of sync with the audio."""
+        from engine.workflows.media import _restore_written_forms
+
+        cues = _spoken("completely different words here that match nothing at all")
+        out = _restore_written_forms(cues, "the bridge fell.")
+        assert [c["text"] for c in out] == [c["text"] for c in cues]
+
+    def test_no_written_text_is_a_no_op(self):
+        from engine.workflows.media import _restore_written_forms
+
+        cues = _spoken("the bridge fell")
+        assert _restore_written_forms(cues, "") is cues
+
+
+def _spoken(sentence: str) -> list[dict]:
+    return [
+        {"start": i * 0.35, "end": i * 0.35 + 0.35, "text": w}
+        for i, w in enumerate(sentence.split())
+    ]
+
+
+def test_a_punctuation_only_token_does_not_eat_a_word():
+    """An em dash is spoken as nothing, so it must not take a cue.
+
+    It used to: `bare` is empty for such a token, `_WRITTEN_FORM` does not match
+    it, and the drift guard is skipped because `bare` is falsy — so it fell
+    through, consumed the next cue and replaced that cue's text with itself. For
+    "the bridge - fell" the output was "the", "bridge", "-", and the word "fell"
+    was gone.
+    """
+    from engine.workflows.media import _restore_written_forms
+
+    out = _restore_written_forms(_spoken("the bridge fell"), "the bridge — fell")
+    assert [c["text"] for c in out][-1].endswith("fell")
+    assert "fell" in " ".join(c["text"] for c in out)
+
+
+def test_the_punctuation_is_kept_rather_than_dropped():
+    from engine.workflows.media import _restore_written_forms
+
+    out = _restore_written_forms(_spoken("the bridge fell"), "the bridge — fell")
+    assert "—" in " ".join(c["text"] for c in out)

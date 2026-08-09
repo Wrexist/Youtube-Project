@@ -254,17 +254,26 @@ the 3.11 the project claims to support.
 
 ## 5. Known-imperfect, working as intended for now
 
-### 5.1 Subtitles lose punctuation
-edge-tts word boundaries strip punctuation, so cues read
-`On purpose Here is why` instead of `On purpose. Here is why`. Cosmetic for burned-in
-subtitles; **noticeably worse for the SRT uploaded as a caption track**, which is a
-real ranking signal.
+### 5.1 ~~Subtitles lose punctuation~~ — fixed, by aligning to the written script
+edge-tts reports what it *said*, not what it read. That cost punctuation
+(`On purpose Here is why`) and, worse, every numeral: a script saying `$50,000 on
+October 5, 2018` produced the on-screen caption **"fifty thousand dollars"** and
+**"October fifth twenty eighteen"**. Both were visible in rendered frames from a real
+job. Numerals matter twice over — a caption track that spells them out reads like a
+transcript of a phone call, and width is the scarcest thing on a 9:16 frame.
 
-**Proper fix:** realign cue text against the original script — match each cue's words
-back to the source sentence and restore the punctuation. MoneyPrinterTurbo does a
-version of this in `vendor/moneyprinterturbo/app/services/voice.py:_match_script_line`.
-`media._restore_punctuation` is our take on it; it recovers terminal `.!?` but not
-commas or quotes.
+`media._restore_written_forms` now walks the written script as the authority and
+consumes cues to match, emitting the token *as written*. Punctuation comes back free,
+because the written token already carries it. A token containing a digit or a currency
+symbol swallows the spoken run that follows — capped by `_spoken_word_count`, because
+greedy consumption let `5,` eat "fifth twenty eighteen" and the following `2018.` then
+ate a real word out of the script. Timing is taken from the first and last spoken word,
+so nothing drifts, and badly-drifted alignment falls back to the old punctuation-only
+pass rather than shipping captions out of sync.
+
+Still not recovered: commas and quotes *inside* a sentence, when the alignment falls
+back. MoneyPrinterTurbo's version is in
+`vendor/moneyprinterturbo/app/services/voice.py:_match_script_line`.
 
 ### 5.2 Publish-time scheduling is a heuristic
 YouTube exposes no hourly "when your viewers are online" dimension publicly. The
@@ -272,15 +281,23 @@ scheduler measures **weekday** from real data and **estimates hour-of-day** from
 built-in evening-weighted curve. The API labels this `measured_weekday_only` and the
 UI says "estimated" rather than implying precision it does not have.
 
-### 5.3 Thumbnail backgrounds are generated but the image APIs are unproven
-Backgrounds now come from GPT Image (or Imagen), through
+### 5.3 Thumbnail backgrounds are generated — and so is B-roll for unmatched beats
+Backgrounds come from Gemini 3 Pro Image, also sold as Nano Banana Pro, through
 [providers/images.py](apps/engine/engine/providers/images.py), reusing
 `OPENAI_API_KEY`/`GEMINI_API_KEY` rather than adding a key. With neither set the
 composition falls back to a flat panel, so a keyless clone still gets a thumbnail.
 
-**Neither transport has been called against a live API** — the request and response
-shapes are covered by tests against recorded envelopes, not by a real key. Same
-standing as the Google clients in §1.1.
+Both transports have now been called against a live API and both work, so the
+"unproven" caveat that used to sit here is gone. Gemini 3 Pro Image is preferred over
+GPT Image 1 on all three counts that matter: better output, cheaper ($0.134 against
+$0.19), and native 16:9 where GPT Image returns 3:2 and has to be cropped.
+
+`MaterialsStage` also generates when a beat has no stock match, which satisfies
+CLAUDE.md's "hero shots get generative B-roll". This is not a nicety — no stock
+library has footage of a named person, so a video about a specific creator used to
+fill its beats with whatever a truncated query happened to return. One real beat
+asked for a subscriber counter and got coloured paper clips. Generation is metered
+per image and reported in the stage's `cost_usd`, so the per-video ceiling sees it.
 
 Five archetypes with genuinely different layouts live in
 [render/templates.py](apps/engine/engine/render/templates.py), and the three variants
@@ -363,6 +380,73 @@ append the block to the description with 5000-char guarding, or reorder the grap
 dependency declaration *was* wrong and is fixed — it read `ctx.get("subtitles")` while
 declaring only `("titles",)`, so re-running the voiceover left chapter timestamps
 pointing at cues that no longer existed.
+
+### 5.9 On Windows, the `0o600` on `.env` and the key file does nothing
+Both writers ask for owner-only access — `api/setup.py` chmods the temp file before
+the atomic rename, and `crypto.py` creates the key with `O_EXCL` and mode `0o600`.
+On Windows neither takes effect. `os.chmod` there only toggles the read-only
+attribute, and `os.stat` synthesises `st_mode` as `0o666` for every writable file
+regardless of who can actually open it. So the mode bits are neither honoured nor
+observable, and the two tests that assert on them
+(`test_the_file_is_not_world_readable`, `test_the_generated_key_is_not_readable_by_other_users`)
+are skipped on `os.name == "nt"` — they were failing every Windows install, and
+passing them would have meant testing Python's emulation rather than the file.
+
+What decides who can read either file on Windows is the NTFS ACL it inherits from
+its directory. This section used to argue that inheritance was good enough in
+practice, on the grounds that a clone under a user profile — `C:\Users\<you>\...`,
+where anyone who double-clicked `Install Studio.cmd` from their Downloads folder
+ends up — inherits an ACL that already excludes other non-administrator users.
+
+**That was wrong, and the machine it was written on was the counterexample.** A
+sandboxing tool had added an explicit `(OI)(CI)` ACE granting a service group Read
+& Execute on `C:\Users\<user>\Downloads`, so `.env` came out as:
+
+```text
+.env  Phantomen\CodexSandboxUsers:(I)(RX)
+      NT AUTHORITY\SYSTEM:(I)(F)
+      BUILTIN\Administrators:(I)(F)
+      PHANTOMEN\IsacC:(I)(F)
+```
+
+Two other local accounts could read every API key and the OAuth client secret. A
+profile directory is a *convention* about permissions, not a guarantee, and the
+tools most likely to add an inherited read ACE — sandboxes, MDM, backup agents — are
+exactly the ones a developer machine collects.
+
+**Fixed.** `engine/secretfile.py` sets an explicit DACL at both write sites:
+`icacls /inheritance:r` followed by full control for the owner's SID, SYSTEM and
+Administrators. SYSTEM and Administrators are kept deliberately — an administrator
+can take ownership of any file regardless, so dropping them protects nothing and
+breaks backup and antivirus tooling.
+
+Two things about it are worth knowing:
+
+- **It never raises.** It runs after the credential is already on disk, and a file
+  with a wider ACL than intended is a smaller problem than a broken install.
+- **It verifies its own work.** `/inheritance:r` strips before it grants, so a grant
+  that fails halfway leaves a file readable by nobody — including the engine on its
+  next start. If the tightening cannot be confirmed by reading the file back, it is
+  reverted with `icacls /reset` and warned about.
+
+That self-check exists because CI cannot cover this: every workflow is
+`ubuntu-latest`, so `test_the_acl_keeps_only_the_owner_system_and_administrators`
+is skipped everywhere except a developer's own Windows machine. The revert path is
+tested on all platforms by driving the Windows branch directly.
+
+The two `st_mode` tests above stay skipped on Windows — they assert on Python's
+emulation, which is still not the mechanism.
+
+**Existing files are not retro-fixed.** The ACL is applied when a file is written,
+so a `.env` that predates this keeps whatever it inherited until the next key save.
+To tighten one in place:
+
+```powershell
+icacls .env /inheritance:r /grant:r "$($env:USERNAME):(F)" /grant:r "*S-1-5-18:(F)" /grant:r "*S-1-5-32-544:(F)"
+```
+
+From Git Bash the same line needs `MSYS_NO_PATHCONV=1` in front of it and
+`"$USERNAME:(F)"`, or the `/inheritance:r` argument is rewritten into a path.
 
 ---
 

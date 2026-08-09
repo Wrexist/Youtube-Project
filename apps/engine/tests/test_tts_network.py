@@ -111,22 +111,32 @@ class TestCaBundle:
         A connector built with our context is silently discarded, because edge-tts
         passes `ssl=_SSL_CTX` to `ws_connect` explicitly. Verifying against the
         module global is the only assertion that can tell the two apart.
+
+        Asserted by watching the call rather than by diffing `get_ca_certs()`,
+        which is what this did until `engine/tls.py` started routing verification
+        through the OS trust store: `truststore.SSLContext` implements
+        `load_verify_locations` but raises `NotImplementedError` for
+        `get_ca_certs`, so the old assertion could no longer run on any platform
+        truststore supports — which is all three. Watching the call is the more
+        direct evidence anyway. It names the object the bundle was loaded onto,
+        which is the entire point of the test, and it also pins the argument.
         """
         from edge_tts import communicate
 
         monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
 
-        # DER bytes, not subject names. `_SSL_CTX` is a process-wide global that
-        # every test in this class adds to, and each mints a CA with the same
-        # common name — keyed on the subject, this test's certificate is
-        # indistinguishable from the previous test's and the diff comes back empty.
-        def der() -> set[bytes]:
-            return set(communicate._SSL_CTX.get_ca_certs(binary_form=True))
+        loaded: list[str] = []
+        context = communicate._SSL_CTX
+        original = context.load_verify_locations
 
-        before = der()
+        def spy(*args, **kwargs):
+            loaded.append(kwargs.get("cafile") or (args[0] if args else None))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(context, "load_verify_locations", spy)
         media._trust_extra_cas()
 
-        assert der() - before, (
+        assert str(bundle) in loaded, (
             "the CA never reached the context edge-tts verifies against — a "
             "connector-based fix looks correct here and does nothing"
         )
@@ -136,9 +146,22 @@ class TestCaBundle:
         network that is *not* behind a proxy — the common case."""
         from edge_tts import communicate
 
+        before = communicate._SSL_CTX
         monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
         media._trust_extra_cas()
-        assert len(communicate._SSL_CTX.get_ca_certs()) > 100
+
+        # Identity, first: replacing the global is the failure this guards, and it
+        # is the half that can be checked whatever the context turns out to be.
+        assert communicate._SSL_CTX is before, "the context was replaced, not added to"
+
+        try:
+            roots = communicate._SSL_CTX.get_ca_certs()
+        except NotImplementedError:
+            # A truststore context defers to the platform verifier and cannot
+            # enumerate. The public roots are still trusted — more of them than
+            # certifi carries — there is simply nothing to count.
+            return
+        assert len(roots) > 100
 
     def test_verification_is_never_disabled(self, bundle, monkeypatch):
         """The shortcut this whole function exists to avoid."""

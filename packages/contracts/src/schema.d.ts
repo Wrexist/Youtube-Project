@@ -175,6 +175,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/brief": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refine */
+        post: operations["refine_v1_brief_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/calendar": {
         parameters: {
             query?: never;
@@ -424,6 +441,23 @@ export interface paths {
          *     still inside the storage root.
          */
         get: operations["get_file_v1_files__key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ideas/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Suggestions */
+        get: operations["suggestions_v1_ideas_suggestions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -691,6 +725,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}/thumbnails": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Thumbnails */
+        get: operations["list_thumbnails_v1_jobs__job_id__thumbnails_get"];
+        put?: never;
+        /**
+         * Regenerate
+         * @description Apply an instruction to an existing concept and compose a new variant.
+         *
+         *     Appends rather than replaces. The originals cost real money and the operator
+         *     may well prefer one of them after seeing the alternative — overwriting the
+         *     thing they were comparing against is the one behaviour that cannot be undone.
+         */
+        post: operations["regenerate_v1_jobs__job_id__thumbnails_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs/{job_id}/thumbnails/sharpen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sharpen
+         * @description Turn a rough note into an instruction an image model can act on.
+         *
+         *     "make it better" is not actionable and produces a random different thumbnail.
+         *     This is the same idea as the Create screen's Improve button, applied to the
+         *     thing being asked for rather than to the topic — and it is deliberately a
+         *     separate press, because rewriting someone's words without being asked is the
+         *     fastest way to make them stop trusting the box they typed into.
+         */
+        post: operations["sharpen_v1_jobs__job_id__thumbnails_sharpen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/models": {
         parameters: {
             query?: never;
@@ -808,6 +893,31 @@ export interface paths {
          */
         put: operations["set_all_v1_models_route_all_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/route/recommended": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Route Recommended
+         * @description Route every task to the best model among the providers that have a key.
+         *
+         *     Distinct from `/route/reset`, which restores the built-in defaults whether or
+         *     not they can run: those name Anthropic throughout, so on an install with an
+         *     OpenAI key and no Anthropic one, Reset produces eighteen stages that fail at
+         *     their first call.
+         */
+        post: operations["route_recommended_v1_models_route_recommended_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -940,6 +1050,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/setup/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report
+         * @description Everything needed to diagnose this install, as one paste-able block.
+         *
+         *     Exists because the honest answer to "what went wrong" was previously spread
+         *     across four places — the doctor script, a console window that had scrolled,
+         *     the one-line error on a failed stage row, and a `.env` nobody should paste.
+         *     Reporting a problem meant knowing which of those mattered.
+         *
+         *     Plain text rather than JSON: the destination is a chat window or an issue,
+         *     not a parser.
+         *
+         *     No credential values appear here, only whether each one is set. That is a
+         *     property of what is assembled below, and it is the reason this returns a
+         *     fixed report rather than anything the caller can select.
+         */
+        get: operations["report_v1_setup_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workflows/{name}": {
         parameters: {
             query?: never;
@@ -1035,6 +1177,29 @@ export interface components {
             shorts_per_week: number;
             /** Videos */
             videos: components["schemas"]["PendingVideo"][];
+        };
+        /** Brief */
+        Brief: {
+            /** Cost Usd */
+            cost_usd: number;
+            /** Format */
+            format: string;
+            /** Model */
+            model: string;
+            /** Topic */
+            topic: string;
+            /** Why */
+            why: string;
+        };
+        /** BriefRequest */
+        BriefRequest: {
+            /**
+             * Format
+             * @default short
+             */
+            format: string;
+            /** Rough */
+            rough: string;
         };
         /** BulkRoute */
         BulkRoute: {
@@ -1357,6 +1522,16 @@ export interface components {
             /** Uploads Left */
             uploads_left: number;
         };
+        /** Regenerate */
+        Regenerate: {
+            /**
+             * Base Index
+             * @default 0
+             */
+            base_index: number;
+            /** Instruction */
+            instruction: string;
+        };
         /** RerunRequest */
         RerunRequest: {
             /** Stage */
@@ -1417,6 +1592,18 @@ export interface components {
             /** Worker Running */
             worker_running: boolean;
         };
+        /** Sharpen */
+        Sharpen: {
+            /** Instruction */
+            instruction: string;
+        };
+        /** Sharpened */
+        Sharpened: {
+            /** Instruction */
+            instruction: string;
+            /** Why */
+            why: string;
+        };
         /** ShortCandidateOut */
         ShortCandidateOut: {
             /** Duration S */
@@ -1446,6 +1633,26 @@ export interface components {
             note: string | null;
             /** Video Id */
             video_id: string;
+        };
+        /** Suggestion */
+        Suggestion: {
+            /** Competition */
+            competition: number;
+            /** Demand */
+            demand: number;
+            /** Score */
+            score: number;
+            /** Topic */
+            topic: string;
+            /** Why */
+            why: string;
+        };
+        /** Suggestions */
+        Suggestions: {
+            /** Based On */
+            based_on: string[];
+            /** Suggestions */
+            suggestions: components["schemas"]["Suggestion"][];
         };
         /** TaskRoute */
         TaskRoute: {
@@ -1489,6 +1696,15 @@ export interface components {
             /** Window Days */
             window_days: number;
         };
+        /** Thumbnails */
+        Thumbnails: {
+            /** Chosen */
+            chosen: number;
+            /** Cost Per Generation */
+            cost_per_generation: number;
+            /** Variants */
+            variants: components["schemas"]["Variant"][];
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -1501,6 +1717,25 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** Variant */
+        Variant: {
+            /** Accent */
+            accent: string;
+            /** Image Model */
+            image_model: string;
+            /** Index */
+            index: number;
+            /** Key */
+            key: string;
+            /** Overlay Text */
+            overlay_text: string;
+            /** Rationale */
+            rationale: string;
+            /** Template */
+            template: string;
+            /** Url */
+            url: string;
         };
         /** ApplyRequest */
         engine__api__channels__ApplyRequest: {
@@ -1731,6 +1966,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refine_v1_brief_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BriefRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Brief"];
                 };
             };
             /** @description Validation Error */
@@ -2113,6 +2381,38 @@ export interface operations {
             };
         };
     };
+    suggestions_v1_ideas_suggestions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                refresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Suggestions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     insights_v1_insights_get: {
         parameters: {
             query?: never;
@@ -2456,6 +2756,107 @@ export interface operations {
             };
         };
     };
+    list_thumbnails_v1_jobs__job_id__thumbnails_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Thumbnails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    regenerate_v1_jobs__job_id__thumbnails_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Regenerate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Thumbnails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sharpen_v1_jobs__job_id__thumbnails_sharpen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Sharpen"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Sharpened"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_models_v1_models_get: {
         parameters: {
             query?: never;
@@ -2647,6 +3048,28 @@ export interface operations {
             };
         };
     };
+    route_recommended_v1_models_route_recommended_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     reset_v1_models_route_reset_post: {
         parameters: {
             query?: never;
@@ -2804,6 +3227,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_v1_setup_report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
                 };
             };
         };

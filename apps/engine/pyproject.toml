@@ -22,6 +22,15 @@ dependencies = [
     # this the ledger raises ZoneInfoNotFoundError at import on exactly the hosts
     # most likely to run it.
     "tzdata>=2024.2",
+    # Verify TLS against the operating system's certificate store instead of
+    # certifi's fixed bundle. Not a nicety on a consumer machine: antivirus
+    # products with "web shield" or "HTTPS scanning" (AVG, Avast, Kaspersky,
+    # ESET, Bitdefender) man-in-the-middle every connection and re-sign it with
+    # a root they install into the Windows store. Browsers therefore work and
+    # Python does not, failing every outbound call with CERTIFICATE_VERIFY_FAILED
+    # while the operator can plainly see the same sites loading in their browser.
+    # Corporate proxies and VPNs do the same thing. See engine/tls.py.
+    "truststore>=0.10",
     "loguru>=0.7",
     "sse-starlette>=2.1",
     "pillow>=11.0",

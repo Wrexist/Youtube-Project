@@ -192,6 +192,7 @@ def _render_sync(
         AudioFileClip,
         ColorClip,
         CompositeVideoClip,
+        ImageClip,
         VideoFileClip,
         concatenate_videoclips,
     )
@@ -319,15 +320,24 @@ def _render_sync(
             built = []
             per_clip = span / len(beat_clips) if beat_clips else span
             for clip in beat_clips:
-                try:
-                    source = VideoFileClip(clip["path"])
-                except Exception as exc:  # noqa: BLE001 — a bad download must not kill the render
-                    logger.warning("skipping unreadable clip {}: {}", clip["path"], exc)
-                    continue
                 # Dissolves overlap the timeline, so each clip has to carry the extra
                 # `fade_s` that the overlap eats. Without it the video finishes short
                 # of the narration and freezes on the last frame.
-                take = min(per_clip + fade_s, source.duration)
+                want = per_clip + fade_s
+                try:
+                    if clip.get("kind") == "image":
+                        # Generated b-roll, for a beat no stock library could serve.
+                        # A still has no duration of its own, so it is simply held
+                        # for the whole slot — and Ken Burns further down is what
+                        # keeps it from reading as a frozen frame.
+                        source = ImageClip(clip["path"]).with_duration(want)
+                        take = want
+                    else:
+                        source = VideoFileClip(clip["path"])
+                        take = min(want, source.duration)
+                except Exception as exc:  # noqa: BLE001 — a bad download must not kill the render
+                    logger.warning("skipping unreadable clip {}: {}", clip["path"], exc)
+                    continue
                 built.append(_fit(source.subclipped(0, take), width, height))
 
             if not built:
@@ -465,6 +475,104 @@ def _window_size(sources: int) -> int:
     return max(2, math.ceil(math.sqrt(sources)))
 
 
+def _wrap_caption(text: str, *, font: str, size: int, max_w: int) -> str:
+    """Break a cue onto lines at spaces, never inside a word.
+
+    MoviePy's `method="caption"` does its own wrapping and gets this wrong: a
+    rendered frame from a real 9:16 job read
+
+        He finished a war he
+        started as a foot soldie
+        r
+
+    which is the kind of thing a viewer reads as a broken app rather than as a
+    typo. Measuring with the same font the clip will use means the line that fits
+    here is the line that fits there.
+
+    A single word wider than the box is left alone on its own line and allowed to
+    overflow: there is no break that helps, and hyphenating is not this function's
+    decision to make.
+    """
+    from PIL import ImageFont
+
+    try:
+        face = ImageFont.truetype(font, size)
+    except OSError:  # pragma: no cover - a font that resolved but will not load
+        return text
+
+    def width_of(line: str) -> float:
+        return face.getbbox(line)[2] if line else 0
+
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if current and width_of(candidate) > max_w:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return "\n".join(lines) or text
+
+
+def _caption_bitmap(text: str, *, font: str, size: int, max_w: int):
+    """One cue, drawn with Pillow, as (rgb, alpha).
+
+    Drawn here rather than by `TextClip` because MoviePy sizes the bitmap wrong
+    for multi-line text and then crops its own output. Measured on a real cue at
+    the 9:16 caption size: two lines of 86px type were allocated a 170px canvas,
+    and the second line came out sliced in half horizontally. That is what put
+    "dollars." on screen with its bottom missing. Both `method="label"` and
+    `method="caption"` do it, so there was no MoviePy-side setting to change.
+
+    Pillow gives the line height, the stroke and the centring explicitly, which
+    is all this ever needed — and compose.py already draws every thumbnail this
+    way, so it is the same dependency and the same idiom.
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+
+    try:
+        face = ImageFont.truetype(font, size)
+    except OSError:  # pragma: no cover - resolved but unloadable
+        face = ImageFont.load_default(size=size)
+
+    lines = _wrap_caption(text, font=font, size=size, max_w=max_w).split("\n")
+    stroke = max(2, size // 14)
+    # 1.25 rather than the font's own metric: caption faces vary, and a fixed
+    # multiple keeps two-line cues the same height whatever font is resolved.
+    line_h = int(size * 1.25)
+    pad = stroke * 3
+
+    widths = []
+    for line in lines:
+        left, _, right, _ = ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox(
+            (0, 0), line, font=face, stroke_width=stroke
+        )
+        widths.append(right - left)
+
+    box_w = max([*widths, 1]) + pad * 2
+    box_h = line_h * len(lines) + pad * 2
+
+    canvas = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    for i, line in enumerate(lines):
+        draw.text(
+            (box_w // 2, pad + i * line_h),
+            line,
+            font=face,
+            fill=(255, 255, 255, 255),
+            stroke_width=stroke,
+            stroke_fill=(0, 0, 0, 255),
+            anchor="ma",  # middle-ascender: centred, and top-aligned per line
+        )
+
+    array = np.asarray(canvas, dtype="uint8")
+    return array[:, :, :3].copy(), (array[:, :, 3].astype("float64") / 255.0)
+
+
 def _subtitle_overlay(cues: list[dict], *, width: int, height: int, font: str, duration: float):
     """One clip that draws whichever cue is on screen, instead of one clip per cue.
 
@@ -480,7 +588,7 @@ def _subtitle_overlay(cues: list[dict], *, width: int, height: int, font: str, d
     mask separately at the same `t`, and pasting twice per frame would undo the point.
     """
     import numpy as np
-    from moviepy import TextClip, VideoClip
+    from moviepy import VideoClip
 
     if not cues:
         return None
@@ -489,6 +597,8 @@ def _subtitle_overlay(cues: list[dict], *, width: int, height: int, font: str, d
     # TTS backends is not guaranteed to arrive in order.
     ordered = sorted(cues, key=lambda c: c["start"])
     spans = [(c["start"], max(c["end"], c["start"] + 0.4), c["text"]) for c in ordered]
+    font_px = int(height * 0.045)
+    box_w_limit = int(width * 0.86)
     cache: dict[int, tuple[Any, Any]] = {}
     blank_rgb = np.zeros((height, width, 3), dtype="uint8")
     blank_mask = np.zeros((height, width), dtype="float64")
@@ -506,21 +616,7 @@ def _subtitle_overlay(cues: list[dict], *, width: int, height: int, font: str, d
         if cached is not None:
             return cached
 
-        text = TextClip(
-            text=spans[index][2],
-            font=font,
-            font_size=int(height * 0.045),
-            color="white",
-            stroke_color="black",
-            stroke_width=2,
-            method="caption",
-            size=(int(width * 0.86), None),
-        )
-        try:
-            bitmap = text.get_frame(0)
-            alpha = text.mask.get_frame(0) if text.mask is not None else None
-        finally:
-            text.close()
+        bitmap, alpha = _caption_bitmap(spans[index][2], font=font, size=font_px, max_w=box_w_limit)
 
         rgb = blank_rgb.copy()
         mask = blank_mask.copy()
@@ -612,9 +708,24 @@ def _beat_spans(beats: list, total: float) -> list[tuple[float, float]]:
 
 
 def _fit(clip, width: int, height: int):
-    """Scale-and-crop to the target frame. Never letterbox — black bars read as cheap."""
+    """Scale-and-crop to the target frame. Never letterbox — black bars read as cheap.
+
+    Returns the clip untouched when it is already the target size, which is the
+    common case and was costing real time: stock providers are asked for footage
+    in the video's aspect, so most sources arrive at exactly 1080x1920 and every
+    one of them was still being run through `resized(1.0)` and a full-frame
+    `cropped` — measured at 21ms per frame, on every frame, for two resamples
+    that could not change a pixel. Over a 2:41 vertical render that is ~100
+    seconds spent copying an image onto itself.
+    """
+    if clip.w == width and clip.h == height:
+        return clip
+
     scale = max(width / clip.w, height / clip.h)
-    resized = clip.resized(scale)
+    # `resized(1.0)` is not free either — it still wraps the clip in a per-frame
+    # resampler — so it is skipped when the scale is already right and only the
+    # crop is needed.
+    resized = clip if abs(scale - 1.0) < 1e-9 else clip.resized(scale)
     return resized.cropped(
         x_center=resized.w / 2, y_center=resized.h / 2, width=width, height=height
     )

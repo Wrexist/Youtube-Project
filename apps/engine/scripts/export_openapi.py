@@ -38,7 +38,15 @@ def main() -> int:
         if not TARGET.exists():
             print(f"{TARGET} is missing — run this script without --check", file=sys.stderr)
             return 1
-        if TARGET.read_text() != document:
+        # Compared as bytes, which is what "is the committed file exactly this?"
+        # actually means - and which is the only form of the question that has the
+        # same answer on Windows. Through the text layer it does not: read_text
+        # would decode with the machine's ANSI code page and raise
+        # UnicodeDecodeError on the first em dash in a route docstring, and any
+        # \r\n the file picked up would compare unequal to the \n in `document`.
+        # Both surface as "openapi.json is stale", which is a lie that sends the
+        # reader off to regenerate a file that was already correct.
+        if TARGET.read_bytes() != document.encode("utf-8"):
             print(
                 f"{TARGET.relative_to(REPO)} is stale.\n"
                 "Run: apps/engine/.venv/bin/python apps/engine/scripts/export_openapi.py\n"
@@ -50,7 +58,9 @@ def main() -> int:
         return 0
 
     TARGET.parent.mkdir(parents=True, exist_ok=True)
-    TARGET.write_text(document)
+    # `newline=""` writes the \n in `document` through untranslated, so the file
+    # is byte-identical on every platform and the --check above stays honest.
+    TARGET.write_text(document, encoding="utf-8", newline="")
     print(f"wrote {TARGET.relative_to(REPO)} ({len(document):,} bytes)")
     return 0
 
