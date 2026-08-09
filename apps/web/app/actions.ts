@@ -42,8 +42,15 @@ import {
   setRoute,
 } from "@/lib/engine";
 import { ONBOARDED_COOKIE, ONBOARDED_MAX_AGE } from "@/lib/onboarding";
-import type { ThumbnailSet } from "@/lib/engine";
-import type { Diagnostics, JobRequest, PublishRequest } from "@studio/contracts";
+import type {
+  Brief,
+  Diagnostics,
+  JobRequest,
+  PublishRequest,
+  Sharpened,
+  Suggestion,
+  Thumbnails,
+} from "@studio/contracts";
 
 export interface ActionResult<T = unknown> {
   ok: boolean;
@@ -79,9 +86,7 @@ export async function improveTopic(
  * adjacent to yet, and inventing a niche for someone who has not chosen one is
  * worse than showing nothing.
  */
-export async function ideaSuggestions(): Promise<
-  ActionResult<{ topic: string; score: number; demand: number; why: string }[]>
-> {
+export async function ideaSuggestions(): Promise<ActionResult<Suggestion[]>> {
   const data = await getIdeaSuggestions(4);
   if (!data) return { ok: false, error: "the engine did not answer" };
   return { ok: true, data: data.suggestions };
@@ -92,7 +97,7 @@ export async function ideaSuggestions(): Promise<
 // The thumbnail is the only artifact a viewer sees before deciding whether to
 // watch, and the pipeline used to report it as "3 items".
 
-export async function loadThumbnails(jobId: string): Promise<ActionResult<ThumbnailSet>> {
+export async function loadThumbnails(jobId: string): Promise<ActionResult<Thumbnails>> {
   const data = await getThumbnails(jobId);
   if (!data) return { ok: false, error: "the engine did not answer" };
   return { ok: true, data };
@@ -102,7 +107,7 @@ export async function remakeThumbnail(
   jobId: string,
   instruction: string,
   baseIndex: number,
-): Promise<ActionResult<ThumbnailSet>> {
+): Promise<ActionResult<Thumbnails>> {
   try {
     return { ok: true, data: await regenerateThumbnail(jobId, instruction, baseIndex) };
   } catch (error) {
@@ -113,7 +118,7 @@ export async function remakeThumbnail(
 export async function sharpenInstruction(
   jobId: string,
   instruction: string,
-): Promise<ActionResult<{ instruction: string; why: string }>> {
+): Promise<ActionResult<Sharpened>> {
   try {
     return { ok: true, data: await sharpenThumbnailInstruction(jobId, instruction) };
   } catch (error) {

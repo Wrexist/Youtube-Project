@@ -134,7 +134,7 @@ class MaterialsStage(Stage[Materials]):
         materials = Materials()
         seen_ids: set[str] = set()
         generated_cost = 0.0
-        generated_beats = 0
+        generated: list[dict] = []
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for index, beat in enumerate(beats):
@@ -172,12 +172,22 @@ class MaterialsStage(Stage[Materials]):
                 # stock library has footage of a specific creator — and it is
                 # exactly where CLAUDE.md says to generate instead of shipping
                 # stock-only. `visual_direction` is already an image prompt.
-                generated = await _generate_broll(beat, index, aspect)
-                if generated:
-                    materials.clips.append(generated)
-                    seen_ids.add(generated["id"])
-                    generated_cost += generated.pop("_cost_usd", 0.0)
-                    generated_beats += 1
+                clip = await _generate_broll(beat, index, aspect)
+                if clip:
+                    materials.clips.append(clip)
+                    seen_ids.add(clip["id"])
+                    generated_cost += clip.pop("_cost_usd", 0.0)
+                    # The model and the prompt, not just a count. These clips are
+                    # generated artifacts and CLAUDE.md #2 wants both recorded —
+                    # a line in the log is not provenance, because nothing reads
+                    # the log when attributing a video's performance later.
+                    generated.append(
+                        {
+                            "beat": index,
+                            "model": clip.pop("_model", ""),
+                            "prompt": clip.get("query", ""),
+                        }
+                    )
 
         if not materials.clips:
             raise RuntimeError("no footage found for any beat")
@@ -194,7 +204,7 @@ class MaterialsStage(Stage[Materials]):
                     "unique_clips": len(seen_ids),
                     "pacing": PACING,
                     "providers": sorted({c["provider"] for c in materials.clips}),
-                    "generated_beats": generated_beats,
+                    "generated": generated,
                 }
             ),
         )
@@ -248,7 +258,10 @@ async def _generate_broll(beat, index: int, aspect: str) -> dict | None:
         "duration": beat.est_seconds,
         "query": prompt,
         "beat_index": index,
+        # Underscored keys are stripped by the caller once folded into the
+        # stage's cost and provenance; they are not part of the clip contract.
         "_cost_usd": image.cost_usd,
+        "_model": image.model,
     }
 
 
@@ -727,6 +740,20 @@ def _restore_written_forms(word_cues: list[dict], original_text: str) -> list[di
             break
 
         bare = _LEADING_STRIP.sub("", _TRAILING_SENT.sub("", token)).lower()
+
+        # A token that is only punctuation - an em dash, an ellipsis - is spoken
+        # as nothing at all, so it must not take a cue away from the next real
+        # word. It used to: `bare` is empty, `_WRITTEN_FORM` does not match, and
+        # the drift guard below is skipped because `bare` is falsy, so the token
+        # fell through and overwrote the next cue's text with itself. For "the
+        # bridge - fell" that produced "the", "bridge", "-" and lost "fell"
+        # entirely, with the alignment fallback unable to fire because the cue
+        # list had been consumed.
+        if not bare:
+            if out:
+                out[-1] = {**out[-1], "text": f"{out[-1]['text']} {token}"}
+            continue
+
         first = word_cues[cue_i]
         consumed = 1
 

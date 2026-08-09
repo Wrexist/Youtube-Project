@@ -63,6 +63,16 @@ export type CredentialStatus = components["schemas"]["CredentialStatus"];
 /** `scripts/doctor.py` as data — the same checks, so the terminal and the screen
  *  cannot disagree about whether this install works. */
 export type Diagnostics = Ok<paths["/v1/setup/diagnostics"]["get"]>;
+
+/** The Create screen's Improve button, and the ideas it suggests. */
+export type Brief = Ok<paths["/v1/brief"]["post"]>;
+export type Suggestions = Ok<paths["/v1/ideas/suggestions"]["get"]>;
+export type Suggestion = Suggestions["suggestions"][number];
+
+/** The thumbnail panel: the variants, and a sharpened instruction. */
+export type Thumbnails = Ok<paths["/v1/jobs/{job_id}/thumbnails"]["get"]>;
+export type ThumbnailVariant = Thumbnails["variants"][number];
+export type Sharpened = Ok<paths["/v1/jobs/{job_id}/thumbnails/sharpen"]["post"]>;
 export type DiagnosticCheck = components["schemas"]["DiagnosticCheck"];
 
 // ── things FastAPI types as `object` ────────────────────────────────────────

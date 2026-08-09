@@ -254,7 +254,7 @@ CATALOGUE: dict[str, ModelSpec] = {
             "GPT-5.6 Terra",
             input_per_m=2,
             output_per_m=12,
-            context=272_000,
+            context=1_050_000,
         ),
         ModelSpec(
             "openai",
@@ -262,7 +262,7 @@ CATALOGUE: dict[str, ModelSpec] = {
             "GPT-5.6 Luna",
             input_per_m=0.2,
             output_per_m=1.2,
-            context=272_000,
+            context=1_050_000,
         ),
         # Six times Sol's price. Here because someone will want it for a critique
         # pass, not because the pipeline needs it.
@@ -272,7 +272,7 @@ CATALOGUE: dict[str, ModelSpec] = {
             "GPT-5.5 Pro",
             input_per_m=30,
             output_per_m=180,
-            context=272_000,
+            context=1_050_000,
         ),
         # Kept for routes already saved on people's machines. A missing catalogue
         # entry silently re-routes a stage, which is worse than a stale option.

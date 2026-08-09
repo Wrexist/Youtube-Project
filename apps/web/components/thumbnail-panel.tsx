@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { loadThumbnails, remakeThumbnail, sharpenInstruction } from "@/app/actions";
 import { fileUrl } from "@/lib/engine";
-import type { ThumbnailSet } from "@/lib/engine";
+import type { Thumbnails } from "@studio/contracts";
 
 /**
  * The thumbnails, as pictures, with a way to ask for a different one.
@@ -32,7 +32,7 @@ export function ThumbnailPanel({
   chosen?: number;
   onChoose?: (index: number) => void;
 }) {
-  const [set, setSet] = useState<ThumbnailSet | null>(null);
+  const [set, setSet] = useState<Thumbnails | null>(null);
   const [instruction, setInstruction] = useState("");
   const [why, setWhy] = useState<string | null>(null);
   const [busy, setBusy] = useState<"none" | "sharpening" | "making">("none");
@@ -41,7 +41,12 @@ export function ThumbnailPanel({
   useEffect(() => {
     let cancelled = false;
     loadThumbnails(jobId).then((r) => {
-      if (!cancelled && r.ok && r.data) setSet(r.data);
+      if (cancelled) return;
+      // The failure branch was discarded, so an unreachable engine — or the 409
+      // this endpoint returns when the stage produced nothing — left the panel
+      // on "Loading thumbnails…" for good, with no way to tell or retry.
+      if (r.ok && r.data) setSet(r.data);
+      else setError(r.error ?? 'could not load the thumbnails');
     });
     return () => {
       cancelled = true;
@@ -89,6 +94,13 @@ export function ThumbnailPanel({
   }
 
   if (!set) {
+    if (error) {
+      return (
+        <p role="alert" className="text-[12px] text-[var(--color-bad)]">
+          {error}
+        </p>
+      );
+    }
     return <p className="text-[12px] text-[var(--color-faint)]">Loading thumbnails…</p>;
   }
 

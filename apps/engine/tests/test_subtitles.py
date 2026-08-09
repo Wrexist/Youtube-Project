@@ -234,3 +234,26 @@ def _spoken(sentence: str) -> list[dict]:
         {"start": i * 0.35, "end": i * 0.35 + 0.35, "text": w}
         for i, w in enumerate(sentence.split())
     ]
+
+
+def test_a_punctuation_only_token_does_not_eat_a_word():
+    """An em dash is spoken as nothing, so it must not take a cue.
+
+    It used to: `bare` is empty for such a token, `_WRITTEN_FORM` does not match
+    it, and the drift guard is skipped because `bare` is falsy — so it fell
+    through, consumed the next cue and replaced that cue's text with itself. For
+    "the bridge - fell" the output was "the", "bridge", "-", and the word "fell"
+    was gone.
+    """
+    from engine.workflows.media import _restore_written_forms
+
+    out = _restore_written_forms(_spoken("the bridge fell"), "the bridge — fell")
+    assert [c["text"] for c in out][-1].endswith("fell")
+    assert "fell" in " ".join(c["text"] for c in out)
+
+
+def test_the_punctuation_is_kept_rather_than_dropped():
+    from engine.workflows.media import _restore_written_forms
+
+    out = _restore_written_forms(_spoken("the bridge fell"), "the bridge — fell")
+    assert "—" in " ".join(c["text"] for c in out)

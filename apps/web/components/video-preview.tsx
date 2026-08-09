@@ -26,10 +26,14 @@ export function VideoPreview({
   stages: Stage[];
   jobId: string | null;
 }) {
-  const [failed, setFailed] = useState(false);
+  // Keyed by the render that failed, not a bare boolean. A bare flag was never
+  // reset, so once a video errored the preview stayed hidden for the life of the
+  // component — including after "Re-run from here" produced a perfectly good new
+  // render under a new key.
+  const [failedKey, setFailedKey] = useState<string | null>(null);
 
   const key = renderKey(stages, jobId);
-  if (!key || failed) return null;
+  if (!key || key === failedKey) return null;
 
   return (
     <div className="mb-4 overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-surface)]">
@@ -51,7 +55,7 @@ export function VideoPreview({
         poster={posterUrl(stages, jobId)}
         controls
         preload="metadata"
-        onError={() => setFailed(true)}
+        onError={() => setFailedKey(key)}
         className="block max-h-[70vh] w-full bg-black"
       />
     </div>

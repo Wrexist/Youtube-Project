@@ -21,6 +21,9 @@ image prompt.
 
 from __future__ import annotations
 
+import asyncio
+from collections import defaultdict
+
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -32,6 +35,15 @@ from engine.render import compose, templates
 router = APIRouter(prefix="/v1/jobs", tags=["thumbnails"])
 
 MAX_INSTRUCTION = 400
+
+#: One lock per job, because a regeneration is a read-modify-write spanning two
+#: awaits and the variant list is the thing being modified.
+#:
+#: Without it, two presses of "Make another" on the same job both read the list
+#: at the same length, both compose `thumbnail_{index}` for that index, and the
+#: second write replaces the list the first had appended to — so one variant
+#: becomes unreachable although it was generated and charged for.
+_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 class Variant(BaseModel):
@@ -106,8 +118,6 @@ async def regenerate(job_id: str, body: Regenerate) -> Thumbnails:
     may well prefer one of them after seeing the alternative — overwriting the
     thing they were comparing against is the one behaviour that cannot be undone.
     """
-    from engine.providers import images
-
     job = _job(job_id)
     variants = _variants(job)
     if not 0 <= body.base_index < len(variants):
@@ -119,6 +129,23 @@ async def regenerate(job_id: str, body: Regenerate) -> Thumbnails:
     except ProviderUnavailable as exc:
         raise HTTPException(503, str(exc)) from exc
 
+    # Only the mutation is serialised. `_revise` is a model call that touches
+    # nothing shared, and holding the lock across it would make two people asking
+    # for a thumbnail at once wait for each other's LLM round trip.
+    async with _locks[job_id]:
+        return await _compose_and_append(job, job_id, concept)
+
+
+async def _compose_and_append(job: dict, job_id: str, concept: dict) -> Thumbnails:
+    """Render the concept and add it to the stage. Caller holds the job's lock.
+
+    The variant list is re-read here rather than passed in: another request may
+    have appended while `_revise` was awaiting, and `index` has to be the length
+    as of *now* or the two collide on one artifact key.
+    """
+    from engine.providers import images
+
+    variants = _variants(job)
     index = len(variants)
     try:
         thumb = await compose.make_thumbnail(concept, job_id=job_id, index=index)

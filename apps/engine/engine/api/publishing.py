@@ -276,8 +276,12 @@ async def finish_auth(
     # it is worth reporting properly whatever it turns out to be.
     try:
         creds = await youtube.exchange_code(code)
-        CHANNELS["default"] = creds
+        # Saved before the in-memory map is touched. The other order leaves a
+        # failed save with the credentials live in this process and the operator
+        # looking at an error page: the install behaves as connected until it
+        # restarts, and the row disagrees with memory the whole time.
         await repository.save_channel("default", creds)
+        CHANNELS["default"] = creds
     except Exception as exc:  # noqa: BLE001 - deliberately the whole surface
         # Logged with the traceback before it is flattened into a redirect: the
         # message on screen has to be short, and the thing that gets debugged has
@@ -287,7 +291,15 @@ async def finish_auth(
         # Back to the Setup screen, the same as Google's own refusal above, and
         # for the same reason: that is where the button they pressed lives. A
         # bare error page at an API address is a dead end with no way back.
-        return RedirectResponse(f"{web}/setup?connect_error={quote(reason)}")
+        # `connect_error_source=engine` so the screen does not have to infer it.
+        # It was inferring it from whether the value contained a space, which is
+        # wrong for exactly the case this branch exists to report: `str(exc)` is
+        # empty for a bare `ConnectError`, so `reason` becomes the class name —
+        # one word, indistinguishable from one of Google's own error codes, and
+        # rendered under "that is Google's own error code", which it is not.
+        return RedirectResponse(
+            f"{web}/setup?connect_error={quote(reason)}&connect_error_source=engine"
+        )
     # Back to the screen that sent them, not to the calendar. Connecting a channel
     # is the last step of setup, and landing on an unrelated screen left someone
     # with no confirmation that the thing they just did had worked.

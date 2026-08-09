@@ -442,11 +442,43 @@ async def report() -> str:
     for task, model in sorted(routing.routes.items()):
         lines.append(f"  {task}: {model}")
 
-    recent = logs.tail(settings.storage_root, "engine", lines=120)
+    recent = [_redact(line) for line in logs.tail(settings.storage_root, "engine", lines=120)]
     lines += ["", f"ENGINE LOG (last {len(recent)} lines)"]
     lines += [f"  {line}" for line in recent] or ["  (nothing logged yet)"]
 
     return "\n".join(lines) + "\n"
+
+
+#: Things that look like a credential in a log line. Deliberately shaped rather
+#: than exhaustive: the log is written with `diagnose=False` precisely so that
+#: local variables never reach it, so this is the second line of defence against
+#: a key that arrived inside an exception *message* — a provider echoing the
+#: bearer it rejected, a URL with a token in its query string.
+_SECRETS = re.compile(
+    r"""(
+        sk-[A-Za-z0-9_\-]{16,}          # OpenAI / Anthropic style
+      | AIza[A-Za-z0-9_\-]{20,}         # Google
+      | ya29\.[A-Za-z0-9_\-]{20,}       # Google OAuth access token
+      | 1//[A-Za-z0-9_\-]{20,}          # Google refresh token
+      | \b[A-Za-z0-9_\-]{32,}\b(?=\s*$) # a long opaque trailing token
+      | (?<=key=)[^\s&]+
+      | (?<=token=)[^\s&]+
+      | (?<=Bearer\s)[^\s]+
+    )""",
+    re.VERBOSE,
+)
+
+
+def _redact(line: str) -> str:
+    """Blank anything credential-shaped before it leaves the machine.
+
+    This report exists to be pasted into an issue or a chat, which is exactly the
+    path by which a key escapes. The assembled sections above contain no
+    credential values by construction — only whether each one is set — but the
+    log tail is the one part written by code that was not thinking about this
+    endpoint, and a provider error can quote what it was sent.
+    """
+    return _SECRETS.sub("[redacted]", line)
 
 
 def write_env(path: Path, updates: dict[str, str]) -> None:

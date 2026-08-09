@@ -297,8 +297,13 @@ async def _suggest_with_shortening(seed: str) -> tuple[list[str], str, str]:
         # A failure is a network problem and shortening will not help it — every
         # retry would fail the same way and cost 27 more requests doing it.
         return phrases, failure, seed
-    if _relevant(phrases, seed):
-        return phrases, "", seed
+    # The filtered list, not the raw one. Checking `_relevant` and then returning
+    # `phrases` let the alphabet expansion's unrelated hits through whenever a
+    # single result happened to match — so the guard reported success while the
+    # evidence handed downstream was partly about something else.
+    relevant = _relevant(phrases, seed)
+    if relevant:
+        return relevant, "", seed
 
     for candidate in _seed_candidates(seed)[1:]:
         # `expand=False` while probing: one request instead of 27, because most

@@ -389,3 +389,21 @@ async def test_shortening_is_not_attempted_when_the_network_is_the_problem(monke
     assert not any(q.startswith("mrbeast youtube") for q in calls), (
         "a blocked network was retried with a shorter seed"
     )
+
+
+async def test_only_the_relevant_phrases_from_the_original_seed_are_returned(monkeypatch):
+    """The guard checked `_relevant` and then returned the *unfiltered* list.
+
+    So one matching result let the whole alphabet expansion through, and evidence
+    about something else reached the SEO chain while the check reported success.
+    """
+
+    async def suggest_one(client, query):
+        if query == "roman concrete":
+            return ["roman concrete recipe", "potatishandlaren soffan"]
+        return []
+
+    monkeypatch.setattr("engine.research.keywords._suggest_one", suggest_one)
+
+    evidence = await gather("roman concrete", youtube_client=None)
+    assert evidence.suggestions == ["roman concrete recipe"]

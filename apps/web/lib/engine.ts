@@ -18,6 +18,7 @@
  */
 
 import type {
+  Brief,
   Calendar,
   CalendarSlots,
   Channels,
@@ -32,7 +33,10 @@ import type {
   Models,
   PublishRequest,
   Quota,
+  Sharpened,
   SetupStatus,
+  Suggestions,
+  Thumbnails,
   WorkflowGraph,
 } from "@studio/contracts";
 
@@ -345,10 +349,7 @@ export async function getDiagnosticReport(): Promise<string | null> {
  * retried by anything that treats GET as safe.
  */
 export const refineBrief = (rough: string, format: string) =>
-  post<{ topic: string; format: string; why: string; model: string; cost_usd: number }>(
-    "/v1/brief",
-    { rough, format },
-  );
+  post<Brief>("/v1/brief", { rough, format });
 
 /**
  * Video ideas worth making next, scored against real autocomplete demand.
@@ -357,14 +358,11 @@ export const refineBrief = (rough: string, format: string) =>
  * candidate, and the Create screen must not pay for that on every page load.
  */
 export const getIdeaSuggestions = (limit = 4) =>
-  get<{
-    suggestions: { topic: string; score: number; demand: number; why: string }[];
-    based_on: string[];
-  }>(`/v1/ideas/suggestions?limit=${limit}`);
+  get<Suggestions>(`/v1/ideas/suggestions?limit=${limit}`);
 
 /** The composed thumbnail variants for a job, as pictures rather than a count. */
 export const getThumbnails = (jobId: string) =>
-  get<ThumbnailSet>(`/v1/jobs/${jobId}/thumbnails`);
+  get<Thumbnails>(`/v1/jobs/${jobId}/thumbnails`);
 
 /** Apply an instruction to a concept and compose another variant. Appends. */
 export const regenerateThumbnail = (
@@ -372,33 +370,14 @@ export const regenerateThumbnail = (
   instruction: string,
   baseIndex: number,
 ) =>
-  post<ThumbnailSet>(`/v1/jobs/${jobId}/thumbnails`, {
+  post<Thumbnails>(`/v1/jobs/${jobId}/thumbnails`, {
     instruction,
     base_index: baseIndex,
   });
 
 /** Turn a rough note into something an image model can act on. */
 export const sharpenThumbnailInstruction = (jobId: string, instruction: string) =>
-  post<{ instruction: string; why: string }>(`/v1/jobs/${jobId}/thumbnails/sharpen`, {
-    instruction,
-  });
-
-export interface ThumbnailVariant {
-  index: number;
-  url: string;
-  key: string;
-  template: string;
-  overlay_text: string;
-  accent: string;
-  rationale: string;
-  image_model: string;
-}
-
-export interface ThumbnailSet {
-  variants: ThumbnailVariant[];
-  chosen: number;
-  cost_per_generation: number;
-}
+  post<Sharpened>(`/v1/jobs/${jobId}/thumbnails/sharpen`, { instruction });
 
 /** Save credentials. Only the names passed are touched; absent means unchanged. */
 export const saveKeys = (values: Record<string, string>) =>
