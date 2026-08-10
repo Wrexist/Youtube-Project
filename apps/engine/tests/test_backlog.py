@@ -90,3 +90,41 @@ async def test_resolving_twice_only_counts_once(database):
 
     assert first is True
     assert second is False
+
+
+async def test_every_idea_records_what_produced_it(database):
+    """CLAUDE.md #2 admits no exception for throwaway generations, and an idea that
+    shapes a whole video is not throwaway. `_propose` used to discard both halves
+    with `result, _ = await model.json(...)`."""
+    from sqlalchemy import select
+
+    from engine.db import session
+    from engine.tables import BacklogIdea
+
+    await repository.add_backlog_ideas(
+        [_idea("why bridges collapse")], model="anthropic:claude-opus-5", prompt="propose 8 topics"
+    )
+
+    async with session() as db:
+        row = (await db.execute(select(BacklogIdea))).scalar_one()
+
+    assert row.model == "anthropic:claude-opus-5"
+    assert row.prompt == "propose 8 topics"
+
+
+async def test_a_duplicate_inside_one_batch_does_not_break_the_insert(database):
+    """`_score` has no reason to return distinct topics, and two identical ones in
+    a single list would collide with each other before any concurrency existed."""
+    added = await repository.add_backlog_ideas(
+        [_idea("why bridges collapse", 0.4), _idea("why bridges collapse", 0.9)]
+    )
+
+    assert added == 1
+    assert len(await repository.open_backlog_ideas()) == 1
+
+
+async def test_a_blank_topic_is_dropped_rather_than_stored(database):
+    added = await repository.add_backlog_ideas([_idea("   "), _idea("real topic")])
+
+    assert added == 1
+    assert [i["topic"] for i in await repository.open_backlog_ideas()] == ["real topic"]
