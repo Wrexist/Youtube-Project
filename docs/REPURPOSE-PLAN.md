@@ -219,10 +219,14 @@ may be kept, and what the gate demands.
 
 | Lane | Source | Rights basis | Notes |
 |---|---|---|---|
-| **A — Own** | Your own TikTok account, via Display API (`video.list`) | `own` | Zero rights risk, highest value, the lane to build first. Best masters come from your own originals, not the watermarked TikTok export. |
-| **B — Permissioned** | A creator you asked and who agreed | `licensed` | Request → grant → recorded evidence (scope, term, medium). The UGC-licensing pattern from §2.4. |
-| **C — Quotation** | A short excerpt inside a video that is substantially yours | `commentary` | The excerpt is a *quote*, not the product. Gate thresholds are strictest here, because this is the lane that degrades into reuploading if unwatched. |
-| **D — Open licence** | CC-BY, stock, brand-supplied | `open_licence` | Attribution string is required and auto-composed. |
+| **A — Own** | Your own TikTok account, via Display API (`video.list`) | `own` | Zero rights risk, highest value. Best masters come from your own originals, not the watermarked TikTok export. |
+| **B — Campaign** | A creator running an official clip programme / paid campaign | `campaign` | **Best economics and least friction** — see [RESEARCH §1](REPURPOSE-RESEARCH.md#1-the-finding-that-matters-most-successful-clipping-doesnt-run-on-adsense). Enrolment replaces negotiation, content rules come with it, and payment is per verified view. Always check for a programme before treating a creator as Lane C. |
+| **C — Permissioned** | A creator you asked and who agreed | `licensed` | Request → grant → recorded evidence (scope, term, medium). The UGC-licensing pattern from §2.4. |
+| **D — Quotation** | A short excerpt inside a video that is substantially yours | `commentary` | The excerpt is a *quote*, not the product. |
+| **E — Open licence** | CC-BY, stock, brand-supplied | `open_licence` | Attribution string is required and auto-composed. |
+
+**The lane governs copyright only.** It has no bearing on the transformation
+thresholds in §6.1 — see §6.0. A licence does not make a lazy edit monetisable.
 
 There is no Lane E. A discovered video with no basis stays metadata-only forever:
 we store the URL and the public stats, we never fetch the media.
@@ -287,7 +291,8 @@ Registered as `"repurpose"` in `workflows/video.py::WORKFLOWS` and added to
 | 2 | `rights` | `fit` | **Hard gate.** Every selected clip has a valid, unexpired, unrevoked basis, or the run fails here — before a byte is fetched or a cent is spent. `max_attempts = 1`; a missing licence is not a transient error. |
 | 3 | `acquire` | `rights` | Fetch by the lane's permitted route. Hash, probe, scan for watermarks. |
 | 4 | `segment` | `acquire` | Choose in/out points worth using (§6.2). |
-| 5 | `angle` | `segment` | The editorial thesis: why *these* clips together, what the take is. Reuses `script.AngleStage`'s shape. |
+| 4b | `hook` | `segment` | **Separate stage, deliberately.** Choosing the moment and choosing the first 0.5 seconds are different problems, and only the second decides whether the clip is watched at all — viewers decide in 1.5–3s. A segment whose payoff lands 20s in must have it *teased at the front*, not played in order. See §6.4. |
+| 5 | `angle` | `segment`, `hook` | The editorial thesis: why *these* clips together, what the take is. Reuses `script.AngleStage`'s shape. |
 | 6 | `script` | `angle`, `segment` | Narration written **to the clips** — timed against segment durations, not generic voiceover. Reuses the existing chain. |
 | 7 | `voice` | `script` | `media.VoiceoverStage`, unchanged. |
 | 8 | `assemble` | `voice`, `segment` | Reframe to target aspect, **replace the audio bed**, duck retained diegetic audio under narration, burn credit cards. |
@@ -320,6 +325,30 @@ The product's real differentiator, and the answer to the brief's fourth
 requirement. It asks *"would a human reviewer call this transformative?"* and
 answers with numbers a person can check.
 
+### 6.0 Two gates, reported separately
+
+**Correction to an earlier assumption in this document.** Rights clearance and
+transformation are *independent* gates that do not substitute for each other.
+YouTube's reused-content rules apply "regardless of whether you have permission
+from the original creator" — collections of songs from different artists are
+unmonetisable even *with* the artists' permission — and the converse holds too: a
+video can take zero copyright claims and still fail reused-content review.
+([RESEARCH §2](REPURPOSE-RESEARCH.md#2-the-correction-permission-does-not-satisfy-the-reused-content-policy))
+
+So the report carries two verdicts, never one blended score:
+
+```
+Rights          ✓ cleared      campaign · @creator · Whop, expires 2026-11-04
+Transformation  ✗ 41% original — needs commentary over segments 2 and 3
+```
+
+"Cleared to use, not yet original enough" is a common and real state with a
+completely different fix from its opposite. A single score hides it.
+
+**Transformation thresholds are lane-independent.** An earlier draft gave Lane C
+looser bars because it had permission; that was wrong, and permission buys nothing
+here.
+
 ### 6.1 Checks
 
 **Hard blocks — publish is refused, no override in the UI:**
@@ -335,12 +364,19 @@ answers with numbers a person can check.
 
 | Signal | Why | Starting threshold |
 |---|---|---|
-| Original-runtime share | The headline number a reviewer intuits | ≥ 50% original, and ≥ 70% in Lane C |
+| Original-runtime share | The headline number a reviewer intuits | ≥ 50% original |
 | Longest unbroken source run | An unbroken lift reads as a reupload whatever the totals say | ≤ 15s |
 | Narration coverage over source | Commentary present *while* source plays, not bolted around it | ≥ 60% of source runtime |
 | Segment count | One clip lightly topped and tailed is the classic failure | ≥ 3 for a compilation |
-| Corpus repetition | The §2.2 templating signal, measured across the channel's last 30 uploads | semantic distance above floor |
+| Cut density | An edit with real cuts is visibly not a raw lift — and it is also what retention wants (§6.4) | interrupt every 3–5s |
+| **Corpus repetition** | The §2.2 templating signal, over the channel's last 30 uploads | semantic distance above floor |
+| **Narration-template reuse** | *Named* by policy: "dozens of videos all using the same narration or text" | flagged on repeat skeleton |
 | Structural variety | Same beat skeleton every time is templating even with different clips | flagged on 3 consecutive matches |
+
+The last three are **corpus-level and matter most**, because they are the failure
+mode automation walks into by default: no individual video looks bad, and the
+channel dies anyway. They are also the checks a human operator will never run
+themselves.
 
 Thresholds are **heuristics calibrated to the policy's language, not to a published
 algorithm** — YouTube does not document a numeric bar, and any file that claims
@@ -377,6 +413,43 @@ sentences over a score dial, matching the Analytics screen's voice:
 Stored on the job so it is auditable later — including, specifically, if a channel
 is ever reviewed and someone has to demonstrate what was checked and when.
 
+### 6.4 Retention craft — the part that decides views
+
+Compliance decides whether a clip *can* earn. This decides whether it earns
+anything. From [RESEARCH §3](REPURPOSE-RESEARCH.md#3-the-craft--what-makes-a-clip-perform),
+and every item is mechanical enough to automate:
+
+```
+0.0 – 3.0s   hook       pattern interrupt; the strongest visual moment, teased
+3.0 – 5.0s   promise    what the viewer gets for staying
+5.0s – end   payoff     interrupt every 3–5s; first 2–3 shots rapid-fire
+```
+
+- **Captions:** 4–7 words on screen, high contrast, heavy weight, **synced to
+  speech** rather than dumped as a block, inside top/bottom safe zones. Most
+  short-form viewing is muted, so this is not an accessibility nicety — it is the
+  primary text channel. `media.SubtitlesStage` already produces cue-accurate
+  timings; what is missing is the styling preset, which `PLAN.md` §6.4 already
+  admits is bad today. This is where that gets fixed, and it serves two goals at
+  once.
+- **Per-platform packaging:** one clip, N native versions differing in hook text,
+  caption and first frame. Each platform's audience, aspect and first-frame
+  treatment genuinely differ, so this is optimisation, not duplication.
+
+Note the convenient overlap: cut density, real captions and a constructed hook all
+raise the transformation score in §6.1 *and* the retention curve. The compliance
+work and the quality work are largely the same work — which is the strongest
+argument that this design is aimed correctly.
+
+### 6.5 Feed clip performance into the existing loop
+
+Ten clips a day is ~300 data points a month: enough to learn which source
+creators, topics and hook structures actually produce. `insights.py`,
+`feedback.py` and `review.py` already do exactly this for videos, behind the
+8-per-group / p<0.05 / ≥8% lift gate. Pointing them at clip attribution is close
+to free and is what turns volume into knowledge rather than into a templating
+violation.
+
 ---
 
 ## 7. Build phases
@@ -397,24 +470,29 @@ see ranked candidates with reasons.
 acquire, probe, watermark scan. *Exit:* your own TikTok becomes a `clip_asset` with
 a hash and a clean-master check.
 
-**R3 — Assemble *(2.5 days)*.** Segment selection, reframe, **audio-bed
-replacement**, ducking, narration timed to segments, credit cards. *Exit:* one of
-your own TikToks comes out as a 16:9 or 9:16 YouTube cut with your commentary over
-it and a licensed bed.
+**R3 — Assemble *(3 days)*.** Segment selection, the separate **hook** stage,
+reframe, **audio-bed replacement**, ducking, narration timed to segments, cut
+density, **caption styling preset** (4–7 words, synced, safe-zoned), credit cards.
+*Exit:* one of your own TikToks comes out as a 16:9 or 9:16 YouTube cut with your
+commentary over it, a licensed bed, and captions that don't look like the current
+defaults.
 
-**R4 — The gate *(1.5 days)*.** All hard blocks, all scored signals, the report,
-wiring into the publish gate. *Exit:* a deliberately lazy edit is refused, with the
-specific reason.
+**R4 — The gate *(1.5 days)*.** Both verdicts (§6.0), all hard blocks, all scored
+signals including the corpus-level three, the report, wiring into the publish gate.
+*Exit:* a deliberately lazy edit is refused, with the specific reason and which of
+the two gates it failed.
 
-**R5 — Lanes B/C/D *(1.5 days)*.** Permission-request flow with recorded evidence,
-commentary-lane thresholds, open-licence attribution strings. *Exit:* a clip you
-don't own can be cleared, built and published, with the paper trail attached.
+**R5 — Lanes B–E *(2 days)*.** Campaign/programme enrolment and its content rules,
+permission-request flow with recorded evidence, open-licence attribution strings.
+*Exit:* a clip you don't own can be cleared, built and published, with the paper
+trail attached.
 
-**R6 — Multi-clip episodes & polish *(1.5 days)*.** Compilation with a thesis,
-corpus-repetition scoring, `KNOWN-ISSUES` §5.5 row, contracts regeneration, engine
-tests in `apps/engine/tests/`, web tests beside their components.
+**R6 — Multi-clip episodes & polish *(2 days)*.** Compilation with a thesis,
+per-platform packaging, clip attribution into the existing feedback loop (§6.5),
+`KNOWN-ISSUES` §5.5 row, contracts regeneration, engine tests in
+`apps/engine/tests/`, web tests beside their components.
 
-Roughly **11–12 days**. R0–R4 is the useful core at about 8.
+Roughly **13 days**. R0–R4 is the useful core at about 9.
 
 ---
 
@@ -437,9 +515,26 @@ Roughly **11–12 days**. R0–R4 is the useful core at about 8.
 
 ## 9. Risks
 
-1. **Channel-wide enforcement.** A reused-content strike suspends monetisation for
-   the whole channel, 30 days minimum. Everything in `monetisation.py` resets. This
-   is why the gate blocks rather than warns.
+Ranked by what they actually cost — the severities differ by orders of magnitude
+and an earlier draft of this section treated them as comparable
+([RESEARCH §5](REPURPOSE-RESEARCH.md#5-risk-model-corrected)):
+
+| Outcome | Trigger | Cost | Recoverable? |
+|---|---|---|---|
+| **Channel termination** | 3 copyright strikes / 90 days | Everything | No |
+| **Channel demonetisation** | Reused-content review | All revenue, 30-day lockout, `monetisation.py` to zero | Yes, after fixing |
+| **Content ID claim** | Fingerprint match, usually music | That video's ad revenue | Yes — non-punitive, channel untouched |
+| **Takedown / blocked** | Clipping around an official programme | One video + a burned relationship | Usually |
+
+**A Content ID claim is not a strike.** It is automated and non-punitive: the
+rights holder takes the revenue, the channel is unaffected. Worth stating plainly
+because the original brief aimed at avoiding claims — the *mildest* row — by
+methods that increase exposure to the two catastrophic ones. Under Lane B's
+per-view economics a claim costs nothing at all. Defensive budget belongs on
+strikes and reused-content review; claims are a cost line.
+
+1. **Channel-wide enforcement.** A reused-content suspension hits the whole
+   channel, 30 days minimum. This is why the gate blocks rather than warns.
 2. **Audio.** §2.5 is the likeliest single cause of a claim, and the mitigation
    (total bed replacement) has to be automatic, because an option here will
    eventually be left off.
@@ -460,10 +555,18 @@ Roughly **11–12 days**. R0–R4 is the useful core at about 8.
 
 ## 10. Decisions needed before R0
 
+0. **Business model — the one that changes everything else.** Are these clips meant
+   to earn through *YouTube AdSense* (must clear both gates in §6.0, slow, fragile)
+   or through *paid per-view campaigns* (Lane B — the rights holder funds it and
+   wants the clips out there, $0.20–$6 per 1k views, and a Content ID claim costs
+   nothing)? The research says the money is overwhelmingly in the second, and
+   almost nothing in this plan changes except which lane gets built first. See
+   [RESEARCH §1](REPURPOSE-RESEARCH.md#1-the-finding-that-matters-most-successful-clipping-doesnt-run-on-adsense).
+
 1. **Lane priority.** Lane A (your own TikToks) is the fastest, safest, and highest
    quality — but only if you have an account with content worth repurposing. If
-   this is meant to run on *other people's* clips from day one, R5 moves ahead of
-   R2 and the whole thing gets slower and legally heavier. Which is it?
+   this is meant to run on *other people's* clips from day one, Lane B campaign
+   enrolment moves ahead of R2. Which is it?
 2. **Channel scope.** One channel to start, or must the fit scoring handle several
    with different niches from the beginning?
 3. **Output format.** TikTok-in → Shorts-out (fast, and the quota-cheapest path), or
@@ -472,7 +575,18 @@ Roughly **11–12 days**. R0–R4 is the useful core at about 8.
 4. **Thresholds.** The §6.1 numbers are my starting proposal. Tune now or after the
    first ten videos?
 
-My recommendation: **Lane A, one channel, long-form compilation first.** It puts the
-watch-hours route in `monetisation.py` within reach, it is the variant where the
-transformation is most obviously real, and it sidesteps the entire rights-clearance
-critical path while R5 is built behind it.
+**My recommendation, revised after the research:** build **Lane A first for the
+craft, Lane B first for the money.**
+
+Lane A (your own TikToks) remains the right way to build and prove R3/R4 — no
+clearance path, clean masters, and you can iterate on the edit quality without any
+compliance risk at all. But the earning path is Lane B: campaign clipping pays per
+verified view, the rights question is answered by enrolment rather than
+negotiation, and it does not require clearing the reused-content gate to make
+money. If the goal is revenue rather than a channel asset, Lane B is where this
+should point, and §6's gate becomes quality control rather than a gate on income.
+
+Long-form compilation over Shorts either way — it puts the watch-hours route in
+`monetisation.py` within reach, it is the variant where the transformation is most
+obviously real, and the 6-uploads/day quota ceiling makes high-volume Shorts a
+poor fit for YouTube specifically.
