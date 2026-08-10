@@ -8,12 +8,13 @@ import { VideoPreview } from "@/components/video-preview";
 import { useJobStream } from "@/lib/use-job-stream";
 import { DEMO_JOB } from "@/lib/demo";
 import type { Stage } from "@/lib/types";
-import type { Playlist } from "@studio/contracts";
+import type { BacklogIdea, Playlist } from "@studio/contracts";
 import {
-  ideaSuggestions,
+  ideaBacklog,
   improveTopic,
   loadPlaylists,
   publish,
+  refuseIdea,
   rerunFrom,
   startJob,
 } from "./actions";
@@ -69,10 +70,8 @@ export function CreateView({
     previousFormat: "short" | "long";
   } | null>(null);
   const [improving, setImproving] = useState(false);
-  /** Researched ideas for this channel's niche. Empty until the engine answers. */
-  const [ideas, setIdeas] = useState<
-    { topic: string; score: number; demand: number; why: string }[]
-  >([]);
+  /** The standing backlog for this channel's niche. Empty until the engine answers. */
+  const [ideas, setIdeas] = useState<BacklogIdea[]>([]);
   const [format, setFormat] = useState<"short" | "long">(resumeFormat);
   const [jobId, setJobId] = useState<string | null>(resumeJobId);
   const [demo, setDemo] = useState(false);
@@ -97,7 +96,7 @@ export function CreateView({
   useEffect(() => {
     if (jobId || demo) return;
     let cancelled = false;
-    ideaSuggestions().then((r) => {
+    ideaBacklog().then((r) => {
       if (!cancelled && r.ok && r.data) setIdeas(r.data);
     });
     return () => {
@@ -491,17 +490,18 @@ export function CreateView({
               Worth making next
             </h2>
             <p className="mt-1 text-[12px] text-[var(--color-faint)]">
-              Based on what you have made, ranked by real search demand.
+              Based on what you have made, ranked by real search demand. Making one
+              takes it off the list; dismissing it stops it coming back.
             </p>
             <ul className="mt-3 grid gap-1.5">
               {ideas.map((idea) => (
-                <li key={idea.topic}>
+                <li key={idea.id} className="group flex items-center gap-1">
                   <button
                     onClick={() => {
                       setTopic(idea.topic);
                       setImproved(null);
                     }}
-                    className="flex w-full items-baseline gap-3 rounded-[var(--radius-btn)] border border-transparent px-3 py-2.5 text-left transition-colors duration-150 hover:border-[var(--color-line)] hover:bg-[var(--color-surface)]"
+                    className="flex min-w-0 flex-1 items-baseline gap-3 rounded-[var(--radius-btn)] border border-transparent px-3 py-2.5 text-left transition-colors duration-150 hover:border-[var(--color-line)] hover:bg-[var(--color-surface)]"
                   >
                     <span className="min-w-0 flex-1 truncate text-[14px] text-[var(--color-ink)]">
                       {idea.topic}
@@ -509,6 +509,33 @@ export function CreateView({
                     <span className="mono shrink-0 text-[11px] text-[var(--color-faint)]">
                       {idea.why}
                     </span>
+                  </button>
+                  {/* Removed from the list here and refused in the engine, so it is
+                      not re-derived from the same published history next week. The
+                      row goes immediately rather than after the round trip: this is
+                      a list of suggestions, and one that lingers after you dismiss
+                      it feels broken in a way a rare failed delete does not. */}
+                  <button
+                    onClick={() => {
+                      setIdeas((current) => current.filter((i) => i.id !== idea.id));
+                      void refuseIdea(idea.id).then((result) => {
+                        if (result.ok) return;
+                        // Put it back. Removing optimistically is right — a list
+                        // that lingers after you dismiss one feels broken — but
+                        // *keeping* it removed after a failed write is worse: the
+                        // engine still has it, so it returns on the next load and
+                        // the dismissal looks like it silently un-did itself.
+                        setIdeas((current) =>
+                          current.some((i) => i.id === idea.id) ? current : [idea, ...current],
+                        );
+                        setError(result.error ?? "could not dismiss that idea");
+                      });
+                    }}
+                    aria-label={`Not interested in ${idea.topic}`}
+                    title="Not interested"
+                    className="shrink-0 rounded-[var(--radius-btn)] px-2 py-2 text-[13px] text-[var(--color-faint)] opacity-0 transition-opacity duration-150 hover:text-[var(--color-ink)] focus-visible:opacity-100 group-hover:opacity-100"
+                  >
+                    ×
                   </button>
                 </li>
               ))}

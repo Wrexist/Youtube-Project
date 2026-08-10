@@ -25,12 +25,13 @@ startup so a job that was mid-render when the process died comes back as
 from __future__ import annotations
 
 from dataclasses import asdict, fields
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 
 from engine.db import session
 from engine.insights import VideoRecord
@@ -38,6 +39,7 @@ from engine.insights import VideoRecord
 if TYPE_CHECKING:  # `review` imports this module at call time; keep the cycle unrun.
     from engine.review import Snapshot
 from engine.tables import (
+    BacklogIdea,
     Channel,
     ChannelLaunch,
     Job,
@@ -475,6 +477,186 @@ async def save_review_snapshot(
         return
     async with session() as db:
         db.add(ReviewSnapshot(payload=payload, video_count=video_count, report=report))
+
+
+async def add_backlog_ideas(ideas: list[dict], *, model: str = "", prompt: str = "") -> int:
+    """Put freshly scored ideas on the backlog. Returns how many were new.
+
+    Anything already on the list — open, made, or refused — is skipped rather than
+    updated. Re-scoring an idea the operator already said no to and floating it back
+    to the top is the behaviour a backlog exists to stop.
+
+    `model` and `prompt` are what produced the batch, and they are stored on every
+    row of it. CLAUDE.md #2 admits no exception for throwaway generations, and an
+    idea that shapes a whole video is not throwaway.
+
+    Insertion is per-row inside a savepoint. The pre-query filter is a *read*, so
+    two top-ups running at once can both pass it and then collide on the unique
+    index — one lost idea is acceptable, a 500 on the whole request is not. The
+    batch is also deduplicated first, because `_score` has no reason to guarantee
+    distinct topics and two identical ones in a single list would collide with each
+    other before any concurrency was involved.
+    """
+    if not _persistence_enabled() or not ideas:
+        return 0
+
+    unique: dict[str, dict] = {}
+    for idea in ideas:
+        topic = str(idea.get("topic") or "").strip()
+        if topic:
+            unique.setdefault(topic, idea)
+
+    added = 0
+    async with session() as db:
+        known = {
+            row
+            for (row,) in (
+                await db.execute(
+                    select(BacklogIdea.topic).where(BacklogIdea.topic.in_(list(unique)))
+                )
+            ).all()
+        }
+        for topic, idea in unique.items():
+            if topic in known:
+                continue
+            try:
+                async with db.begin_nested():
+                    db.add(
+                        BacklogIdea(
+                            topic=topic,
+                            score=float(idea.get("score") or 0.0),
+                            demand=float(idea.get("demand") or 0.0),
+                            competition=float(idea.get("competition") or 0.0),
+                            why=idea.get("why") or "",
+                            model=model,
+                            prompt=prompt,
+                        )
+                    )
+            except IntegrityError:
+                # Another top-up won the race for this topic. It is on the list
+                # either way, which is the outcome that matters.
+                logger.debug("backlog topic {!r} was added concurrently", topic)
+                continue
+            added += 1
+    return added
+
+
+async def open_backlog_ideas(limit: int = 20) -> list[dict]:
+    """The unmade, unrefused ideas, best first."""
+    if not _persistence_enabled():
+        return []
+    async with session() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(BacklogIdea)
+                    .where(BacklogIdea.status == "open")
+                    .order_by(BacklogIdea.score.desc(), BacklogIdea.created_at)
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        {
+            "id": r.id,
+            "topic": r.topic,
+            "score": r.score,
+            "demand": r.demand,
+            "competition": r.competition,
+            "why": r.why,
+        }
+        for r in rows
+    ]
+
+
+async def resolve_backlog_idea(
+    *, idea_id: int | None = None, topic: str | None = None, status: str, job_id: str | None = None
+) -> bool:
+    """Take an idea off the list, by id or by topic. True if one was open.
+
+    By topic as well as by id because that is how an idea gets *used*: the Create
+    screen sends a topic to `POST /v1/jobs` and never mentions the backlog, so the
+    only thing linking the two is the string.
+    """
+    if not _persistence_enabled() or (idea_id is None and topic is None):
+        return False
+
+    # One conditional UPDATE, not select-then-mutate. Two callers racing on the same
+    # row would both have seen it `open`, both written, and both returned True — so
+    # re-running a topic could overwrite the `job_id` of the job that genuinely
+    # consumed the idea. `rowcount` makes exactly one of them win.
+    statement = (
+        update(BacklogIdea)
+        .where(BacklogIdea.status == "open")
+        .values(status=status, job_id=job_id, resolved_at=datetime.now(UTC))
+    )
+    statement = (
+        statement.where(BacklogIdea.id == idea_id)
+        if idea_id is not None
+        else statement.where(BacklogIdea.topic == topic)
+    )
+
+    async with session() as db:
+        result = await db.execute(statement)
+    return bool(result.rowcount)
+
+
+async def spend_by_day(days: int = 90) -> list[tuple[str, float, int]]:
+    """What the channel cost, per UTC day: `(date, usd, jobs)`, oldest first.
+
+    Read off the `jobs` table rather than out of `automation.SpendLedger`. The
+    ledger is in-memory, series-scoped and written by nothing, so persisting it
+    would mean inventing a second record of a number the jobs table already holds
+    — and the jobs table is the one that is actually true, because `cost_usd` is
+    written there by the same stage boundary that spends the money.
+
+    Grouped in Python, not in SQL. `date_trunc` is Postgres, `strftime` is SQLite,
+    and this runs on both; ninety days of jobs is a few hundred rows.
+    """
+    if not _persistence_enabled():
+        return []
+    since = datetime.now(UTC) - timedelta(days=days)
+    async with session() as db:
+        rows = (
+            await db.execute(select(Job.created_at, Job.cost_usd).where(Job.created_at >= since))
+        ).all()
+
+    totals: dict[str, tuple[float, int]] = {}
+    for created_at, cost in rows:
+        # SQLite hands back naive datetimes even for a timezone-aware column, so
+        # a bare `.astimezone()` would read them as *local* and shift a late-night
+        # job into the next day.
+        moment = created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
+        key = moment.astimezone(UTC).date().isoformat()
+        usd, count = totals.get(key, (0.0, 0))
+        totals[key] = (usd + (cost or 0.0), count + 1)
+
+    return [(day, round(usd, 4), count) for day, (usd, count) in sorted(totals.items())]
+
+
+async def completed_video_costs(days: int = 90) -> list[float]:
+    """What each finished video actually cost, for the per-video average.
+
+    `workflow == "video"` on purpose. A publish job is a separate row that costs
+    almost nothing, and counting it would halve the apparent price of a video by
+    adding a near-zero sample rather than by making anything cheaper.
+    """
+    if not _persistence_enabled():
+        return []
+    since = datetime.now(UTC) - timedelta(days=days)
+    async with session() as db:
+        rows = (
+            await db.execute(
+                select(Job.cost_usd).where(
+                    Job.created_at >= since,
+                    Job.status == "completed",
+                    Job.workflow == "video",
+                )
+            )
+        ).all()
+    return [cost or 0.0 for (cost,) in rows]
 
 
 async def latest_review() -> dict | None:

@@ -141,6 +141,69 @@
         "title": "AutoScheduleRequest",
         "type": "object"
       },
+      "Backlog": {
+        "properties": {
+          "based_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Based On",
+            "type": "array"
+          },
+          "ideas": {
+            "items": {
+              "$ref": "#/components/schemas/BacklogIdeaOut"
+            },
+            "title": "Ideas",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ideas",
+          "based_on"
+        ],
+        "title": "Backlog",
+        "type": "object"
+      },
+      "BacklogIdeaOut": {
+        "description": "A suggestion that has been written down, so it can be referred to later.",
+        "properties": {
+          "competition": {
+            "title": "Competition",
+            "type": "number"
+          },
+          "demand": {
+            "title": "Demand",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "score",
+          "demand",
+          "competition",
+          "why",
+          "id"
+        ],
+        "title": "BacklogIdeaOut",
+        "type": "object"
+      },
       "Brief": {
         "properties": {
           "cost_usd": {
@@ -1362,6 +1425,73 @@
           "note"
         ],
         "title": "ShortsOut",
+        "type": "object"
+      },
+      "Spend": {
+        "description": "What this channel has cost, over time.\n\nCost has always been metered per stage and capped per video, and nothing could\nanswer \"what have I spent this month\" \u2014 the one question that decides whether\nthe product is usable at volume rather than once.",
+        "properties": {
+          "completed_videos": {
+            "title": "Completed Videos",
+            "type": "integer"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/SpendDay"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "month_usd": {
+            "title": "Month Usd",
+            "type": "number"
+          },
+          "per_video_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Video Usd"
+          },
+          "total_usd": {
+            "title": "Total Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "days",
+          "total_usd",
+          "month_usd",
+          "per_video_usd",
+          "completed_videos"
+        ],
+        "title": "Spend",
+        "type": "object"
+      },
+      "SpendDay": {
+        "properties": {
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "jobs": {
+            "title": "Jobs",
+            "type": "integer"
+          },
+          "usd": {
+            "title": "Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "date",
+          "usd",
+          "jobs"
+        ],
+        "title": "SpendDay",
         "type": "object"
       },
       "Style": {
@@ -2705,6 +2835,88 @@
         "summary": "Get File"
       }
     },
+    "/v1/ideas/backlog": {
+      "get": {
+        "description": "The standing list of ideas, best first, topped up when it runs short.\n\nThe suggestions endpoint proposes, scores, shows and forgets \u2014 a cache with a\nthirty-minute life and no memory of what the operator already refused. This is\nthe same research, kept.\n\nTopping up is lazy on purpose: generating costs a model call and an\nautocomplete sweep per candidate, so it happens when the list is nearly empty\nrather than on a schedule nobody asked for.",
+        "operationId": "backlog_v1_ideas_backlog_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 6,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backlog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Backlog",
+        "tags": [
+          "ideas"
+        ]
+      }
+    },
+    "/v1/ideas/backlog/{idea_id}/dismiss": {
+      "post": {
+        "description": "Refuse an idea, permanently.\n\nThe row is kept rather than deleted. \"I said no to this\" is a reason not to\npropose it again, and a delete forgets that \u2014 the adjacency generator would\ncheerfully re-derive it from the same published history next week.",
+        "operationId": "dismiss_v1_ideas_backlog__idea_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idea_id",
+            "required": true,
+            "schema": {
+              "title": "Idea Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss",
+        "tags": [
+          "ideas"
+        ]
+      }
+    },
     "/v1/ideas/suggestions": {
       "get": {
         "operationId": "suggestions_v1_ideas_suggestions_get",
@@ -3876,6 +4088,51 @@
         "summary": "Report",
         "tags": [
           "setup"
+        ]
+      }
+    },
+    "/v1/spend": {
+      "get": {
+        "operationId": "spend_v1_spend_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 90,
+              "maximum": 365,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Spend"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Spend",
+        "tags": [
+          "insights"
         ]
       }
     },
