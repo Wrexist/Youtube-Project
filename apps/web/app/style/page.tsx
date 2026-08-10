@@ -37,16 +37,9 @@ export default async function StylePage() {
     <>
       <Header
         title="Style"
-        meta={
-          <span className="flex items-center gap-2">
-            <LiveBadge live={live} />
-            {!live && (
-              <span className="rounded-full border border-[var(--color-line)] px-2 py-0.5 text-[11px] text-[var(--color-faint)]">
-                demo data
-              </span>
-            )}
-          </span>
-        }
+        // `LiveBadge` is already the "demo data" chip and renders nothing when the
+        // engine is up, so the conditional span beside it was the same label twice.
+        meta={<LiveBadge live={live} />}
       />
       <Page>
         <StyleView initial={style ?? DEMO_STYLE} demo={!live} />
