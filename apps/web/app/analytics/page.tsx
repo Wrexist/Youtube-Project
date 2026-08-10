@@ -2,8 +2,13 @@ import { Header, Page, Card } from "@/components/ui";
 import { LiveBadge } from "@/components/live-badge";
 import { MonetisationCard } from "@/components/monetisation";
 import { ShortCuts } from "@/components/short-cuts";
+import { SpendCard } from "@/components/spend-card";
 import { NoReviewYet, WeeklyReview } from "@/components/weekly-review";
-import { getMonetisation, getReview, getSetup } from "@/lib/engine";
+import { getMonetisation, getReview, getSetup, getSpend } from "@/lib/engine";
+
+/** Ninety days: long enough to see a month-over-month change, short enough that
+ *  the daily bars stay legible at this width. */
+const SPEND_DAYS = 90;
 import { BigNumber, StatTile, RetentionMap } from "@/components/charts";
 import {
   VIEWS_28D,
@@ -35,10 +40,11 @@ export default async function AnalyticsPage() {
   // the badges have to say so separately. KNOWN-ISSUES §5.5.
   // Together rather than in sequence: three independent reads, and awaiting them
   // one after another makes the slowest page on the app the sum of them.
-  const [monetisation, review, setup] = await Promise.all([
+  const [monetisation, review, setup, spend] = await Promise.all([
     getMonetisation(),
     getReview(),
     getSetup(),
+    getSpend(SPEND_DAYS),
   ]);
   const total = VIEWS_28D.reduce((a, b) => a + b, 0);
   const confirmed = FINDINGS.filter((f) => f.verdict === "confirmed");
@@ -68,6 +74,16 @@ export default async function AnalyticsPage() {
             screen that says what *changed* — everything else is a level, and a
             level you have already seen is not news. Rendered even when there is
             nothing yet, because "no review has run" has a cause worth naming. */}
+        {/* Real, like monetisation and unlike everything below it — the numbers
+            come from the jobs table, which exists whether or not a channel is
+            connected. Rendered only when the engine answered; a spend card
+            reading $0 because a request failed is a lie about money. */}
+        {spend && (
+          <section className="pb-10">
+            <SpendCard spend={spend} days={SPEND_DAYS} />
+          </section>
+        )}
+
         <section className="pb-10">
           {review ? (
             <WeeklyReview review={review} />
