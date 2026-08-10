@@ -73,12 +73,38 @@ Check what is configured at any time:
 apps/engine/.venv/bin/python apps/engine/scripts/doctor.py
 ```
 
-Upgrades, both optional: `docker compose up -d` for Postgres and Redis, then
-`apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings` to run renders
-in a worker so restarting the API cannot kill one. Or
-`docker compose --profile full up -d` for the whole stack in containers.
+Optional: `docker compose --profile full up -d` runs the whole stack in containers.
 
 On Windows the interpreter is at `.venv/Scripts/python`.
+
+### Durable renders
+
+`npm start` reports one of two states on its third line:
+
+```text
+renders  durable — queued through redis at localhost:6379
+renders  not durable — no redis at localhost:6379, so they run inside …
+```
+
+Without a Redis, a render runs inside the API process and dies with it — a restart,
+a crash, or an edit to any engine file, since the engine runs under `--reload`. A
+forty-minute render is a long time to lose. With one, `npm start` also starts the
+arq worker (and restarts it if it falls over), the render survives, and the weekly
+review cron finally has a process to fire in.
+
+Getting a Redis, in order of least effort:
+
+```bash
+docker compose up -d redis          # if you have Docker
+wsl -e sudo service redis-server start   # WSL, after: sudo apt install redis-server
+```
+
+On Windows without either, [Memurai](https://www.memurai.com) is a native
+Redis-compatible service with a free developer edition. Point Studio at anything
+non-default with `STUDIO_REDIS_URL` in `apps/engine/.env`.
+
+`STUDIO_WORKER=0` skips the worker even when Redis is up, for running `arq`
+yourself with different settings.
 
 ## Layout
 

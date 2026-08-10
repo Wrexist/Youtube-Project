@@ -25,6 +25,15 @@ export interface Stage {
   elapsed_ms: number;
   error: string | null;
   editable: boolean;
+  /**
+   * How far through a running stage is, 0..1, or null when it has not said.
+   *
+   * Only the long stages report it — `compose.py` sends 0.05 downloading, 0.25
+   * composing, 0.72 placing beats, 0.75 subtitles, 0.85 encoding — and even those
+   * emit keepalives with no fraction in between. So null is normal, not an error,
+   * and it means "show an indeterminate bar" rather than "show zero".
+   */
+  progress?: number | null;
   /** Populated for stages that produce pickable alternatives (hook, titles, thumbnail). */
   variants?: Variant[];
   detail?: string;

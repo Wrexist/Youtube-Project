@@ -106,10 +106,20 @@ export function reduceJobStream(state: JobStream, action: Action): JobStream {
     case "workflow.started":
       return { ...state, status: "running", error: null, stages };
     case "stage.started":
-      patch({ status: "running", error: null });
+      // `progress: null` matters on a re-run: the row still carries whatever
+      // fraction it reached last time, and starting again at a stale 85% is a
+      // worse lie than showing nothing.
+      patch({ status: "running", error: null, progress: null });
       break;
     case "stage.progress":
-      patch({ summary: event.message ?? null });
+      // Spread, not `?? null`. `WorkflowContext.progress` sends a bare message for
+      // its keepalive — "still working — 240s elapsed" — and writing null on those
+      // would drop the bar back to indeterminate every few seconds for the whole
+      // of a forty-minute render.
+      patch({
+        summary: event.message ?? null,
+        ...(typeof event.fraction === "number" ? { progress: event.fraction } : {}),
+      });
       break;
     case "stage.completed":
       // `summary` and `elapsed_ms` are both on the frame (base.py's `_run_stage`)
@@ -141,6 +151,10 @@ export function reduceJobStream(state: JobStream, action: Action): JobStream {
     case "stage.retrying":
       patch({
         status: "running",
+        // Same reason as `stage.started`: the attempt begins again from nothing,
+        // and leaving the bar where the failed attempt left it would show a stage
+        // that is starting over as nearly finished.
+        progress: null,
         summary: `retrying (attempt ${event.attempt ?? 1}) — ${event.error ?? ""}`,
       });
       break;

@@ -111,6 +111,37 @@ body {
 }
 .rise { animation: rise 0.4s var(--ease-in-out) both; }
 
+/* The filled part of a determinate progress bar.
+   400ms because UI-DESIGN.md gives pipeline stage transitions 400ms, and these
+   fractions arrive in jumps — 0.25 to 0.72 is one event — so an untweened width
+   would teleport. */
+.progress-fill {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  transition: width 0.4s var(--ease-in-out);
+}
+
+/* The same sheen the skeleton uses, on the fill — opt-in, and only the per-stage
+   bar opts in.
+   Not decoration there. The fractions are beat-weighted, so a beat with heavy
+   footage holds one number for minutes, and a bar frozen at 72% is
+   indistinguishable from a dead render; the sheen is what says the difference.
+   The job-level rail does not get it: one thing on a card should be moving, and
+   a second shimmer at full width is the noise this design spends its whole
+   budget avoiding. */
+.progress-fill.is-live::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.3), transparent);
+  animation: shimmer 1.6s infinite;
+}
+
 @keyframes pulse-ring {
   0%   { box-shadow: 0 0 0 0 rgb(255 59 48 / 0.4); }
   70%  { box-shadow: 0 0 0 6px rgb(255 59 48 / 0); }

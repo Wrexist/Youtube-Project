@@ -297,6 +297,13 @@ Not features; each is under an hour and each has bitten already.
   audited on had a sandbox tool granting a service group read on `Downloads` by
   inheritance, so `.env` was readable by two other local accounts. `secretfile.py`
   now sets an explicit DACL at both write sites. KNOWN-ISSUES §5.9.
+- **The type scale has drifted from the spec.** `docs/UI-DESIGN.md` says 12·14·16·20·32.
+  The app uses 12 (99 times), 13 (80), 11 (44), 14 (19) and 15 (11) for text, plus
+  one-off display sizes at 22, 24, 28, 30 and 52 — and 9px and 10px in the calendar
+  grid, which is below any legibility floor. Colours are clean (zero raw hex in any
+  `.tsx`) and weights now are too, so this is the last real drift. It wants one
+  deliberate pass — either the doc adopts 11/13/15 or ~250 call sites change — not
+  a blind find-and-replace.
 - **No route declares its error responses.** Seven routers raise `HTTPException`
   with 404/409/502/503; the OpenAPI schema advertises only 200 and 422, so
   `packages/contracts` cannot type a failure. Worth fixing as one pass over every

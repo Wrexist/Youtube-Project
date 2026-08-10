@@ -119,16 +119,52 @@ export const DEMO_STAGES: Stage[] = [
   {
     name: "voiceover",
     title: "Voiceover",
-    status: "running",
-    summary: null,
+    status: "done",
+    summary: "8:02 · edge-tts en-US-AndrewNeural",
     cost_usd: 0,
-    elapsed_ms: 18000,
+    elapsed_ms: 51000,
     error: null,
     editable: false,
   },
-  { ...blank("subtitles", "Subtitles") },
-  { ...blank("materials", "Materials") },
-  { ...blank("render", "Render") },
+  {
+    name: "subtitles",
+    title: "Subtitles",
+    status: "done",
+    summary: "214 cues · from TTS timings",
+    cost_usd: 0,
+    elapsed_ms: 2100,
+    error: null,
+    editable: true,
+  },
+  {
+    name: "materials",
+    title: "Materials",
+    status: "done",
+    summary: "22 clips · 4 generated",
+    cost_usd: 0.54,
+    elapsed_ms: 96000,
+    error: null,
+    editable: false,
+  },
+  {
+    // The demo stops here on purpose. Render is the stage that takes minutes
+    // rather than seconds, it is the only one people ask "has this failed?"
+    // about, and it is one of the four that actually reports a fraction — so
+    // parking the demo mid-render is what lets the progress bar be judged
+    // without an engine, which is what demo.ts is for.
+    //
+    // The message and the number are both real: `compose.py` emits exactly
+    // "placing beats" at 0.72.
+    name: "render",
+    title: "Render",
+    status: "running",
+    summary: "placing beats",
+    progress: 0.72,
+    cost_usd: 0,
+    elapsed_ms: 418000,
+    error: null,
+    editable: false,
+  },
   { ...blank("titles", "Titles") },
   { ...blank("description", "Description") },
   { ...blank("tags", "Tags") },
