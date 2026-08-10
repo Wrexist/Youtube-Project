@@ -47,12 +47,15 @@ import {
   recordGrant,
   dismissClip,
   selectClip,
+  evaluateTimeline,
 } from "@/lib/engine";
 import { ONBOARDED_COOKIE, ONBOARDED_MAX_AGE } from "@/lib/onboarding";
 import type {
   BacklogIdea,
   ClipGrant,
   ClipGrantRequest,
+  OriginalityReport,
+  TimelineRequest,
   Brief,
   Diagnostics,
   JobRequest,
@@ -612,6 +615,54 @@ export async function chooseClip(sourceId: string): Promise<ActionResult> {
     await selectClip(sourceId);
     revalidatePath("/repurpose");
     return { ok: true };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+
+/**
+ * Score a proposed episode before building it.
+ *
+ * The rights half of the answer is *real* — those grants exist now. The
+ * transformation half is a projection: narration, cuts and the audio bed are
+ * decided by the workflow, so the finished edit is what gets judged. The screen
+ * says which half is which rather than presenting one number, for the same reason
+ * the report itself carries two verdicts.
+ */
+export async function previewEpisode(
+  timeline: TimelineRequest,
+): Promise<ActionResult<OriginalityReport>> {
+  try {
+    return { ok: true, data: await evaluateTimeline(timeline) };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+/** Start the repurpose workflow for the selected clips. */
+export async function buildEpisode(input: {
+  topic: string;
+  sourceIds: string[];
+  aspect: "9:16" | "16:9";
+  segmentSeconds: number;
+}): Promise<ActionResult<{ job_id: string }>> {
+  try {
+    const created = await createJob({
+      topic: input.topic,
+      format: input.aspect === "9:16" ? "short" : "long",
+      aspect: input.aspect,
+      workflow: "repurpose",
+      repurpose: {
+        source_ids: input.sourceIds,
+        segment_seconds: input.segmentSeconds,
+        // The description is written by the SEO stage after the gate runs, so
+        // this is a commitment the workflow keeps rather than a fact it checks.
+        attribution_in_description: true,
+      },
+    } as Parameters<typeof createJob>[0]);
+    revalidatePath("/repurpose");
+    return { ok: true, data: created as { job_id: string } };
   } catch (error) {
     return { ok: false, error: message(error) };
   }

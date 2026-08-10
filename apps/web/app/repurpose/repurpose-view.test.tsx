@@ -59,7 +59,7 @@ describe("rights gating", () => {
 
     fireEvent.click(add);
 
-    expect(screen.getByText(/1 selected/)).toBeInTheDocument();
+    expect(screen.getByText(/from 1 clip/i)).toBeInTheDocument();
   });
 
   it("marks rights state with a symbol as well as a colour", () => {
@@ -70,11 +70,22 @@ describe("rights gating", () => {
 });
 
 describe("the build action", () => {
-  it("stays disabled with nothing selected, and says why", () => {
+  it("offers no episode at all until a clip is added", () => {
+    // The builder is absent rather than present-and-empty: a Build button with
+    // nothing to build is the inert control queue/page.tsx rules out.
     renderView();
-    const build = screen.getByRole("button", { name: /build episode/i });
-    expect(build).toBeDisabled();
-    expect(build).toHaveAttribute("title", expect.stringMatching(/engine|cleared clip/i));
+
+    expect(screen.queryByRole("button", { name: /build episode/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/add a cleared clip to start an episode/i)).toBeInTheDocument();
+  });
+
+  it("appears once a cleared clip is added", () => {
+    renderView();
+
+    const card = screen.getByRole("article", { name: /compound interest/i });
+    fireEvent.click(within(card).getByRole("button", { name: /add to episode/i }));
+
+    expect(screen.getByRole("button", { name: /build episode/i })).toBeInTheDocument();
   });
 
   it("stays disabled in demo mode even once a clip is selected", () => {

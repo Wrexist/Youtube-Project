@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Clip, ClipGrantRequest } from "@studio/contracts";
 import { Button, Card, Empty } from "@/components/ui";
 import { saveGrant } from "@/app/actions";
+import { EpisodeBuilder } from "./episode-builder";
 import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
 
 type DemoClip = (typeof REPURPOSE_CLIPS)[number];
@@ -100,9 +101,6 @@ export function RepurposeView({
   const open = rows.find((r) => r.id === openId) ?? null;
 
   const buildable = selected.length > 0;
-  const totalSeconds = rows
-    .filter((r) => selected.includes(r.id))
-    .reduce((sum, r) => sum + r.duration, 0);
 
   if (rows.length === 0) {
     return (
@@ -174,27 +172,26 @@ export function RepurposeView({
         })}
       </div>
 
-      {/* The one primary action, and the running length beside it. */}
-      <div className="sticky bottom-0 flex items-center gap-4 border-t border-[var(--color-line)] bg-[var(--color-bg)]/85 py-4 backdrop-blur">
-        <span className="mono text-[13px] text-[var(--color-muted)]">
-          {selected.length} selected
-          {buildable && ` · ${Math.floor(totalSeconds / 60)}:${String(Math.round(totalSeconds % 60)).padStart(2, "0")}`}
-        </span>
-        <div className="ml-auto">
-          <Button
-            disabled={!buildable || !live}
-            title={
-              !live
-                ? "Building an episode needs the engine running"
-                : !buildable
-                  ? "Select at least one cleared clip"
-                  : undefined
-            }
-          >
-            Build episode
-          </Button>
-        </div>
-      </div>
+      {buildable ? (
+        <EpisodeBuilder
+          clips={rows
+            .filter((r) => selected.includes(r.id))
+            .map((r) => ({
+              id: r.id,
+              handle: r.handle,
+              caption: r.caption,
+              duration: r.duration,
+              lane: r.lane,
+              cleared: r.cleared,
+            }))}
+          live={live}
+          onRemove={(id) => setSelected((current) => current.filter((s) => s !== id))}
+        />
+      ) : (
+        <p className="text-[13px] text-[var(--color-muted)]">
+          Add a cleared clip to start an episode.
+        </p>
+      )}
 
       <OriginalityCard report={demoReport} live={live} />
 
