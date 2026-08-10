@@ -1812,6 +1812,7 @@ export interface components {
              * @default short
              */
             format: string;
+            repurpose?: components["schemas"]["RepurposeInputs"] | null;
             /** Target Seconds */
             target_seconds?: number | null;
             /** Topic */
@@ -2090,6 +2091,76 @@ export interface components {
             /** Thresholds Version */
             thresholds_version: number;
             transformation: components["schemas"]["TransformationVerdictOut"];
+        };
+        /**
+         * RepurposeInputs
+         * @description What the `repurpose` workflow needs beyond a topic.
+         *
+         *     Nested rather than flattened onto `JobRequest`: these eleven fields are
+         *     meaningless to the Create screen, and hanging them off the request every
+         *     generation reads would make the common case harder to see than the rare one.
+         *
+         *     `source_ids` is the only required field, and it is required by
+         *     `RightsStage` rather than here — a validator that rejected an empty list would
+         *     produce a 422 saying "field required" where the workflow produces "no clips
+         *     selected — pick at least one on the Repurpose screen".
+         */
+        RepurposeInputs: {
+            /**
+             * Annotated
+             * @default false
+             */
+            annotated: boolean;
+            /**
+             * Attribution In Description
+             * @default false
+             */
+            attribution_in_description: boolean;
+            /**
+             * Attribution On Screen
+             * @default false
+             */
+            attribution_on_screen: boolean;
+            /**
+             * Audio Bed Replaced
+             * @default false
+             */
+            audio_bed_replaced: boolean;
+            /**
+             * Cut Count
+             * @default 0
+             */
+            cut_count: number;
+            /** Media Urls */
+            media_urls?: {
+                [key: string]: string;
+            };
+            /** Original Segments */
+            original_segments?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Platform
+             * @default youtube
+             */
+            platform: string;
+            /**
+             * Project Id
+             * @default
+             */
+            project_id: string;
+            /**
+             * Segment Seconds
+             * @default 20
+             */
+            segment_seconds: number;
+            /** Source Ids */
+            source_ids?: string[];
+            /**
+             * Thesis
+             * @default
+             */
+            thesis: string;
         };
         /** RerunRequest */
         RerunRequest: {

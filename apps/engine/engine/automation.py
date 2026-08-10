@@ -73,6 +73,10 @@ class VideoState:
     render_ok: bool = False
     title: str = ""
     critique_severity: int = 0
+    #: The originality report, for a video built from third-party clips. None when
+    #: the video used no clips, which is the ordinary case and is not a failure —
+    #: a wholly original video has nothing for that gate to judge.
+    originality: dict | None = None
 
 
 class Stage(StrEnum):
@@ -225,6 +229,33 @@ def publish_blockers(video: VideoState, series: Series) -> list[Blocker]:  # noq
                 message=(
                     "This video has no research sources attached. Add at least "
                     "one source before publishing to ensure factual grounding."
+                ),
+            )
+        )
+
+    # The originality gate, re-checked at the approval gate.
+    #
+    # Not redundant with `OriginalityStage`, which raises and stops the run. Two
+    # routes get around that stage and both end here: a stage output edited by
+    # hand through `POST /v1/jobs/{id}/edit`, and a grant that lapsed between the
+    # build and the publish — a campaign that ended last week does not retract the
+    # report it passed under. Enforcement belongs at the gate that spends the 1,600
+    # quota units, not only at the one that produced the file.
+    if video.originality is not None and not video.originality.get("publishable", False):
+        report = video.originality
+        reasons = [
+            signal["message"]
+            for signal in report.get("transformation", {}).get("signals", [])
+            if signal.get("severity") == "block"
+        ]
+        if not report.get("rights", {}).get("cleared", True):
+            reasons.insert(0, "the footage is not cleared for use")
+        blockers.append(
+            Blocker(
+                code="not_original_enough",
+                message=(
+                    report.get("headline", "This video did not pass the originality gate.")
+                    + (" " + " ".join(reasons) if reasons else "")
                 ),
             )
         )

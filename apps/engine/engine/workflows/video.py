@@ -13,7 +13,7 @@ Stage order matters and is not arbitrary:
 
 from __future__ import annotations
 
-from engine.workflows import media, publish, script, seo
+from engine.workflows import media, publish, repurpose, script, seo
 from engine.workflows.base import Workflow
 
 # The SEO stages read the script, but they cannot say so in `seo.py`: the standalone
@@ -115,6 +115,11 @@ WORKFLOWS = {
     "script": Workflow("script", script.SCRIPT_STAGES),
     "seo": Workflow("seo", seo.SEO_STAGES),
     "publish": PUBLISH_WORKFLOW,
+    # Clips in, publishable video out. Its own workflow rather than a branch of
+    # "video" because the first thing it does is refuse: `RightsStage` runs before
+    # anything is fetched or spent, and folding that into the video workflow would
+    # put a rights check in front of every generation that has no clips at all.
+    "repurpose": repurpose.REPURPOSE_WORKFLOW,
 }
 
 
@@ -124,7 +129,7 @@ WORKFLOWS = {
 #: 202, ran the entire paid render, and then died on a bare
 #: `KeyError: 'youtube_client'` in UploadStage — which has max_attempts = 1, so
 #: there was not even a retry to make the cause visible.
-STARTABLE = frozenset({"video", "script", "seo"})
+STARTABLE = frozenset({"video", "script", "seo", "repurpose"})
 
 
 def get(name: str) -> Workflow:

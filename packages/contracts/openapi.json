@@ -908,6 +908,16 @@
             "title": "Format",
             "type": "string"
           },
+          "repurpose": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepurposeInputs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "target_seconds": {
             "anyOf": [
               {
@@ -1491,6 +1501,80 @@
           "transformation"
         ],
         "title": "ReportOut",
+        "type": "object"
+      },
+      "RepurposeInputs": {
+        "description": "What the `repurpose` workflow needs beyond a topic.\n\nNested rather than flattened onto `JobRequest`: these eleven fields are\nmeaningless to the Create screen, and hanging them off the request every\ngeneration reads would make the common case harder to see than the rare one.\n\n`source_ids` is the only required field, and it is required by\n`RightsStage` rather than here \u2014 a validator that rejected an empty list would\nproduce a 422 saying \"field required\" where the workflow produces \"no clips\nselected \u2014 pick at least one on the Repurpose screen\".",
+        "properties": {
+          "annotated": {
+            "default": false,
+            "title": "Annotated",
+            "type": "boolean"
+          },
+          "attribution_in_description": {
+            "default": false,
+            "title": "Attribution In Description",
+            "type": "boolean"
+          },
+          "attribution_on_screen": {
+            "default": false,
+            "title": "Attribution On Screen",
+            "type": "boolean"
+          },
+          "audio_bed_replaced": {
+            "default": false,
+            "title": "Audio Bed Replaced",
+            "type": "boolean"
+          },
+          "cut_count": {
+            "default": 0,
+            "title": "Cut Count",
+            "type": "integer"
+          },
+          "media_urls": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Media Urls",
+            "type": "object"
+          },
+          "original_segments": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Original Segments",
+            "type": "array"
+          },
+          "platform": {
+            "default": "youtube",
+            "title": "Platform",
+            "type": "string"
+          },
+          "project_id": {
+            "default": "",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "segment_seconds": {
+            "default": 20.0,
+            "title": "Segment Seconds",
+            "type": "number"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          },
+          "thesis": {
+            "default": "",
+            "title": "Thesis",
+            "type": "string"
+          }
+        },
+        "title": "RepurposeInputs",
         "type": "object"
       },
       "RerunRequest": {
