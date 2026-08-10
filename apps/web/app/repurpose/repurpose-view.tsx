@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { Clip } from "@studio/contracts";
+import type { Clip, ClipGrantRequest } from "@studio/contracts";
 import { Button, Card, Empty } from "@/components/ui";
+import { saveGrant } from "@/app/actions";
 import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
 
 type DemoClip = (typeof REPURPOSE_CLIPS)[number];
@@ -301,6 +302,39 @@ function ClipPanel({
   onClose: () => void;
 }) {
   const [lane, setLane] = useState<string>(clip.lane ?? "own");
+  const [grantor, setGrantor] = useState("");
+  const [evidence, setEvidence] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<{
+    error?: string;
+    blockers?: { code: string; message: string }[];
+    saved?: boolean;
+  } | null>(null);
+
+  // Lane A has no counterparty, so it needs nothing. Lane B does, and the button
+  // stays disabled until it has it — the engine refuses an unevidenced grant, and
+  // finding that out after a round trip is a worse version of the same answer.
+  const complete = lane === "own" || (grantor.trim() !== "" && evidence.trim() !== "");
+
+  async function submit() {
+    setSaving(true);
+    setResult(null);
+    const outcome = await saveGrant(clip.id, {
+      lane: lane as ClipGrantRequest["lane"],
+      grantor: grantor.trim(),
+      evidence_kind: lane === "campaign" ? "campaign_enrolment" : "self",
+      evidence_ref: lane === "campaign" ? evidence.trim() : "self",
+      platforms: [],
+      rules: "",
+      expires_at: null,
+    });
+    setSaving(false);
+    setResult(
+      outcome.ok
+        ? { saved: true }
+        : { error: outcome.error, blockers: outcome.blockers },
+    );
+  }
 
   return (
     <div
@@ -355,6 +389,8 @@ function ClipPanel({
           <label className="flex flex-col gap-1.5">
             <span className="text-[12px] text-[var(--color-faint)]">Who runs the campaign</span>
             <input
+              value={grantor}
+              onChange={(event) => setGrantor(event.target.value)}
               className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-raised)] px-3 py-2 text-[13px]"
               placeholder="@streamer"
             />
@@ -364,6 +400,8 @@ function ClipPanel({
               Link to the enrolment or terms
             </span>
             <input
+              value={evidence}
+              onChange={(event) => setEvidence(event.target.value)}
               className="rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-raised)] px-3 py-2 text-[13px]"
               placeholder="https://…"
             />
@@ -376,14 +414,44 @@ function ClipPanel({
         </div>
       )}
 
-      <div className="mt-6">
+      <div className="mt-6 flex items-center gap-3">
         <Button
-          disabled={!live}
-          title={!live ? "Recording a grant needs the engine running" : undefined}
+          onClick={submit}
+          disabled={!live || saving || !complete || result?.saved}
+          title={
+            !live
+              ? "Recording a grant needs the engine running"
+              : !complete
+                ? "Name who runs the campaign and link the terms"
+                : undefined
+          }
         >
-          Record
+          {saving ? "Recording…" : result?.saved ? "Recorded" : "Record"}
         </Button>
+        {result?.saved && (
+          <span className="text-[12px] text-[var(--color-ok)]">
+            Cleared to use — the edit is still judged separately.
+          </span>
+        )}
       </div>
+
+      {/* One line per problem, never summarised. A missing grantor and a missing
+          evidence link are two fixes, and collapsing them sends the operator
+          round the loop twice. */}
+      {result?.error && (
+        <div className="mt-3 rounded-[var(--radius-card)] border border-[var(--color-bad)] p-3">
+          <p className="text-[13px] font-semibold text-[var(--color-bad)]">{result.error}</p>
+          {result.blockers && (
+            <ul className="mt-2 flex flex-col gap-1">
+              {result.blockers.map((problem) => (
+                <li key={problem.code} className="text-[12px] text-[var(--color-muted)]">
+                  {problem.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       <p className="mt-6 border-t border-[var(--color-line)] pt-4 text-[12px] text-[var(--color-muted)]">
         Recording rights does not make the finished video monetisable. YouTube judges reuse

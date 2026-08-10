@@ -4,8 +4,10 @@
 channel, clears the right to use them, rebuilds them into something YouTube will
 monetise, and hands the result to the pipeline that already exists.
 
-This document is the design. **R0 (the rights spine) and R4 (the originality gate)
-are built** — see §7 for what that covers and what is still ahead. Read
+This document is the design. **R0–R5 are built apart from the compositing step**
+— the rights ledger, discovery, fit scoring, Lane A acquisition, cut selection,
+the originality gate and its enforcement at the publish gate all run. What remains
+is the render itself; see §7. Read
 [the finding](#1-the-finding-that-reshapes-the-brief) first — it changes one of the
 four stated requirements, and the reason is technical, not squeamish. Then
 [RESEARCH §2](REPURPOSE-RESEARCH.md#2-the-correction-permission-does-not-satisfy-the-reused-content-policy),
@@ -473,38 +475,52 @@ score. [`engine/repurpose/gate.py`](../apps/engine/engine/repurpose/gate.py),
 both verdicts, all hard blocks, the corpus checks, versioned thresholds.
 `POST /v1/repurpose/evaluate` scores a proposed edit before it is built.
 
-**R1 — Discovery & fit *(1.5 days)*.** Creative Center trend pull, Semrush/keyword
-cross-check, fit scoring against the channel profile, candidate grid with the
-slide-over. Fencing on every external string. *Exit:* open the tab, pick a channel,
-see ranked candidates with reasons.
+**R1 — Discovery & fit — ✅ built.**
+[`repurpose/fit.py`](../apps/engine/engine/repurpose/fit.py) scores a clip against
+one channel — adjacency, YouTube-side demand, reach, usability, with saturation as
+a penalty. [`providers/tiktok.py`](../apps/engine/engine/providers/tiktok.py) is
+Lane A only and a test asserts it exposes no search or download surface.
+`POST /v1/repurpose/discover` sweeps and stores. Trend pull is behind
+`STUDIO_TIKTOK_TRENDS_URL` and scores zero when unset rather than guessing.
 
-**R2 — Lane A end to end *(2 days)*.** TikTok Display API connect, own-content list,
-acquire, probe, watermark scan. *Exit:* your own TikTok becomes a `clip_asset` with
-a hash and a clean-master check.
+**R2 — Lane A acquisition — ✅ built.**
+[`repurpose/acquire.py`](../apps/engine/engine/repurpose/acquire.py): grant check
+before the network *and* before the row, streamed download with a size ceiling,
+hash, probe, and a real watermark detector tested against synthetic frame stacks.
+**Unverified against the live TikTok API** — it needs credentials, same status as
+the YouTube publish path in `PLAN.md` §7.
 
-**R3 — Assemble *(3 days)*.** Segment selection, the separate **hook** stage,
-reframe, **audio-bed replacement**, ducking, narration timed to segments, cut
-density, **caption styling preset** (4–7 words, synced, safe-zoned), credit cards.
-*Exit:* one of your own TikToks comes out as a 16:9 or 9:16 YouTube cut with your
-commentary over it, a licensed bed, and captions that don't look like the current
-defaults.
+**R3 — Cuts — ✅ built; compositing still ahead.**
+[`repurpose/segment.py`](../apps/engine/engine/repurpose/segment.py) chooses the
+segment and, separately, the hook — see §6.4 and the three-attempt note in its
+tests. *Still to build:* the actual compositing — reframe, audio-bed replacement,
+ducking, caption preset, credit cards. Until that lands the workflow decides
+*where* to cut without producing a file, so a repurpose job cannot yet render or
+publish.
 
-**R4b — Gate wiring *(0.5 day)*.** The scoring is done; what remains is running it
-as a workflow stage and blocking `POST /v1/jobs/{id}/publish` on the result.
-*Exit:* a deliberately lazy edit is refused at the approval gate, with the specific
-reason and which of the two gates it failed.
+**R4b — Gate wiring — ✅ built.** `OriginalityStage` runs in the workflow and
+raises rather than warns; the same report is re-checked at the approval gate in
+`automation.publish_blockers`, which is where the 1,600 quota units are actually
+spent.
 
-**R5 — Lanes B–E *(2 days)*.** Campaign/programme enrolment and its content rules,
-permission-request flow with recorded evidence, open-licence attribution strings.
-*Exit:* a clip you don't own can be cleared, built and published, with the paper
-trail attached.
+**R5 — Lane B — ✅ built for the rights half.** Campaign enrolment is a first-class
+lane with its own evidence requirements, live in the rights panel and enforced end
+to end. *Still to build:* pulling campaign listings automatically, and the
+per-view payout reconciliation that makes the economics visible.
 
-**R6 — Multi-clip episodes & polish *(2 days)*.** Compilation with a thesis,
-per-platform packaging, clip attribution into the existing feedback loop (§6.5),
-`KNOWN-ISSUES` §5.5 row, contracts regeneration, engine tests in
-`apps/engine/tests/`, web tests beside their components.
+**R6 — Polish — partly done.** `KNOWN-ISSUES` §5.5 row, contracts regenerated,
+engine tests in `apps/engine/tests/`, web tests beside their components.
+*Still to build:* multi-clip episodes with a thesis, per-platform packaging, and
+clip attribution into the existing feedback loop (§6.5).
 
-Roughly **13 days**. R0–R4 is the useful core at about 9.
+### What is left, in order
+
+1. **Compositing** (the rest of R3) — the one thing standing between the workflow
+   and an actual file. Everything else is built around a gap where the render goes.
+2. **A timeline editor on the screen**, so "Build episode" has something to send.
+3. **TikTok app review** for Display API credentials, which turns R1/R2 from
+   reviewed code into proven code.
+4. Multi-clip episodes, per-platform packaging, feedback-loop attribution.
 
 ---
 

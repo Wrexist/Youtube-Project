@@ -44,10 +44,15 @@ import {
   resetRoutes,
   setAllRoutes,
   setRoute,
+  recordGrant,
+  dismissClip,
+  selectClip,
 } from "@/lib/engine";
 import { ONBOARDED_COOKIE, ONBOARDED_MAX_AGE } from "@/lib/onboarding";
 import type {
   BacklogIdea,
+  ClipGrant,
+  ClipGrantRequest,
   Brief,
   Diagnostics,
   JobRequest,
@@ -550,4 +555,64 @@ export async function runDiagnostics(network = true): Promise<ActionResult<Diagn
  */
 export async function engineReady(): Promise<ActionResult<{ live: boolean }>> {
   return { ok: true, data: { live: await isLive() } };
+}
+
+
+// ── repurpose ───────────────────────────────────────────────────────────────
+//
+// Two gates stand between a clip and a published video and they fail
+// independently, so these actions never merge them. `saveGrant` answers "may we
+// use this footage" and nothing else — recording one does not make the finished
+// video monetisable, and the panel says so.
+
+/**
+ * Record how a clip may be used.
+ *
+ * Refusals come back as `blockers`, not as a flat message, because the engine
+ * returns one problem per thing wrong with the grant — a missing grantor and a
+ * missing evidence link are two fixes, and collapsing them into a sentence sends
+ * the operator round the loop twice.
+ */
+export async function saveGrant(
+  sourceId: string,
+  grant: ClipGrantRequest,
+): Promise<ActionResult<ClipGrant>> {
+  try {
+    const data = await recordGrant(sourceId, grant);
+    revalidatePath("/repurpose");
+    return { ok: true, data };
+  } catch (error) {
+    const detail = (error as EngineError)?.detail as
+      | { problems?: { code: string; message: string }[] }
+      | undefined;
+    const problems = detail?.problems;
+    return {
+      ok: false,
+      error: problems?.length ? "This grant is not usable as recorded." : message(error),
+      blockers: problems,
+    };
+  }
+}
+
+/** Refuse a clip, durably. Discovery re-runs on the same data and would otherwise
+ *  re-propose it tomorrow. */
+export async function rejectClip(sourceId: string): Promise<ActionResult> {
+  try {
+    await dismissClip(sourceId);
+    revalidatePath("/repurpose");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+/** Mark a clip as chosen for the next episode. */
+export async function chooseClip(sourceId: string): Promise<ActionResult> {
+  try {
+    await selectClip(sourceId);
+    revalidatePath("/repurpose");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
 }

@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { RepurposeView } from "./repurpose-view";
 import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
+
+const saveGrant = vi.hoisted(() => vi.fn());
+vi.mock("@/app/actions", () => ({ saveGrant }));
+
+beforeEach(() => {
+  saveGrant.mockReset();
+  saveGrant.mockResolvedValue({ ok: true, data: {} });
+});
 
 /**
  * The screen's whole job is refusing to let a clip become a video too early, so
@@ -147,6 +155,116 @@ describe("the rights panel", () => {
     expect(
       within(screen.getByRole("dialog")).getByText(/regardless of whether the creator agreed/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe("recording a grant", () => {
+  /** Live, because the whole point of these is the request that goes out. In
+   *  demo mode the control is correctly disabled — covered separately below. */
+  function openPanel() {
+    renderView([
+      {
+        id: "x1",
+        platform: "tiktok",
+        external_id: "x1",
+        url: "",
+        creator_handle: "@analyst",
+        caption: "why this chart is lying to you",
+        hashtags: [],
+        stats: {},
+        duration_s: 33,
+        fit_score: 0.79,
+        fit_reasons: [],
+        status: "discovered",
+        grant: null,
+        cleared: false,
+        acquired: false,
+      },
+    ] as unknown as Parameters<typeof RepurposeView>[0]["clips"]);
+    fireEvent.click(screen.getByText(/why this chart is lying/i));
+    return screen.getByRole("dialog");
+  }
+
+  it("records Lane A with no paperwork", async () => {
+    const panel = openPanel();
+
+    fireEvent.click(within(panel).getByRole("button", { name: /^record$/i }));
+
+    await waitFor(() => expect(saveGrant).toHaveBeenCalledTimes(1));
+    expect(saveGrant.mock.calls[0][1]).toMatchObject({ lane: "own" });
+  });
+
+  it("will not submit a campaign grant without its evidence", () => {
+    // The engine refuses an unevidenced grant. Finding that out after a round
+    // trip is a worse version of the same answer.
+    const panel = openPanel();
+    fireEvent.click(within(panel).getByRole("radio", { name: /paid campaign/i }));
+
+    const record = within(panel).getByRole("button", { name: /^record$/i });
+
+    expect(record).toBeDisabled();
+    expect(record).toHaveAttribute("title", expect.stringMatching(/link the terms/i));
+    expect(saveGrant).not.toHaveBeenCalled();
+  });
+
+  it("submits a campaign grant once it is evidenced", async () => {
+    const panel = openPanel();
+    fireEvent.click(within(panel).getByRole("radio", { name: /paid campaign/i }));
+    fireEvent.change(within(panel).getByPlaceholderText("@streamer"), {
+      target: { value: "@streamer" },
+    });
+    fireEvent.change(within(panel).getByPlaceholderText("https://…"), {
+      target: { value: "https://whop.example/c/1" },
+    });
+
+    fireEvent.click(within(panel).getByRole("button", { name: /^record$/i }));
+
+    await waitFor(() => expect(saveGrant).toHaveBeenCalledTimes(1));
+    expect(saveGrant.mock.calls[0][1]).toMatchObject({
+      lane: "campaign",
+      grantor: "@streamer",
+      evidence_ref: "https://whop.example/c/1",
+    });
+  });
+
+  it("shows one line per problem rather than a summary", async () => {
+    saveGrant.mockResolvedValue({
+      ok: false,
+      error: "This grant is not usable as recorded.",
+      blockers: [
+        { code: "no_grantor", message: "a campaign grant must name who granted it" },
+        { code: "no_evidence", message: "a campaign grant needs evidence" },
+      ],
+    });
+    const panel = openPanel();
+
+    fireEvent.click(within(panel).getByRole("button", { name: /^record$/i }));
+
+    await screen.findByText(/must name who granted it/i);
+    expect(screen.getByText(/needs evidence/i)).toBeInTheDocument();
+  });
+
+  it("says the edit is still judged separately after a successful save", async () => {
+    const panel = openPanel();
+
+    fireEvent.click(within(panel).getByRole("button", { name: /^record$/i }));
+
+    await screen.findByText(/still judged separately/i);
+  });
+
+  it("cannot be recorded in demo mode", () => {
+    // A control that appears to save into nothing is the failure
+    // KNOWN-ISSUES §5.5 is about.
+    renderView();
+    fireEvent.click(screen.getByText(/why this chart is lying/i));
+
+    const record = within(screen.getByRole("dialog")).getByRole("button", {
+      name: /^record$/i,
+    });
+
+    expect(record).toBeDisabled();
+    expect(record).toHaveAttribute("title", expect.stringMatching(/engine running/i));
+    expect(saveGrant).not.toHaveBeenCalled();
   });
 });
 
