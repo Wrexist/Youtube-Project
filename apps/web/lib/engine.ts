@@ -18,6 +18,7 @@
  */
 
 import type {
+  Backlog,
   Brief,
   Calendar,
   CalendarSlots,
@@ -209,6 +210,9 @@ export const getSlots = (days = 14) =>
 export const getChannels = () => get<Channels>("/v1/channels");
 export const getInsights = () => get<Insights>("/v1/insights");
 export const getSpend = (days = 90) => get<Spend>(`/v1/spend?days=${days}`);
+export const getBacklog = (limit = 6) => get<Backlog>(`/v1/ideas/backlog?limit=${limit}`);
+export const dismissIdea = (id: number) =>
+  post<void>(`/v1/ideas/backlog/${id}/dismiss`);
 /** Null both when the engine is unreachable and when no review has run yet. The
  *  screen says the same thing for the second case; the first is a `LiveBadge`. */
 export const getReview = () => get<Review | null>("/v1/insights/review");

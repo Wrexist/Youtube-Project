@@ -279,6 +279,20 @@ async def create_job(body: JobRequest) -> dict:
     }
 
     await _persist(JOBS[job_id])
+
+    # If this topic was on the backlog, it is now spent. Matched on the string
+    # because that is the only link there is: the Create screen sends a topic and
+    # never mentions which idea it came from — and a backlog that does not deplete
+    # when you act on it is a list that grows forever.
+    #
+    # Never fatal. A job that ran is worth more than a tidy backlog.
+    topic = str(inputs.get("topic") or "").strip()
+    if topic:
+        try:
+            await repository.resolve_backlog_idea(topic=topic, status="used", job_id=job_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not mark {!r} used on the backlog: {}", topic, exc)
+
     await _dispatch(job_id)
     return {"job_id": job_id, "status": "running"}
 
