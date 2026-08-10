@@ -576,7 +576,15 @@ def _caption_bitmap(text: str, *, font: str, size: int, max_w: int):
     return array[:, :, :3].copy(), (array[:, :, 3].astype("float64") / 255.0)
 
 
-def _subtitle_overlay(cues: list[dict], *, width: int, height: int, font: str, duration: float):
+def _subtitle_overlay(
+    cues: list[dict],
+    *,
+    width: int,
+    height: int,
+    font: str,
+    duration: float,
+    y_fraction: float = 0.72,
+):
     """One clip that draws whichever cue is on screen, instead of one clip per cue.
 
     This was a list comprehension building a `TextClip` per cue up front. A
@@ -624,10 +632,16 @@ def _subtitle_overlay(cues: list[dict], *, width: int, height: int, font: str, d
         rgb = blank_rgb.copy()
         mask = blank_mask.copy()
         box_h, box_w = bitmap.shape[0], bitmap.shape[1]
-        # Centred horizontally, 72% down the frame — the same placement the
-        # per-cue clips used via `.with_position(("center", height * 0.72))`.
+        # Centred horizontally, and `y_fraction` down the frame — 0.72 by default,
+        # the placement the per-cue clips used via
+        # `.with_position(("center", height * 0.72))`.
+        #
+        # Parametrised for vertical output: the bottom sixth of a 9:16 frame is
+        # covered by the platform's own UI, so a caption at 0.72 sits behind the
+        # handle and the button rail on the app it was made for. See
+        # `repurpose/captions.py::SAFE_Y`.
         left = max(0, (width - box_w) // 2)
-        top = max(0, min(int(height * 0.72), height - box_h))
+        top = max(0, min(int(height * y_fraction), height - box_h))
         box_h, box_w = min(box_h, height - top), min(box_w, width - left)
         rgb[top : top + box_h, left : left + box_w] = bitmap[:box_h, :box_w]
         if alpha is not None:

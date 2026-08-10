@@ -427,7 +427,7 @@ class AssembleStage(Stage[assembly.Assembly]):
 
     name = "assemble"
     title = "Assemble"
-    depends_on = ("segment", "voiceover")
+    depends_on = ("segment", "voiceover", "subtitles")
     #: Renders are long and the framework's default would abandon one mid-encode.
     timeout_s = None
     max_attempts = 1
@@ -454,6 +454,8 @@ class AssembleStage(Stage[assembly.Assembly]):
             hook=cuts.hook,
             bed_path=_bed_path(str(ctx.inputs.get("bgm_track") or "")),
             keep_source_audio=set(ctx.inputs.get("keep_source_audio") or []),
+            cues=ctx.try_get("subtitles") or [],
+            credits=await _credits(ctx.get("rights")),
             on_progress=lambda fraction, message: ctx.progress(message, fraction),
         )
 
@@ -511,6 +513,34 @@ async def _captions(source_ids: list[str]) -> dict[str, str]:
         logger.warning("could not read clip captions: {}", exc)
         return {}
     return {r["id"]: r.get("caption", "") for r in rows if r["id"] in set(source_ids)}
+
+
+async def _credits(cleared: ClearedClips) -> dict[str, str]:
+    """Who to credit on screen, by source id.
+
+    Only the lanes with a counterparty. Crediting your own footage is noise, and
+    `gate.attribution` asks for credit on exactly the lanes `rights.py` marks as
+    needing it — so the two cannot disagree about which clips those are.
+
+    Falls back to the grantor when the handle is unknown, because a credit naming
+    the campaign is still a credit and an empty one is a blank box on screen.
+    """
+    handles: dict[str, str] = {}
+    try:
+        rows = await repository.clip_sources(channel_key="", status="selected", limit=200)
+        rows += await repository.clip_sources(channel_key="", status="discovered", limit=200)
+        handles = {r["id"]: r.get("creator_handle", "") for r in rows}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not read creator handles for credits: {}", exc)
+
+    out: dict[str, str] = {}
+    for source_id, grant in cleared.grants.items():
+        if not grant.needs_attribution:
+            continue
+        label = handles.get(source_id) or grant.grantor
+        if label:
+            out[source_id] = label if label.startswith("@") else f"@{label}"
+    return out
 
 
 def _bed_path(track: str = ""):
@@ -682,7 +712,18 @@ def build_timeline(ctx: WorkflowContext, *, cuts: Cuts, acquired: AcquiredClips)
             else bool(ctx.inputs.get("audio_bed_replaced"))
         ),
         watermarked_sources=tuple(acquired.watermarked),
-        attribution_on_screen=bool(ctx.inputs.get("attribution_on_screen")),
+        # Measured too, for the same reason. `assemble` burns the credit in and
+        # reports which clips got one; asserting it in the inputs would leave the
+        # attribution hard block satisfiable by typing `true`, which is the hole
+        # `audio_bed_replaced` used to have.
+        attribution_on_screen=(
+            bool(assembled.credited_source_ids)
+            if assembled is not None
+            else bool(ctx.inputs.get("attribution_on_screen"))
+        ),
+        # Still an input, and honestly so: the description is written by the SEO
+        # stage *after* the gate runs, so at this point it is a commitment rather
+        # than a fact. `DescriptionStage` is what has to keep it.
         attribution_in_description=bool(ctx.inputs.get("attribution_in_description")),
         is_compilation=len({s for s, _ in placements if s}) > 1,
     )
@@ -803,8 +844,11 @@ def repurpose_stages() -> list[Stage]:
         NarrationStage(),
         _Script(),
         VoiceoverStage(),
-        AssembleStage(),
+        # Before `assemble`, because the captions are burnt into the picture and
+        # the cues are what they are drawn from. It used to sit after, from when
+        # captions were a separate later concern.
         SubtitlesStage(),
+        AssembleStage(),
         OriginalityStage(),
         # Everything below is only reached by a video the gate passed.
         seo.GroundingStage(),

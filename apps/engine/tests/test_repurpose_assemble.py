@@ -328,3 +328,135 @@ async def test_an_aborted_assembly_stops(clip_factory, narration):
             job_id="j13",
             abort=abort,
         )
+
+
+# ── captions and credits ────────────────────────────────────────────────────
+#
+# Asserted against real pixels. A test that only checks the overlay object was
+# built proves the call was made, not that anything is on screen — and both of
+# these exist to satisfy a hard block in the gate.
+
+
+def _has_bright_pixels(frame, region) -> bool:
+    """Is there light text in this band of the frame?"""
+    top, bottom = region
+    band = frame[top:bottom]
+    return bool((band.mean(axis=2) > 200).sum() > 50)
+
+
+async def test_captions_are_burnt_into_the_picture(clip_factory, narration):
+    from engine.storage import store
+
+    source = clip_factory("a", seconds=3.0, size=(360, 640), with_audio=False)
+
+    result = await assemble(
+        segments=[{"source_id": "a", "start_s": 0.0, "end_s": 2.5}],
+        sources={"a": source},
+        narration_path=narration,
+        job_id="cap1",
+        aspect="9:16",
+        cues=[{"start": 0.0, "end": 2.5, "text": "this text must be visible"}],
+    )
+
+    assert result.captions_burned is True
+
+    from moviepy import VideoFileClip
+
+    with VideoFileClip(str(await store.local_path(result.output_key))) as clip:
+        frame = clip.get_frame(1.0)
+        height = frame.shape[0]
+        # The 9:16 safe zone, not the 16:9 default — see captions.SAFE_Y.
+        assert _has_bright_pixels(frame, (int(height * 0.55), int(height * 0.80)))
+
+
+async def test_a_video_with_no_cues_reports_no_captions(clip_factory, narration):
+    source = clip_factory("a", with_audio=False)
+
+    result = await assemble(
+        segments=[{"source_id": "a", "start_s": 0.0, "end_s": 1.5}],
+        sources={"a": source},
+        narration_path=narration,
+        job_id="cap2",
+    )
+
+    assert result.captions_burned is False
+
+
+async def test_a_credit_is_burnt_in_for_the_clip_it_credits(clip_factory, narration):
+    """Until this existed the gate blocked a Lane B video for missing credit that
+    nothing could add, so it had to be burnt in by hand."""
+    from engine.storage import store
+
+    source = clip_factory("a", seconds=3.0, size=(360, 640), with_audio=False)
+
+    result = await assemble(
+        segments=[{"source_id": "a", "start_s": 0.0, "end_s": 2.5}],
+        sources={"a": source},
+        narration_path=narration,
+        job_id="cred1",
+        aspect="9:16",
+        credits={"a": "@creator"},
+    )
+
+    assert result.credited_source_ids == ["a"]
+
+    from moviepy import VideoFileClip
+
+    with VideoFileClip(str(await store.local_path(result.output_key))) as clip:
+        frame = clip.get_frame(1.0)
+        height = frame.shape[0]
+        # Top of the frame, out of the caption zone.
+        assert _has_bright_pixels(frame, (0, int(height * 0.15)))
+
+
+async def test_only_credited_clips_are_reported(clip_factory, narration):
+    """A compilation crediting only the first creator is worse than crediting
+    none — it reads as a claim that the rest are ours."""
+    a = clip_factory("a", with_audio=False)
+    b = clip_factory("b", with_audio=False)
+
+    result = await assemble(
+        segments=[
+            {"source_id": "a", "start_s": 0.0, "end_s": 1.5},
+            {"source_id": "b", "start_s": 0.0, "end_s": 1.5},
+        ],
+        sources={"a": a, "b": b},
+        narration_path=narration,
+        job_id="cred2",
+        credits={"a": "@one"},
+    )
+
+    assert result.credited_source_ids == ["a"]
+
+
+async def test_no_credits_means_none_reported(clip_factory, narration):
+    """Lane A credits nobody, and crediting yourself is noise."""
+    source = clip_factory("a", with_audio=False)
+
+    result = await assemble(
+        segments=[{"source_id": "a", "start_s": 0.0, "end_s": 1.5}],
+        sources={"a": source},
+        narration_path=narration,
+        job_id="cred3",
+    )
+
+    assert result.credited_source_ids == []
+
+
+async def test_overlays_do_not_silence_the_narration(clip_factory, narration):
+    """`CompositeVideoClip` takes the first layer's audio, and the overlays are
+    silent — a mistake here loses the whole commentary track."""
+    from engine.storage import store
+
+    source = clip_factory("a", with_audio=False)
+
+    result = await assemble(
+        segments=[{"source_id": "a", "start_s": 0.0, "end_s": 1.5}],
+        sources={"a": source},
+        narration_path=narration,
+        job_id="cred4",
+        cues=[{"start": 0.0, "end": 1.5, "text": "words"}],
+        credits={"a": "@creator"},
+    )
+
+    assert _probe(await store.local_path(result.output_key))["has_audio"]

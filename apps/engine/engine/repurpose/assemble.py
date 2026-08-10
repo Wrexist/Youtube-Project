@@ -98,6 +98,12 @@ class Assembly:
     #: Clips whose original audio was deliberately retained, ducked under narration.
     retained_source_audio: list[str] = field(default_factory=list)
     aspect: str = "9:16"
+    #: Whether captions were burnt in, and whether every clip needing credit got
+    #: one. Measured, like everything else here — `gate.attribution` is a hard
+    #: block, and a caller asserting it would be the same hole `audio_bed_replaced`
+    #: used to be.
+    captions_burned: bool = False
+    credited_source_ids: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         minutes, seconds = divmod(int(self.duration_s), 60)
@@ -112,6 +118,8 @@ class Assembly:
             "audio_bed_replaced": self.audio_bed_replaced,
             "retained_source_audio": self.retained_source_audio,
             "aspect": self.aspect,
+            "captions_burned": self.captions_burned,
+            "credited_source_ids": self.credited_source_ids,
         }
 
 
@@ -125,10 +133,12 @@ async def assemble(
     hook: dict | None = None,
     bed_path: Path | None = None,
     keep_source_audio: set[str] | None = None,
+    cues: list[dict] | None = None,
+    credits: dict[str, str] | None = None,
     on_progress: ProgressFn | None = None,
     abort: threading.Event | None = None,
 ) -> Assembly:
-    """Cut, reframe, replace the audio, and write the file.
+    """Cut, reframe, replace the audio, burn captions and credits, write the file.
 
     `segments` is the cut list from `SegmentStage`; `sources` maps source id to the
     acquired media on disk. `hook`, when `teased`, is prepended so the video opens
@@ -173,6 +183,8 @@ async def assemble(
             frame,
             aspect,
             keep_source_audio,
+            cues or [],
+            credits or {},
             output,
             report,
             abort,
@@ -210,6 +222,8 @@ def _assemble_sync(
     frame: tuple[int, int],
     aspect: str,
     keep_source_audio: set[str],
+    cues: list[dict],
+    credits: dict[str, str],
     output: Path,
     report: Callable[[float, str], None],
     abort: threading.Event,
@@ -298,6 +312,47 @@ def _assemble_sync(
         video = concatenate_videoclips(pieces, method="compose")
         opened.append(video)
 
+        # ── overlays ─────────────────────────────────────────────────────────
+        #
+        # Captions first, credits over them. Both are composited onto the joined
+        # video rather than onto each piece: a caption spans a cut whenever a
+        # sentence does, and building them per piece would clip every line that
+        # crosses one.
+        layers = [video]
+
+        if cues:
+            from engine.render.compose import _subtitle_overlay
+            from engine.repurpose import captions as caption_rules
+            from engine.services.fonts import cached_resolve
+
+            overlay = _subtitle_overlay(
+                caption_rules.regroup(cues),
+                width=frame[0],
+                height=frame[1],
+                font=cached_resolve(""),
+                duration=float(video.duration or 0.0),
+                y_fraction=caption_rules.safe_y(aspect),
+            )
+            if overlay is not None:
+                opened.append(overlay)
+                layers.append(overlay)
+
+        credit_layer = _credit_overlay(placed, credits or {}, frame)
+        if credit_layer is not None:
+            opened.append(credit_layer)
+            layers.append(credit_layer)
+
+        if len(layers) > 1:
+            from moviepy import CompositeVideoClip
+
+            audio = video.audio
+            video = CompositeVideoClip(layers, size=frame).with_duration(video.duration)
+            # `CompositeVideoClip` takes the *first* layer's audio, and the overlays
+            # are silent — but being explicit here is cheap, and an overlay that
+            # ever gains an audio track would otherwise silence the narration.
+            video = video.with_audio(audio)
+            opened.append(video)
+
         # ── audio ────────────────────────────────────────────────────────────
         tracks = [t for t in (video.audio,) if t is not None]
 
@@ -349,6 +404,10 @@ def _assemble_sync(
             audio_bed_replaced=True,
             retained_source_audio=retained,
             aspect=aspect,
+            captions_burned=bool(cues),
+            credited_source_ids=sorted(
+                {p.source_id for p in placed if p.source_id in credits and p.source_id}
+            ),
         )
     finally:
         for clip in opened:
@@ -356,6 +415,86 @@ def _assemble_sync(
                 clip.close()
             except Exception:  # noqa: BLE001 — closing is best-effort
                 pass
+
+
+def _credit_overlay(placed: list[Placed], credits: dict[str, str], frame: tuple[int, int]):
+    """On-screen attribution, shown while the clip it credits is playing.
+
+    Required by the gate for every lane with a counterparty — Lane B campaigns
+    almost always make it a condition of the programme, and it is evidence of good
+    faith for the others. Until this existed the gate blocked a Lane B video for
+    missing credit that nothing could add, so the credit had to be burnt in by
+    hand.
+
+    Drawn per placement rather than once for the whole video: a compilation of
+    three creators crediting only the first is worse than crediting none, because
+    it reads as a claim that the rest are ours.
+
+    Top-left, small, and never over the caption zone. It is an obligation, not a
+    design element — it has to be legible and it has to stay out of the way.
+    """
+    if not placed or not credits:
+        return None
+
+    import numpy as np
+    from moviepy import VideoClip
+
+    from engine.render.compose import _caption_bitmap
+    from engine.services.fonts import cached_resolve
+
+    width, height = frame
+    spans = [
+        (p.placed_at_s, p.placed_at_s + p.duration_s, credits[p.source_id])
+        for p in placed
+        if p.source_id in credits and p.duration_s > 0
+    ]
+    if not spans:
+        return None
+
+    duration = max(end for _, end, _ in spans)
+    font = cached_resolve("")
+    font_px = max(14, int(height * 0.022))
+    margin = int(height * 0.03)
+
+    blank_rgb = np.zeros((height, width, 3), dtype="uint8")
+    blank_mask = np.zeros((height, width), dtype="float64")
+    cache: dict[str, tuple] = {}
+
+    def render(label: str):
+        if label in cache:
+            return cache[label]
+        bitmap, alpha = _caption_bitmap(label, font=font, size=font_px, max_w=int(width * 0.5))
+        rgb = blank_rgb.copy()
+        mask = blank_mask.copy()
+        box_h, box_w = bitmap.shape[0], bitmap.shape[1]
+        top, left = margin, margin
+        box_h, box_w = min(box_h, height - top), min(box_w, width - left)
+        rgb[top : top + box_h, left : left + box_w] = bitmap[:box_h, :box_w]
+        mask[top : top + box_h, left : left + box_w] = (
+            alpha[:box_h, :box_w] if alpha is not None else 1.0
+        )
+        # Held at full opacity would fight the picture; two-thirds reads as a
+        # caption rather than as a watermark, which is the thing we strip.
+        cache[label] = (rgb, mask * 0.66)
+        return cache[label]
+
+    def active(t: float) -> str | None:
+        for start, end, label in spans:
+            if start <= t < end:
+                return label
+        return None
+
+    def frame_fn(t: float):
+        label = active(t)
+        return blank_rgb if label is None else render(label)[0]
+
+    def mask_fn(t: float):
+        label = active(t)
+        return blank_mask if label is None else render(label)[1]
+
+    overlay = VideoClip(frame_function=frame_fn, duration=duration)
+    overlay.mask = VideoClip(frame_function=mask_fn, duration=duration, is_mask=True)
+    return overlay
 
 
 def _fit(clip, frame: tuple[int, int]):
