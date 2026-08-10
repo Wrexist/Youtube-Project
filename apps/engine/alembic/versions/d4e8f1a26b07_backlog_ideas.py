@@ -7,6 +7,10 @@ was no way to say "not that one" that outlived a reload.
 `topic` is unique: the generator proposes by adjacency to what the channel has
 already published, so without the constraint the backlog fills with near-duplicates.
 
+`model` and `prompt` are not optional extras. CLAUDE.md #2 requires every generated
+artifact to record what produced it, throwaway ones included, and an idea that
+shapes a whole video is not throwaway.
+
 Revision ID: d4e8f1a26b07
 Revises: c7d2b1a4e903
 Create Date: 2026-08-10 00:00:00.000000
@@ -36,6 +40,8 @@ def upgrade() -> None:
         sa.Column("demand", sa.Float(), nullable=False),
         sa.Column("competition", sa.Float(), nullable=False),
         sa.Column("why", sa.Text(), nullable=False),
+        sa.Column("model", sa.String(length=64), nullable=False),
+        sa.Column("prompt", sa.Text(), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False),
         sa.Column("job_id", sa.String(length=32), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),

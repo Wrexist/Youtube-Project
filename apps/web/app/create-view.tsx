@@ -518,7 +518,18 @@ export function CreateView({
                   <button
                     onClick={() => {
                       setIdeas((current) => current.filter((i) => i.id !== idea.id));
-                      void refuseIdea(idea.id);
+                      void refuseIdea(idea.id).then((result) => {
+                        if (result.ok) return;
+                        // Put it back. Removing optimistically is right — a list
+                        // that lingers after you dismiss one feels broken — but
+                        // *keeping* it removed after a failed write is worse: the
+                        // engine still has it, so it returns on the next load and
+                        // the dismissal looks like it silently un-did itself.
+                        setIdeas((current) =>
+                          current.some((i) => i.id === idea.id) ? current : [idea, ...current],
+                        );
+                        setError(result.error ?? "could not dismiss that idea");
+                      });
                     }}
                     aria-label={`Not interested in ${idea.topic}`}
                     title="Not interested"

@@ -2846,6 +2846,8 @@
             "required": false,
             "schema": {
               "default": 6,
+              "maximum": 50,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }

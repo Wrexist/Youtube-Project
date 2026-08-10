@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel
 
@@ -77,7 +77,7 @@ class Backlog(BaseModel):
 
 
 @router.get("/backlog")
-async def backlog(limit: int = 6) -> Backlog:
+async def backlog(limit: int = Query(6, ge=1, le=50)) -> Backlog:
     """The standing list of ideas, best first, topped up when it runs short.
 
     The suggestions endpoint proposes, scores, shows and forgets — a cache with a
@@ -95,13 +95,13 @@ async def backlog(limit: int = 6) -> Backlog:
 
     if len(existing) < limit and recent:
         try:
-            candidates = await _propose(recent)
+            candidates, model, prompt = await _propose(recent)
             scored = await _score(candidates, published=recent)
         except ProviderUnavailable as exc:
             # Whatever is already on the list is still worth showing.
             logger.warning("cannot top up the backlog: {}", exc)
         else:
-            added = await repository.add_backlog_ideas(scored)
+            added = await repository.add_backlog_ideas(scored, model=model, prompt=prompt)
             if added:
                 existing = await repository.open_backlog_ideas(limit)
 
@@ -138,7 +138,7 @@ async def suggestions(limit: int = 4, refresh: bool = False) -> Suggestions:
         )
 
     try:
-        candidates = await _propose(recent)
+        candidates, _model, _prompt = await _propose(recent)
     except ProviderUnavailable as exc:
         logger.warning("cannot suggest ideas: {}", exc)
         return Suggestions(suggestions=[], based_on=recent)
@@ -167,11 +167,17 @@ def _recent_topics(count: int = 8) -> list[str]:
     return seen
 
 
-async def _propose(recent: list[str]) -> list[str]:
-    """Candidate topics in this channel's niche. The model's only job here."""
+async def _propose(recent: list[str]) -> tuple[list[str], str, str]:
+    """Candidate topics, plus the model and prompt that produced them.
+
+    The provenance used to go in the bin — `result, _ = await model.json(...)`.
+    That was fine while the ideas evaporated after thirty minutes and became a
+    CLAUDE.md #2 violation the moment they were written to a table: every generated
+    artifact records what produced it, throwaway ones included.
+    """
     made = "\n".join(f"- {t}" for t in recent)
     model = llm.for_task("backlog")
-    result, _ = await model.json(
+    result, completion = await model.json(
         f"""This channel has made these videos:
 
 {made}
@@ -196,7 +202,7 @@ Return: {{"topics": [str]}}""",
         max_tokens=1200,
     )
     topics = [str(t).strip() for t in (result.get("topics") or []) if str(t).strip()]
-    return topics[:_CANDIDATES]
+    return topics[:_CANDIDATES], completion.model, completion.prompt
 
 
 async def _score(candidates: list[str], *, published: list[str]) -> list[dict]:

@@ -30,7 +30,8 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 
 from engine.db import session
 from engine.insights import VideoRecord
@@ -478,38 +479,66 @@ async def save_review_snapshot(
         db.add(ReviewSnapshot(payload=payload, video_count=video_count, report=report))
 
 
-async def add_backlog_ideas(ideas: list[dict]) -> int:
+async def add_backlog_ideas(ideas: list[dict], *, model: str = "", prompt: str = "") -> int:
     """Put freshly scored ideas on the backlog. Returns how many were new.
 
     Anything already on the list — open, made, or refused — is skipped rather than
-    updated. Re-scoring an idea the operator already said no to and floating it
-    back to the top is the behaviour a backlog exists to stop.
+    updated. Re-scoring an idea the operator already said no to and floating it back
+    to the top is the behaviour a backlog exists to stop.
+
+    `model` and `prompt` are what produced the batch, and they are stored on every
+    row of it. CLAUDE.md #2 admits no exception for throwaway generations, and an
+    idea that shapes a whole video is not throwaway.
+
+    Insertion is per-row inside a savepoint. The pre-query filter is a *read*, so
+    two top-ups running at once can both pass it and then collide on the unique
+    index — one lost idea is acceptable, a 500 on the whole request is not. The
+    batch is also deduplicated first, because `_score` has no reason to guarantee
+    distinct topics and two identical ones in a single list would collide with each
+    other before any concurrency was involved.
     """
     if not _persistence_enabled() or not ideas:
         return 0
+
+    unique: dict[str, dict] = {}
+    for idea in ideas:
+        topic = str(idea.get("topic") or "").strip()
+        if topic:
+            unique.setdefault(topic, idea)
+
+    added = 0
     async with session() as db:
         known = {
             row
             for (row,) in (
                 await db.execute(
-                    select(BacklogIdea.topic).where(
-                        BacklogIdea.topic.in_([i["topic"] for i in ideas])
-                    )
+                    select(BacklogIdea.topic).where(BacklogIdea.topic.in_(list(unique)))
                 )
             ).all()
         }
-        fresh = [i for i in ideas if i["topic"] not in known]
-        for idea in fresh:
-            db.add(
-                BacklogIdea(
-                    topic=idea["topic"],
-                    score=float(idea.get("score") or 0.0),
-                    demand=float(idea.get("demand") or 0.0),
-                    competition=float(idea.get("competition") or 0.0),
-                    why=idea.get("why") or "",
-                )
-            )
-    return len(fresh)
+        for topic, idea in unique.items():
+            if topic in known:
+                continue
+            try:
+                async with db.begin_nested():
+                    db.add(
+                        BacklogIdea(
+                            topic=topic,
+                            score=float(idea.get("score") or 0.0),
+                            demand=float(idea.get("demand") or 0.0),
+                            competition=float(idea.get("competition") or 0.0),
+                            why=idea.get("why") or "",
+                            model=model,
+                            prompt=prompt,
+                        )
+                    )
+            except IntegrityError:
+                # Another top-up won the race for this topic. It is on the list
+                # either way, which is the outcome that matters.
+                logger.debug("backlog topic {!r} was added concurrently", topic)
+                continue
+            added += 1
+    return added
 
 
 async def open_backlog_ideas(limit: int = 20) -> list[dict]:
@@ -553,20 +582,25 @@ async def resolve_backlog_idea(
     """
     if not _persistence_enabled() or (idea_id is None and topic is None):
         return False
+
+    # One conditional UPDATE, not select-then-mutate. Two callers racing on the same
+    # row would both have seen it `open`, both written, and both returned True — so
+    # re-running a topic could overwrite the `job_id` of the job that genuinely
+    # consumed the idea. `rowcount` makes exactly one of them win.
+    statement = (
+        update(BacklogIdea)
+        .where(BacklogIdea.status == "open")
+        .values(status=status, job_id=job_id, resolved_at=datetime.now(UTC))
+    )
+    statement = (
+        statement.where(BacklogIdea.id == idea_id)
+        if idea_id is not None
+        else statement.where(BacklogIdea.topic == topic)
+    )
+
     async with session() as db:
-        query = select(BacklogIdea).where(BacklogIdea.status == "open")
-        query = (
-            query.where(BacklogIdea.id == idea_id)
-            if idea_id
-            else query.where(BacklogIdea.topic == topic)
-        )
-        row = (await db.execute(query)).scalar_one_or_none()
-        if row is None:
-            return False
-        row.status = status
-        row.job_id = job_id
-        row.resolved_at = datetime.now(UTC)
-    return True
+        result = await db.execute(statement)
+    return bool(result.rowcount)
 
 
 async def spend_by_day(days: int = 90) -> list[tuple[str, float, int]]:

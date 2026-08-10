@@ -165,6 +165,13 @@ class BacklogIdea(Base):
     demand: Mapped[float] = mapped_column(default=0.0)
     competition: Mapped[float] = mapped_column(default=0.0)
     why: Mapped[str] = mapped_column(Text, default="")
+    #: What produced this idea. CLAUDE.md #2: every generated artifact records the
+    #: prompt and the model, with no exception for throwaway ones — and an idea that
+    #: shapes a whole video is not throwaway. Without these the backlog is a list of
+    #: LLM output nobody can attribute, which is exactly what Phase 8's feedback
+    #: loop cannot work with.
+    model: Mapped[str] = mapped_column(String(64), default="")
+    prompt: Mapped[str] = mapped_column(Text, default="")
     #: `open`, `used` or `dismissed`. Resolved rows are kept rather than deleted:
     #: "we already made this" and "I said no to this" are both reasons not to
     #: propose it again, and a delete forgets the difference.
