@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel
@@ -89,6 +91,54 @@ async def refresh_insights() -> dict:
         updated += 1
 
     return {"pulled": len(rows), "matched": updated, "unmatched": len(rows) - updated}
+
+
+class SpendDay(BaseModel):
+    date: str
+    usd: float
+    jobs: int
+
+
+class Spend(BaseModel):
+    """What this channel has cost, over time.
+
+    Cost has always been metered per stage and capped per video, and nothing could
+    answer "what have I spent this month" — the one question that decides whether
+    the product is usable at volume rather than once.
+    """
+
+    days: list[SpendDay]
+    total_usd: float
+    month_usd: float
+    #: Mean cost of a job that reached `completed`. Unfinished and failed runs are
+    #: excluded from the *average* but not from the totals: they cost real money and
+    #: hiding them would flatter the number, while averaging them in would answer a
+    #: different question than "what does a video cost me".
+    per_video_usd: float | None
+    completed_videos: int
+
+
+@router.get("/spend")
+async def spend(days: int = Query(90, ge=1, le=365)) -> Spend:
+    from engine import repository
+
+    rows = await repository.spend_by_day(days)
+    total = round(sum(usd for _d, usd, _n in rows), 2)
+
+    now = datetime.now(UTC)
+    prefix = f"{now.year:04d}-{now.month:02d}"
+    month = round(sum(usd for day, usd, _n in rows if day.startswith(prefix)), 2)
+
+    finished = await repository.completed_video_costs(days)
+    per_video = round(sum(finished) / len(finished), 2) if finished else None
+
+    return Spend(
+        days=[SpendDay(date=d, usd=usd, jobs=n) for d, usd, n in rows],
+        total_usd=total,
+        month_usd=month,
+        per_video_usd=per_video,
+        completed_videos=len(finished),
+    )
 
 
 @router.get("/insights/review")
