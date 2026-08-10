@@ -731,7 +731,7 @@ def _output_model(job: dict, *stages: str) -> str:
 
 
 def _published_record(job: dict) -> VideoRecord | None:
-    if job.get("workflow").name != "publish" or job.get("status") != "completed":
+    if not job.get("workflow").name.endswith("publish") or job.get("status") != "completed":
         return None
 
     video_id = _output_value(job, "upload")
@@ -1056,8 +1056,16 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
 
     if source["status"] != "completed":
         raise HTTPException(409, f"job is {source['status']}; only a completed job can publish")
-    if source["workflow"].name != "video":
-        raise HTTPException(409, f"job ran the '{source['workflow'].name}' workflow, not 'video'")
+    # Two workflows produce a publishable video, and each has its own publish
+    # extension: the publish stages depend on stages from the producing workflow by
+    # name, so they cannot be shared across graphs that do not have them.
+    publish_workflows = {"video": "publish", "repurpose": "repurpose-publish"}
+    if source["workflow"].name not in publish_workflows:
+        raise HTTPException(
+            409,
+            f"job ran the '{source['workflow'].name}' workflow; only "
+            f"{' or '.join(sorted(publish_workflows))} produce a publishable video",
+        )
 
     # Idempotent unless explicitly overridden. Nothing checked for an existing
     # publish job, and the source stays `completed` while the web Publish button
@@ -1119,7 +1127,7 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
             f"an upload costs {ledger.cost_of('videos.insert')}",
         )
 
-    wf = video.get("publish")
+    wf = video.get(publish_workflows[source["workflow"].name])
     publish_id = uuid.uuid4().hex[:12]
     wake = asyncio.Event()
 
@@ -1284,7 +1292,7 @@ def _refuse_ungated_upload(job: dict, stage: str) -> None:
     thumbnail or caption is cheap, deterministic, and exactly what the Queue's
     per-step retry is for.
     """
-    if job["workflow"].name != "publish":
+    if not job["workflow"].name.endswith("publish"):
         return
     affected = [stage, *job["workflow"].dependents_of(stage)]
     if "upload" not in affected:
@@ -1554,7 +1562,16 @@ _SERVABLE = {
 #: Kept honest by `test_every_written_prefix_is_either_servable_or_deliberately_not`:
 #: guessing these ("subtitles/", "audio/") silently 404'd the real `captions/` and
 #: `voiceover/` output, which is a dead link rather than an error anyone would see.
-_SERVABLE_ROOTS = ("thumbnails/", "renders/", "captions/", "voiceover/")
+# `repurpose/` holds finished repurposed videos and their commentary tracks — our
+# output, and the Library needs to play them, exactly like `renders/`.
+#
+# `clips/` is deliberately absent and must stay that way. That is where acquired
+# third-party footage lands, and it is `materials/`'s argument with more force:
+# the licence to use a clip inside our edit is not a licence to redistribute the
+# original from an unauthenticated endpoint. It would also turn the rights ledger
+# into decoration — anything cleared for one video would be publicly downloadable
+# from that moment on.
+_SERVABLE_ROOTS = ("thumbnails/", "renders/", "captions/", "voiceover/", "repurpose/")
 
 
 @app.get("/v1/files/{key:path}")

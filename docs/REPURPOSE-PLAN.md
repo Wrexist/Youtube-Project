@@ -4,10 +4,11 @@
 channel, clears the right to use them, rebuilds them into something YouTube will
 monetise, and hands the result to the pipeline that already exists.
 
-This document is the design. **R0–R5 are built apart from the compositing step**
-— the rights ledger, discovery, fit scoring, Lane A acquisition, cut selection,
-the originality gate and its enforcement at the publish gate all run. What remains
-is the render itself; see §7. Read
+This document is the design. **The engine runs end to end**: rights ledger,
+discovery, fit scoring, Lane A acquisition, cut and hook selection, thesis,
+commentary, voiceover, compositing with audio-bed replacement, the originality
+gate, SEO packaging, and publishing. What remains is mostly on the screen — see
+§7. Read
 [the finding](#1-the-finding-that-reshapes-the-brief) first — it changes one of the
 four stated requirements, and the reason is technical, not squeamish. Then
 [RESEARCH §2](REPURPOSE-RESEARCH.md#2-the-correction-permission-does-not-satisfy-the-reused-content-policy),
@@ -490,18 +491,29 @@ hash, probe, and a real watermark detector tested against synthetic frame stacks
 **Unverified against the live TikTok API** — it needs credentials, same status as
 the YouTube publish path in `PLAN.md` §7.
 
-**R3 — Cuts — ✅ built; compositing still ahead.**
-[`repurpose/segment.py`](../apps/engine/engine/repurpose/segment.py) chooses the
-segment and, separately, the hook — see §6.4 and the three-attempt note in its
-tests. *Still to build:* the actual compositing — reframe, audio-bed replacement,
-ducking, caption preset, credit cards. Until that lands the workflow decides
-*where* to cut without producing a file, so a repurpose job cannot yet render or
-publish.
+**R3 — Cuts, narration and compositing — ✅ built.**
+[`segment.py`](../apps/engine/engine/repurpose/segment.py) chooses the segment and,
+separately, the hook — see §6.4 and the three-attempt note in its tests.
+[`narrate.py`](../apps/engine/engine/repurpose/narrate.py) writes the thesis and
+then the commentary, budgeted per cut against the narration rate.
+[`assemble.py`](../apps/engine/engine/repurpose/assemble.py) cuts, letterboxes to
+the target aspect, prepends a teased hook, **replaces the audio bed**, and reports
+what it actually produced. *Still to build:* the caption styling preset and
+on-screen credit cards.
 
 **R4b — Gate wiring — ✅ built.** `OriginalityStage` runs in the workflow and
 raises rather than warns; the same report is re-checked at the approval gate in
 `automation.publish_blockers`, which is where the 1,600 quota units are actually
-spent.
+spent. `POST /v1/jobs/{id}/publish` now accepts a repurpose job and runs
+`repurpose-publish`, which extends the workflow with the four upload stages.
+
+**One correction worth recording.** `audio_bed_replaced` and `cut_count` used to
+be values the *caller* asserted in the job's inputs, so the gate's evidence was a
+claim by the thing being judged — the audio check could be satisfied by typing
+`true` into a request. `assemble` now reports what it produced and
+`build_timeline` prefers measured facts over asserted ones, falling back to inputs
+only for `POST /v1/repurpose/evaluate`, where the caller genuinely is describing
+an intention because no file exists yet.
 
 **R5 — Lane B — ✅ built for the rights half.** Campaign enrolment is a first-class
 lane with its own evidence requirements, live in the rights panel and enforced end
@@ -515,12 +527,20 @@ clip attribution into the existing feedback loop (§6.5).
 
 ### What is left, in order
 
-1. **Compositing** (the rest of R3) — the one thing standing between the workflow
-   and an actual file. Everything else is built around a gap where the render goes.
-2. **A timeline editor on the screen**, so "Build episode" has something to send.
-3. **TikTok app review** for Display API credentials, which turns R1/R2 from
-   reviewed code into proven code.
-4. Multi-clip episodes, per-platform packaging, feedback-loop attribution.
+1. **A timeline editor on the screen**, so "Build episode" has something to send.
+   The workflow runs end to end from `POST /v1/jobs`; the screen is what cannot
+   yet describe an episode.
+2. **TikTok app review** for Display API credentials, which turns R1/R2 from
+   reviewed code into proven code. Out of our hands and the longest lead time —
+   worth starting regardless of everything else.
+3. **Caption styling preset and credit cards** — the last of R3's polish. Captions
+   at 4–7 words, synced, safe-zoned; credit burnt in for the lanes that need it.
+   Note the gate already *blocks* on missing attribution, so until this lands a
+   Lane B video has to have its credit added by hand.
+4. **Per-platform packaging** — one clip, N native versions differing in hook
+   text, caption and first frame.
+5. **Feedback-loop attribution** (§6.5) — point `insights.py` at clip performance
+   so volume becomes knowledge rather than a templating violation.
 
 ---
 

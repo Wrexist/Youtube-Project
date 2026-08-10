@@ -120,6 +120,11 @@ WORKFLOWS = {
     # anything is fetched or spent, and folding that into the video workflow would
     # put a rights check in front of every generation that has no clips at all.
     "repurpose": repurpose.REPURPOSE_WORKFLOW,
+    # Reachable only through `POST /v1/jobs/{id}/publish`, like "publish" — it is
+    # seeded with a finished repurpose job's states and a live YouTube client, and
+    # started directly it would run the whole paid pipeline before dying on a
+    # missing client. Hence its absence from STARTABLE below.
+    "repurpose-publish": repurpose.REPURPOSE_PUBLISH_WORKFLOW,
 }
 
 

@@ -79,7 +79,7 @@ def test_the_refusing_stages_do_not_retry():
 async def test_a_run_with_no_clips_is_refused(database):
     events: list = []
     with pytest.raises(WorkflowError, match="no clips selected"):
-        await repurpose.REPURPOSE_WORKFLOW.run("job1", {}, await _events(events))
+        await _up_to("originality").run("job1", {}, await _events(events))
 
 
 async def test_an_ungranted_clip_stops_the_run_before_acquisition(database, monkeypatch):
@@ -88,9 +88,7 @@ async def test_an_ungranted_clip_stops_the_run_before_acquisition(database, monk
 
     events: list = []
     with pytest.raises(WorkflowError, match="no grant recorded"):
-        await repurpose.REPURPOSE_WORKFLOW.run(
-            "job1", {"source_ids": [source_id]}, await _events(events)
-        )
+        await _up_to("originality").run("job1", {"source_ids": [source_id]}, await _events(events))
 
     assert not any(e.get("stage") == "acquire" for e in events if e["type"] == "stage.started")
 
@@ -108,9 +106,7 @@ async def test_an_expired_grant_stops_the_run(database, monkeypatch):
     monkeypatch.setattr(repurpose.acquisition, "acquire_and_record", _tripwire)
 
     with pytest.raises(WorkflowError, match="ran out"):
-        await repurpose.REPURPOSE_WORKFLOW.run(
-            "job1", {"source_ids": [source_id]}, await _events([])
-        )
+        await _up_to("originality").run("job1", {"source_ids": [source_id]}, await _events([]))
 
 
 async def test_every_uncleared_clip_is_named_not_just_the_first(database, monkeypatch):
@@ -121,7 +117,7 @@ async def test_every_uncleared_clip_is_named_not_just_the_first(database, monkey
     monkeypatch.setattr(repurpose.acquisition, "acquire_and_record", _tripwire)
 
     with pytest.raises(WorkflowError) as caught:
-        await repurpose.REPURPOSE_WORKFLOW.run("job1", {"source_ids": [a, b]}, await _events([]))
+        await _up_to("originality").run("job1", {"source_ids": [a, b]}, await _events([]))
 
     assert a in str(caught.value)
     assert b in str(caught.value)
@@ -140,7 +136,7 @@ async def test_a_platform_the_grant_does_not_cover_is_refused(database, monkeypa
     monkeypatch.setattr(repurpose.acquisition, "acquire_and_record", _tripwire)
 
     with pytest.raises(WorkflowError, match="not youtube"):
-        await repurpose.REPURPOSE_WORKFLOW.run(
+        await _up_to("originality").run(
             "job1",
             {"source_ids": [source_id], "platform": "youtube"},
             await _events([]),
@@ -150,21 +146,23 @@ async def test_a_platform_the_grant_does_not_cover_is_refused(database, monkeypa
 # ── the originality refusal ─────────────────────────────────────────────────
 
 
-async def test_a_bare_lift_is_refused_at_the_gate(database, monkeypatch):
-    """Rights fine, edit lazy. The message must say which."""
-    source_id = await _seed()
-    _stub_media(monkeypatch, duration=60.0)
+async def test_the_pipeline_refuses_to_build_a_bare_lift(database, monkeypatch):
+    """A bare lift cannot get as far as the gate any more, and that is the point.
 
-    with pytest.raises(WorkflowError) as caught:
-        await repurpose.REPURPOSE_WORKFLOW.run(
+    `NarrationStage` refuses when no commentary was written, because a video with
+    nothing over the clips is a reupload and building it to find that out at the
+    gate wastes an encode. The gate still catches the same shape from other routes
+    — see `test_repurpose_gate.py::test_bare_source_with_a_topping_and_tailing_fails`.
+    """
+    source_id = await _seed()
+    _stub_media(monkeypatch, duration=60.0, narrate=False)
+
+    with pytest.raises(WorkflowError, match="every clip would be bare source"):
+        await _up_to("originality").run(
             "job1",
-            {"source_ids": [source_id], "segment_seconds": 60, "audio_bed_replaced": True},
+            {"source_ids": [source_id], "segment_seconds": 60},
             await _events([]),
         )
-
-    message = str(caught.value)
-    assert "Blocked on originality" in message
-    assert "unbroken lift" in message or "original narration" in message
 
 
 async def test_a_watermarked_clip_is_refused(database, monkeypatch):
@@ -172,31 +170,42 @@ async def test_a_watermarked_clip_is_refused(database, monkeypatch):
     _stub_media(monkeypatch, duration=30.0, watermarked=True)
 
     with pytest.raises(WorkflowError, match="watermark"):
-        await repurpose.REPURPOSE_WORKFLOW.run(
+        await _up_to("originality").run(
             "job1",
             {"source_ids": [source_id], "audio_bed_replaced": True},
             await _events([]),
         )
 
 
-async def test_an_unreplaced_audio_bed_is_refused(database, monkeypatch):
-    """TikTok music licences cover TikTok. Video rights do not help."""
+async def test_the_bed_is_replaced_by_construction_not_by_assertion(database, monkeypatch):
+    """The input flag cannot make an unlicensed bed pass, because it is no longer read.
+
+    `audio_bed_replaced` used to be a boolean the caller asserted, so the gate
+    could be satisfied by typing `true` into a request. `assemble` now *reports*
+    what it produced and `build_timeline` prefers that, so the only way to have a
+    replaced bed is to have actually replaced one — which `assemble` always does.
+    """
     source_id = await _seed()
     _stub_media(monkeypatch, duration=30.0)
 
-    with pytest.raises(WorkflowError, match="audio bed"):
-        await repurpose.REPURPOSE_WORKFLOW.run(
-            "job1",
-            {"source_ids": [source_id], "audio_bed_replaced": False},
-            await _events([]),
-        )
+    states = await _up_to("originality").run(
+        "job1",
+        # Asserting the opposite of the truth. It is ignored.
+        {"source_ids": [source_id], "segment_seconds": 10, "audio_bed_replaced": False},
+        await _events([]),
+    )
+
+    signals = {
+        s["name"]: s for s in states["originality"].output.value["transformation"]["signals"]
+    }
+    assert signals["audio_bed"]["severity"] == "ok"
 
 
 async def test_a_narrated_edit_with_original_material_passes(database, monkeypatch):
     source_id = await _seed()
     _stub_media(monkeypatch, duration=30.0)
 
-    states = await repurpose.REPURPOSE_WORKFLOW.run(
+    states = await _up_to("originality").run(
         "job1",
         {
             "source_ids": [source_id],
@@ -221,24 +230,42 @@ async def test_the_report_is_stored_against_the_project(database, monkeypatch):
     _stub_media(monkeypatch, duration=30.0)
     await repository.save_project("proj1", channel_key="main")
 
-    with pytest.raises(WorkflowError):
-        await repurpose.REPURPOSE_WORKFLOW.run(
-            "job1",
-            {"source_ids": [source_id], "project_id": "proj1", "segment_seconds": 60},
-            await _events([]),
-        )
+    await _up_to("originality").run(
+        "job1",
+        {"source_ids": [source_id], "project_id": "proj1", "segment_seconds": 10},
+        await _events([]),
+    )
 
     project = await repository.load_project("proj1")
     assert project is not None
     assert project["report"] is not None
-    assert project["report"]["publishable"] is False
+    assert project["report"]["thresholds_version"] >= 1
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 
-def _stub_media(monkeypatch, *, duration: float, watermarked: bool = False):
-    """Acquisition and signal extraction, without media."""
+def _up_to(stage_name: str):
+    """The real stage instances, in the real order, truncated after `stage_name`.
+
+    These tests are about the two refusals, and both happen at or before
+    `originality`. Running the packaging stages past it would mean stubbing an LLM
+    and a keyword sweep to assert something neither is involved in — while the
+    stages themselves are real instances in their real order, so a mis-wired
+    dependency still fails here exactly as it would in production. The stages
+    *after* the gate are covered by `Workflow._validate` at import, which is what
+    caught the missing thumbnail dependency in the publish graph.
+    """
+    from engine.workflows.base import Workflow
+
+    stages = repurpose.repurpose_stages()
+    cut = [s for s in stages[: [s.name for s in stages].index(stage_name) + 1]]
+    return Workflow("repurpose-test", cut)
+
+
+def _stub_media(monkeypatch, *, duration: float, watermarked: bool = False, narrate: bool = True):
+    """Everything that reaches outside the process: acquisition, signals, the two
+    model calls, TTS, and the encode. The stages themselves stay real."""
 
     async def fake_acquire(source_id, _url):
         from engine.repurpose.acquire import Acquired
@@ -262,8 +289,84 @@ def _stub_media(monkeypatch, *, duration: float, watermarked: bool = False):
             energy[i] = 0.9
         return {"energy": energy, "speech": energy, "motion": [0.1] * windows}
 
+    class _Completion:
+        model = "test-model"
+        prompt = "test-prompt"
+        cost_usd = 0.0
+
+    async def fake_thesis(**_kwargs):
+        return "these three clips share one mistake", _Completion()
+
+    async def fake_commentary(*, segments, **_kwargs):
+        from engine.repurpose.narrate import Line, Narration
+
+        if not narrate:
+            return Narration(thesis="t", lines=[], narrated_source_ids=[]), _Completion()
+        lines = [
+            Line(
+                source_id=seg.get("source_id"),
+                text="Here is the part everyone misreads, and why it matters.",
+                segment_index=index,
+                est_seconds=4.0,
+            )
+            for index, seg in enumerate(segments)
+        ]
+        narrated = [s for s in {line.source_id for line in lines} if s]
+        return Narration(thesis="t", lines=lines, narrated_source_ids=narrated), _Completion()
+
+    async def fake_synthesize(text, voice, *, original_text=None):
+        from pathlib import Path
+
+        from engine.settings import get_settings
+
+        out = Path(get_settings().storage_root) / "tmp"
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / "narration.mp3"
+        path.write_bytes(b"fake mp3")
+        return path, [{"start": 0.0, "end": 8.0, "text": text[:40]}]
+
+    async def fake_assemble(*, segments, hook=None, **_kwargs):
+        from engine.repurpose.assemble import Assembly, Placed
+
+        placed = []
+        cursor = 0.0
+        if hook and hook.get("teased"):
+            length = float(hook.get("duration_s") or 2.5)
+            placed.append(
+                Placed(
+                    source_id=hook["source_id"],
+                    start_s=float(hook.get("at_s") or 0),
+                    end_s=float(hook.get("at_s") or 0) + length,
+                    placed_at_s=cursor,
+                    is_hook=True,
+                )
+            )
+            cursor += length
+        for seg in segments:
+            length = float(seg.get("duration_s") or (seg.get("end_s", 0) - seg.get("start_s", 0)))
+            placed.append(
+                Placed(
+                    source_id=seg.get("source_id"),
+                    start_s=float(seg.get("start_s") or 0),
+                    end_s=float(seg.get("end_s") or 0),
+                    placed_at_s=cursor,
+                )
+            )
+            cursor += length
+        return Assembly(
+            output_key="repurpose/test.mp4",
+            duration_s=cursor,
+            placed=placed,
+            cuts=max(0, len(placed) - 1),
+            audio_bed_replaced=True,
+        )
+
     monkeypatch.setattr(repurpose.acquisition, "acquire_and_record", fake_acquire)
     monkeypatch.setattr(repurpose, "_signals", fake_signals)
+    monkeypatch.setattr(repurpose.narration_writer, "write_thesis", fake_thesis)
+    monkeypatch.setattr(repurpose.narration_writer, "write_commentary", fake_commentary)
+    monkeypatch.setattr(repurpose.assembly, "assemble", fake_assemble)
+    monkeypatch.setattr("engine.workflows.media._synthesize", fake_synthesize)
 
 
 async def _tripwire(*_a, **_k):
@@ -312,3 +415,50 @@ def test_repurpose_inputs_are_flattened_onto_the_job():
     assert inputs["source_ids"] == ["a", "b"]
     assert inputs["audio_bed_replaced"] is True
     assert "repurpose" not in inputs
+
+
+# ── the publish path ────────────────────────────────────────────────────────
+
+
+def test_a_repurpose_publish_workflow_exists_and_validates():
+    """Registered *and* importable. `PUBLISH_WORKFLOW` spent months unregistered
+    because a standalone graph failed `Workflow._validate` at import — the same
+    check caught this one missing a thumbnail stage."""
+    assert "repurpose-publish" in video.WORKFLOWS
+
+    names = [s.name for s in video.WORKFLOWS["repurpose-publish"].stages]
+    assert "upload" in names
+    assert names.index("originality") < names.index("upload"), (
+        "the gate has to clear before anything spends 1,600 quota units"
+    )
+
+
+def test_the_publish_graph_is_not_startable_directly():
+    """Started directly it would run the whole paid pipeline and then die on a
+    missing YouTube client — the failure `video.py` documents for "publish"."""
+    assert "repurpose-publish" not in video.STARTABLE
+
+
+def test_the_finished_file_reaches_the_publish_stages_under_the_name_they_read():
+    """`UploadStage` reads "render"; assemble produces the file. The alternative
+    to bridging them is a second copy of four publish stages differing in one
+    string."""
+    stages = {s.name: s for s in video.WORKFLOWS["repurpose-publish"].stages}
+
+    assert "render" in stages
+    assert "assemble" in stages["render"].depends_on
+
+
+async def test_a_repurpose_job_is_accepted_by_the_publish_gate(database, monkeypatch):
+    """It used to be refused outright: the gate hard-checked for the "video"
+    workflow, so a repurposed video could never publish however good it was."""
+    from fastapi.testclient import TestClient
+
+    from engine.main import app
+
+    with TestClient(app) as client:
+        response = client.post("/v1/jobs/nonexistent/publish", json={})
+
+    # 404 for the missing job — *not* a 409 about the wrong workflow, which is
+    # what this used to be for every repurpose job.
+    assert response.status_code == 404

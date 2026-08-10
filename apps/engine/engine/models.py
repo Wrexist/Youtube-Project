@@ -76,6 +76,17 @@ TASKS: dict[str, dict] = {
     "draft": {"group": "Script", "needs": "long output", "quality": "critical"},
     "critique": {"group": "Script", "needs": "judgement", "quality": "critical"},
     "revision": {"group": "Script", "needs": "long output", "quality": "high"},
+    # Repurpose
+    #
+    # Two tasks rather than one because they answer different questions and one is
+    # far harder than the other. `thesis` decides what a set of clips is *about* —
+    # the editorial argument that makes an edit more than a bag of clips, and the
+    # thing the reused-content policy calls "editing that tells a story". That is
+    # judgement, and it is the difference between a monetisable video and a
+    # compilation. `commentary` then writes to fixed cut timings, which is closer
+    # to constrained prose than to judgement.
+    "thesis": {"group": "Repurpose", "needs": "judgement, JSON", "quality": "critical"},
+    "commentary": {"group": "Repurpose", "needs": "timed prose, JSON", "quality": "high"},
     # SEO
     "titles": {"group": "SEO", "needs": "judgement, JSON", "quality": "critical"},
     "description": {"group": "SEO", "needs": "prose", "quality": "high"},

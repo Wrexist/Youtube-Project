@@ -11,12 +11,20 @@ cheap judgement first, the irreversible expensive thing last, and the originalit
 gate *before* the SEO stages so a blocked video does not pay for a title it will
 never use.
 
-    rights → acquire → segment → hook → angle → narration → voiceover
+    rights → acquire → segment → thesis → narration → draft → voiceover
            → assemble → subtitles → originality
+           → grounding → titles → description → tags → chapters → thumbnail
 
-`originality` is not the last stage by accident either. It reads the assembled
-timeline, so it cannot run earlier; and it must run before anything that costs
-money downstream, so it cannot run later.
+`originality` sits where it does for two reasons at once. It reads the *assembled*
+timeline, so it cannot run earlier — before `assemble` there is no finished video
+to judge, only an intention. And everything after it costs money, so it cannot run
+later without paying for packaging on a video that will never go out.
+
+**`narration` is what makes the gate passable at all.** `gate.py` measures
+authorship, and without commentary every source segment is bare source and
+`authored_share` is zero by construction. A version of this workflow without that
+stage — which is what existed first — could only ever produce refusals, and the
+refusals were correct: the thing it produced was a reupload.
 
 **What this workflow does not do.** It does not decide whether a clip may be used.
 That decision is made by a human on the Repurpose screen, recorded as a grant, and
@@ -32,9 +40,12 @@ from loguru import logger
 
 from engine import repository
 from engine.repurpose import acquire as acquisition
+from engine.repurpose import assemble as assembly
+from engine.repurpose import narrate as narration_writer
 from engine.repurpose import segment as segmentation
 from engine.repurpose.gate import Corpus, Timeline, TimelineSegment, evaluate
 from engine.repurpose.rights import Grant
+from engine.workflows import media, publish, seo
 from engine.workflows.base import (
     Provenance,
     Stage,
@@ -295,6 +306,231 @@ async def _extract_signals(path) -> dict:
     return await asyncio.to_thread(work)
 
 
+class ThesisStage(Stage[str]):
+    """What these clips are *about* — the claim the video argues.
+
+    First creative stage, and the one that decides whether this is a video or a
+    compilation. "Editing that tells a story" is the policy's own phrase for what
+    makes reuse monetisable, and a story needs a claim.
+    """
+
+    name = "thesis"
+    title = "Thesis"
+    depends_on = ("segment",)
+    estimated_cost_usd = 0.05
+    editable = True
+    editable_type = str
+
+    async def run(self, ctx: WorkflowContext) -> StageOutput[str]:
+        cleared: ClearedClips = ctx.get("rights")
+        captions = await _captions(cleared.source_ids)
+
+        thesis, completion = await narration_writer.write_thesis(
+            topic=str(ctx.inputs.get("topic") or ""),
+            captions=list(captions.values()),
+        )
+        if not thesis:
+            raise WorkflowError("no thesis was produced; the clips may share nothing")
+
+        return StageOutput(
+            value=thesis,
+            cost_usd=completion.cost_usd,
+            provenance=Provenance(model=completion.model, prompt=completion.prompt),
+        )
+
+
+class NarrationStage(Stage[narration_writer.Narration]):
+    """The commentary, written to the cut timings.
+
+    **This is the stage that makes the gate passable.** Without it every source
+    segment is bare source and `authored_share` is zero by construction — which is
+    the correct verdict on a video with nothing added, and the reason a repurpose
+    pipeline missing this stage can only ever produce refusals.
+    """
+
+    name = "narration"
+    title = "Commentary"
+    depends_on = ("thesis", "segment")
+    estimated_cost_usd = 0.08
+
+    async def run(self, ctx: WorkflowContext) -> StageOutput[narration_writer.Narration]:
+        cuts: Cuts = ctx.get("segment")
+        cleared: ClearedClips = ctx.get("rights")
+
+        result, completion = await narration_writer.write_commentary(
+            thesis=ctx.get("thesis"),
+            topic=str(ctx.inputs.get("topic") or ""),
+            segments=cuts.segments,
+            captions=await _captions(cleared.source_ids),
+        )
+        if not result.lines:
+            raise WorkflowError(
+                "no commentary was written, so every clip would be bare source. "
+                "The video would be refused at the originality gate."
+            )
+
+        return StageOutput(
+            value=result,
+            cost_usd=completion.cost_usd,
+            provenance=Provenance(model=completion.model, prompt=completion.prompt),
+        )
+
+
+class VoiceoverStage(Stage[dict]):
+    """Speak the commentary.
+
+    Its own stage rather than `media.VoiceoverStage` because that one reads
+    `revision`/`draft` from the script chain, which does not exist here. The TTS
+    call underneath is the same one.
+    """
+
+    name = "voiceover"
+    title = "Voiceover"
+    depends_on = ("narration",)
+    timeout_s = 600.0
+    estimated_cost_usd = 0.05
+
+    async def run(self, ctx: WorkflowContext) -> StageOutput[dict]:
+        from engine.settings import get_settings
+        from engine.storage import store
+        from engine.workflows.media import _synthesize
+
+        result: narration_writer.Narration = ctx.get("narration")
+        settings = get_settings()
+        voice = ctx.inputs.get("voice") or settings.tts_voice
+
+        await ctx.progress("synthesising commentary")
+        audio_path, cues = await _synthesize(
+            result.full_text, voice, original_text=result.full_text
+        )
+        key = await store.put_file(audio_path, f"repurpose/voiceover-{ctx.job_id}.mp3")
+
+        return StageOutput(
+            value={
+                "audio_key": key,
+                "duration_s": cues[-1]["end"] if cues else 0.0,
+                "cues": cues,
+                "voice": voice,
+            },
+            artifacts={"audio": key},
+            provenance=Provenance(params={"voice": voice, "cue_count": len(cues)}),
+        )
+
+
+class AssembleStage(Stage[assembly.Assembly]):
+    """Cut it together into a file.
+
+    The audio-bed replacement lives here and is not optional — TikTok's music
+    licences cover TikTok, so a source bed on YouTube is unlicensed however solid
+    the video rights are.
+    """
+
+    name = "assemble"
+    title = "Assemble"
+    depends_on = ("segment", "voiceover")
+    #: Renders are long and the framework's default would abandon one mid-encode.
+    timeout_s = None
+    max_attempts = 1
+
+    async def run(self, ctx: WorkflowContext) -> StageOutput[assembly.Assembly]:
+        from engine.storage import store
+
+        cuts: Cuts = ctx.get("segment")
+        acquired: AcquiredClips = ctx.get("acquire")
+        voiceover = ctx.get("voiceover")
+
+        sources = {
+            source_id: await store.local_path(asset["storage_key"])
+            for source_id, asset in acquired.assets.items()
+            if asset.get("storage_key")
+        }
+
+        result = await assembly.assemble(
+            segments=cuts.segments,
+            sources=sources,
+            narration_path=await store.local_path(voiceover["audio_key"]),
+            job_id=ctx.job_id,
+            aspect=str(ctx.inputs.get("aspect") or "9:16"),
+            hook=cuts.hook,
+            bed_path=_bed_path(str(ctx.inputs.get("bgm_track") or "")),
+            keep_source_audio=set(ctx.inputs.get("keep_source_audio") or []),
+            on_progress=lambda fraction, message: ctx.progress(message, fraction),
+        )
+
+        return StageOutput(
+            value=result,
+            artifacts={"video": result.output_key},
+            provenance=Provenance(
+                params={
+                    "aspect": result.aspect,
+                    "cuts": result.cuts,
+                    "audio_bed_replaced": result.audio_bed_replaced,
+                }
+            ),
+        )
+
+
+class SubtitlesStage(Stage[list]):
+    """Cue timings from the TTS boundaries, which come free with Edge."""
+
+    name = "subtitles"
+    title = "Subtitles"
+    depends_on = ("voiceover",)
+    timeout_s = 600.0
+
+    async def run(self, ctx: WorkflowContext) -> StageOutput[list]:
+        voiceover = ctx.get("voiceover")
+        cues = voiceover.get("cues") or []
+        method = "tts_boundaries"
+
+        if not cues:
+            from engine.render import compose
+            from engine.storage import store
+
+            await ctx.progress("transcribing (no TTS timings available)")
+            cues = await compose.transcribe(await store.local_path(voiceover["audio_key"]))
+            method = "whisper"
+
+        return StageOutput(
+            value=cues,
+            provenance=Provenance(params={"method": method, "cue_count": len(cues)}),
+        )
+
+
+async def _captions(source_ids: list[str]) -> dict[str, str]:
+    """Original captions, by source id.
+
+    Untrusted. They are fenced in `narrate.py` at the point of interpolation
+    rather than here, so the raw text stays available to anything that needs it
+    verbatim and the fencing happens once, next to the prompt.
+    """
+    try:
+        rows = await repository.clip_sources(channel_key="", status="selected", limit=200)
+        rows += await repository.clip_sources(channel_key="", status="discovered", limit=200)
+    except Exception as exc:  # noqa: BLE001 — captions are a nicety, not a dependency
+        logger.warning("could not read clip captions: {}", exc)
+        return {}
+    return {r["id"]: r.get("caption", "") for r in rows if r["id"] in set(source_ids)}
+
+
+def _bed_path(track: str = ""):
+    """A licensed music bed, or None.
+
+    None is a perfectly good answer and the safe default: commentary over silence
+    is a legitimate edit, and an unlicensed bed is the exact problem this whole
+    module exists to avoid. `services/bgm.py` owns what counts as available —
+    `resolve("")` picks from the configured directory and returns None when there
+    is nothing there.
+    """
+    try:
+        from engine.services import bgm
+
+        return bgm.resolve(track)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("no music bed available: {}", exc)
+        return None
+
+
 class OriginalityStage(Stage[dict]):
     """The gate. Both verdicts, and the run stops if either fails.
 
@@ -309,7 +545,7 @@ class OriginalityStage(Stage[dict]):
 
     name = "originality"
     title = "Originality"
-    depends_on = ("segment",)
+    depends_on = ("segment", "assemble")
     max_attempts = 1
     timeout_s = 60.0
 
@@ -372,23 +608,48 @@ def _refusal(report) -> str:
 def build_timeline(ctx: WorkflowContext, *, cuts: Cuts, acquired: AcquiredClips) -> Timeline:
     """The assembled video as the gate needs to see it.
 
-    Separate from the stage so the same construction is testable, and so the
-    publish gate can rebuild it from a finished job's states without re-running
-    anything.
+    **Reads the finished file's own facts wherever they exist.** `assemble` reports
+    what it actually produced — how many cuts, which segments landed where, whether
+    the bed was replaced — and those are used in preference to anything in
+    `ctx.inputs`. That preference is the whole point: for a while `audio_bed_replaced`
+    and `cut_count` were booleans and integers the *caller* asserted, which made the
+    gate's evidence a claim by the thing being judged. It could be passed by typing
+    `"audio_bed_replaced": true` into a request.
+
+    The input fallbacks survive only for the pre-assembly path — `POST
+    /v1/repurpose/evaluate` scores a proposed edit before a file exists, and there
+    the caller genuinely is describing an intention.
+
+    Separate from the stage so the same construction is testable, and so the publish
+    gate can rebuild it from a finished job's states without re-running anything.
     """
     segments: list[TimelineSegment] = []
     cursor = 0.0
 
     narration = ctx.try_get("narration")
     narrated_ids = set(getattr(narration, "narrated_source_ids", []) or [])
+    assembled: assembly.Assembly | None = ctx.try_get("assemble")
 
-    for cut in cuts.segments:
-        length = float(
-            cut.get("duration_s") or max(0.0, cut.get("end_s", 0) - cut.get("start_s", 0))
-        )
+    # The placements the render actually made, when there was one. They differ from
+    # the cut list in two ways that matter: a teased hook adds a segment that is not
+    # in `cuts`, and an unusable clip is dropped from it.
+    placements = (
+        [(p.source_id, p.duration_s) for p in assembled.placed]
+        if assembled is not None
+        else [
+            (
+                cut.get("source_id"),
+                float(
+                    cut.get("duration_s") or max(0.0, cut.get("end_s", 0) - cut.get("start_s", 0))
+                ),
+            )
+            for cut in cuts.segments
+        ]
+    )
+
+    for source_id, length in placements:
         if length <= 0:
             continue
-        source_id = cut.get("source_id")
         segments.append(
             TimelineSegment(
                 start_s=cursor,
@@ -409,12 +670,21 @@ def build_timeline(ctx: WorkflowContext, *, cuts: Cuts, acquired: AcquiredClips)
 
     return Timeline(
         segments=tuple(segments),
-        cuts=int(ctx.inputs.get("cut_count") or len(segments)),
-        audio_bed_replaced=bool(ctx.inputs.get("audio_bed_replaced")),
+        # Measured, then asserted, then counted — in that order of trust.
+        cuts=(
+            assembled.cuts
+            if assembled is not None
+            else int(ctx.inputs.get("cut_count") or len(segments))
+        ),
+        audio_bed_replaced=(
+            assembled.audio_bed_replaced
+            if assembled is not None
+            else bool(ctx.inputs.get("audio_bed_replaced"))
+        ),
         watermarked_sources=tuple(acquired.watermarked),
         attribution_on_screen=bool(ctx.inputs.get("attribution_on_screen")),
         attribution_in_description=bool(ctx.inputs.get("attribution_in_description")),
-        is_compilation=len(cuts.segments) > 1,
+        is_compilation=len({s for s, _ in placements if s}) > 1,
     )
 
 
@@ -453,14 +723,126 @@ async def _corpus(ctx: WorkflowContext) -> Corpus:
     )
 
 
+# The SEO stages read `revision`/`draft` through `try_get`, so in this workflow
+# they see None and write a title with no script behind it. `_Script` supplies one:
+# the commentary *is* this video's script, it is just written to cuts rather than
+# from scratch. Named "draft" because that is the name the SEO chain reads, and a
+# second name for the same thing would mean editing four stages that are otherwise
+# reused verbatim — the pattern `video.py` already uses for `_Titles`.
+class _Script(Stage):
+    name = "draft"
+    title = "Script"
+    depends_on = ("narration",)
+    timeout_s = 30.0
+
+    async def run(self, ctx: WorkflowContext) -> StageOutput:
+        from engine.workflows.script import Script
+
+        result: narration_writer.Narration = ctx.get("narration")
+        lines = [line.text for line in result.lines]
+        return StageOutput(
+            value=Script(
+                hook=lines[0] if lines else "",
+                body=" ".join(lines[1:]),
+                beats=[],
+                sources=[],
+            ),
+            provenance=Provenance(params={"derived_from": "narration"}),
+        )
+
+
+class _Titles(seo.TitlesStage):
+    depends_on = ("grounding", "draft")
+
+
+class _Description(seo.DescriptionStage):
+    depends_on = ("titles", "grounding", "draft")
+
+
+class _Chapters(seo.ChaptersStage):
+    depends_on = ("titles", "subtitles")
+
+
+class _Thumbnail(media.ThumbnailStage):
+    """Same stage, pointed at this workflow's script.
+
+    Not optional trimming: `publish.ThumbnailSetStage` depends on "thumbnail", so a
+    repurpose-publish workflow without it fails `Workflow._validate` at import —
+    which is exactly the check that caught it.
+    """
+
+    depends_on = ("titles", "draft")
+
+
 def repurpose_stages() -> list[Stage]:
-    """The stages, as fresh instances — `Stage` objects carry per-run state."""
+    """The stages that produce a finished, unpublished repurposed video.
+
+    A function rather than a module-level list because `Stage` instances carry
+    per-run state, and the publish workflow needs its own.
+
+    Order, and why:
+
+        rights      refuse before a byte is fetched or a cent spent
+        acquire     media, only for cleared clips
+        segment     where to cut, and which moment opens
+        thesis      what this is about — a compilation with no claim is the
+                    failure the policy names
+        narration   the commentary. Without it every clip is bare source
+        voiceover   speak it
+        assemble    cut it together; replace the audio bed
+        subtitles   cues from the TTS boundaries
+        originality THE GATE — after the file exists so it judges what was made,
+                    before the SEO stages so a blocked video pays for no title
+        grounding…  packaging, only ever reached by a video that passed
+    """
     return [
         RightsStage(),
         AcquireStage(),
         SegmentStage(),
+        ThesisStage(),
+        NarrationStage(),
+        _Script(),
+        VoiceoverStage(),
+        AssembleStage(),
+        SubtitlesStage(),
         OriginalityStage(),
+        # Everything below is only reached by a video the gate passed.
+        seo.GroundingStage(),
+        _Titles(),
+        _Description(),
+        seo.TagsStage(),
+        _Chapters(),
+        _Thumbnail(),
     ]
 
 
 REPURPOSE_WORKFLOW = Workflow("repurpose", repurpose_stages())
+
+
+#: Publishing a repurposed video. Extends the workflow rather than standing alone,
+#: for the reason `video.py` documents: `UploadStage.depends_on` names stages from
+#: the producing workflow, and `Workflow._validate` requires every dependency to be
+#: defined earlier in the *same* workflow.
+#:
+#: `UploadStage` expects a "render" stage. Here the finished file comes from
+#: `assemble`, so `_Render` republishes it under the name the publish stages read —
+#: the alternative is a second copy of four publish stages differing in one string.
+class _Render(Stage[str]):
+    name = "render"
+    title = "Video"
+    depends_on = ("assemble",)
+    timeout_s = 30.0
+
+    async def run(self, ctx: WorkflowContext) -> StageOutput[str]:
+        result: assembly.Assembly = ctx.get("assemble")
+        return StageOutput(
+            value=result.output_key,
+            artifacts={"video": result.output_key},
+            provenance=Provenance(params={"from": "assemble"}),
+        )
+
+
+REPURPOSE_PUBLISH_WORKFLOW = Workflow(
+    "repurpose-publish",
+    [*repurpose_stages(), _Render(), *publish.publish_stages()],
+)
