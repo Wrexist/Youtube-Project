@@ -538,3 +538,36 @@ async def test_the_fallback_is_fast_when_redis_is_absent(monkeypatch):
     started = time.monotonic()
     assert await worker.enqueue("job-1") is False
     assert time.monotonic() - started < 1.0
+
+
+def test_tiktok_credentials_read_the_unprefixed_names(monkeypatch):
+    """`validation_alias` overrides `env_prefix`, so the STUDIO_-prefixed form
+    reads as unset. Two error messages named the prefixed form and would have sent
+    an operator to set a variable nothing reads."""
+    from engine.settings import Settings, get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("TIKTOK_CLIENT_KEY", "real")
+    monkeypatch.setenv("STUDIO_TIKTOK_CLIENT_SECRET", "ignored")
+
+    settings = Settings()
+
+    assert settings.tiktok_client_key == "real"
+    assert settings.tiktok_client_secret == ""
+
+
+def test_the_tiktok_error_message_names_the_variable_that_works(monkeypatch):
+    from engine.providers import tiktok
+    from engine.settings import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.delenv("TIKTOK_CLIENT_KEY", raising=False)
+    monkeypatch.delenv("TIKTOK_CLIENT_SECRET", raising=False)
+
+    try:
+        tiktok.authorize_url("https://example.test/cb", "state")
+    except tiktok.TikTokUnavailable as exc:
+        assert "STUDIO_TIKTOK" not in str(exc)
+        assert "TIKTOK_CLIENT_KEY" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected a refusal")

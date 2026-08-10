@@ -114,9 +114,7 @@ def configured() -> bool:
 def authorize_url(redirect_uri: str, state: str) -> str:
     """Where the browser goes to grant Lane A access."""
     if not configured():
-        raise TikTokUnavailable(
-            "STUDIO_TIKTOK_CLIENT_KEY and STUDIO_TIKTOK_CLIENT_SECRET are not set"
-        )
+        raise TikTokUnavailable("TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET are not set")
     from urllib.parse import urlencode
 
     return (

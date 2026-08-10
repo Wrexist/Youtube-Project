@@ -316,8 +316,8 @@ async def begin_tiktok_auth(redirect_uri: str) -> dict:
     if not tiktok.configured():
         raise HTTPException(
             409,
-            "TikTok is not configured. Set STUDIO_TIKTOK_CLIENT_KEY and "
-            "STUDIO_TIKTOK_CLIENT_SECRET, then restart the engine.",
+            "TikTok is not configured. Set TIKTOK_CLIENT_KEY and "
+            "TIKTOK_CLIENT_SECRET in .env, then restart the engine.",
         )
     return {"url": tiktok.authorize_url(redirect_uri, uuid.uuid4().hex)}
 
