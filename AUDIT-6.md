@@ -9,10 +9,11 @@ Ranked by impact divided by effort. Every claim below was checked against `main`
 
 ---
 
-**Status.** 1 and 2 are built and verified against a running engine. 3 and 6 are
-built but **not verified end to end** — the playlist picker needs a connected
+**Status.** 1, 2, 4 and 7 are built and verified against a running engine. 3 and 6
+are built but **not verified end to end** — the playlist picker needs a connected
 YouTube channel and the notification needs a completed render, and neither was
-available on the machine this was written on. 4, 5, 7 and 8 are open.
+available on the machine this was written on. **5 and 8 are open**, and they are the
+two large ones; 8 explicitly wants to land with 5 rather than before it.
 
 Each `✅` heading below carries the same distinction. The prose under a heading
 describes the state that motivated the work, which is why it is written in the past
@@ -109,7 +110,7 @@ in the publish flow, which is the one screen that must stay uncluttered.
 
 ---
 
-## 4. Spend over time
+## 4. Spend over time ✅ done
 
 Cost is metered per stage and capped per video, and there is no answer to "what has
 this channel cost me this month". `automation.SpendLedger` is written — record,
@@ -119,8 +120,10 @@ window, total — and nothing calls it.
 Complements AUDIT-5 #5 rather than duplicating it: that one is a ceiling for the video
 in front of you, this is the bill.
 
-**Cons** — `SpendLedger` is in-memory, so it needs a persistence story before it
-means anything across restarts.
+**Cons** — ~~`SpendLedger` is in-memory, so it needs a persistence story.~~ It did
+not need one. The plan above was wrong: `jobs.cost_usd` already holds the number,
+written by `save_job` from what the stages actually spent, so this reads the jobs
+table and `SpendLedger` stays where it is — unused, and belonging to #5.
 
 **Effort** — Small to medium.
 
@@ -164,7 +167,7 @@ most. A durable version wants the worker to send it, not the page.
 
 ---
 
-## 7. A backlog of ideas that persists and depletes
+## 7. A backlog of ideas that persists and depletes ✅ done
 
 The Create screen researches and scores ideas, shows them once, and forgets them.
 
