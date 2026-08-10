@@ -50,7 +50,18 @@ Rules for that code:
 - Data fetching in Server Components; mutations via Server Actions. TanStack Query only for the SSE-backed live job views.
 
 **Both**
-- Tests live next to the code. `pytest` and `vitest` — both are installed and both run in CI (`npm run test`).
+- **Web tests live next to the code** — `components/weekly-review.test.tsx` beside
+  `components/weekly-review.tsx`. **Engine tests live in `apps/engine/tests/`**, all
+  fifty of them, mirroring the module name: `tests/test_review.py` for
+  `engine/review.py`.
+
+  This line used to say "tests live next to the code" without qualification, which
+  was true of the three web tests and false of every Python one. A reviewer read the
+  rule, correctly observed that no engine test follows it, and filed it four times
+  across two pull requests. Describing what is actually there is cheaper than moving
+  fifty files, and far cheaper than leaving a rule nobody obeys.
+
+  `pytest` and `vitest` — both installed, both run in CI (`npm run test`).
 - Conventional commits.
 
 ## Commands

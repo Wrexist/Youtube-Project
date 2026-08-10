@@ -72,7 +72,10 @@ export default async function AnalyticsPage() {
           {review ? (
             <WeeklyReview review={review} />
           ) : (
-            <NoReviewYet workerRunning={setup?.worker_running ?? false} />
+            // `null` when the engine did not answer, so the card can say that
+            // rather than blaming a worker it could not ask about. `?? false`
+            // here would have reported a stopped worker on every failed request.
+            <NoReviewYet workerRunning={setup === null ? null : setup.worker_running} />
           )}
         </section>
 
