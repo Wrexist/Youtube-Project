@@ -137,6 +137,9 @@ export function StyleView({ initial, demo = false }: { initial: Style; demo?: bo
             </p>
             <input
               defaultValue={style.voice}
+              // Same race as the buttons above: a second blur during a save is a
+              // second PUT, and the older response can land last.
+              disabled={saving !== null}
               onBlur={(e) =>
                 e.target.value.trim() !== style.voice &&
                 save("voice", { voice: e.target.value.trim() })
