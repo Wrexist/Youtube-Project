@@ -237,6 +237,11 @@ export function CreateView({
   function reset() {
     setJobId(null);
     setDemo(false);
+    // Both, or the next video is silently added to the last one's playlist. The
+    // list repopulates itself when the new job completes; the *selection* would
+    // have survived, and `onPublish` reads it directly.
+    setPlaylist("");
+    setPlaylists([]);
     setError(null);
     setBlockers([]);
     setNotice(null);

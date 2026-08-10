@@ -18,7 +18,7 @@ import type { Style, StyleUpdate, StyleVoice } from "@studio/contracts";
  * succeed and change nothing. Rendering the response rather than the request is
  * what makes that visible instead of silent.
  */
-export function StyleView({ initial }: { initial: Style }) {
+export function StyleView({ initial, demo = false }: { initial: Style; demo?: boolean }) {
   const [style, setStyle] = useState(initial);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,13 +34,42 @@ export function StyleView({ initial }: { initial: Style }) {
     [style.options.voices, locale],
   );
 
-  async function save(field: string, changes: StyleUpdate) {
+  /**
+   * Apply a change, and report whether it stuck.
+   *
+   * The boolean is for the slider: it holds the value under the thumb while you
+   * drag, and a failed save would otherwise leave it showing a number that is not
+   * the one in force.
+   *
+   * `finally`, not a trailing `setSaving(null)`. `updateStyle` catches engine
+   * errors *inside* the Server Action, but the call to the action can still reject
+   * on its own — a dropped connection between browser and server — and that path
+   * skipped the reset and left every control on the screen disabled until reload.
+   */
+  async function save(field: string, changes: StyleUpdate): Promise<boolean> {
+    if (demo) {
+      // Local only. The screen exists so the design can be judged without an
+      // engine; writing to one that is not there would be the failure this
+      // branch exists to avoid.
+      setStyle((current) => ({ ...current, ...changes }) as Style);
+      return true;
+    }
     setSaving(field);
     setError(null);
-    const result = await updateStyle(changes);
-    if (result.ok && result.data) setStyle(result.data);
-    else setError(result.error ?? "could not save that — nothing changed");
-    setSaving(null);
+    try {
+      const result = await updateStyle(changes);
+      if (result.ok && result.data) {
+        setStyle(result.data);
+        return true;
+      }
+      setError(result.error ?? "could not save that — nothing changed");
+      return false;
+    } catch {
+      setError("could not reach the engine — nothing changed");
+      return false;
+    } finally {
+      setSaving(null);
+    }
   }
 
   const { options } = style;
@@ -88,6 +117,10 @@ export function StyleView({ initial }: { initial: Style }) {
                   key={voice.id}
                   voice={voice}
                   selected={voice.id === style.voice}
+                  // Two clicks in quick succession are two PUTs, and the later
+                  // response wins whichever order they land in — so the screen
+                  // could settle on the voice you did not pick last.
+                  disabled={saving !== null}
                   onChoose={() => save("voice", { voice: voice.id })}
                 />
               ))}
@@ -325,18 +358,21 @@ function Field({ title, hint, busy }: { title: string; hint: string; busy: boole
 function VoiceOption({
   voice,
   selected,
+  disabled,
   onChoose,
 }: {
   voice: StyleVoice;
   selected: boolean;
+  disabled?: boolean;
   onChoose: () => void;
 }) {
   return (
     <button
       role="radio"
       aria-checked={selected}
+      disabled={disabled}
       onClick={onChoose}
-      className={`rounded-[var(--radius-card)] border px-3.5 py-3 text-left transition-colors duration-150 ${
+      className={`rounded-[var(--radius-card)] border px-3.5 py-3 text-left transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
         selected
           ? "border-[var(--color-accent)] bg-[var(--color-raised)]"
           : "border-[var(--color-line)] hover:border-[var(--color-line-hover)]"
@@ -420,9 +456,23 @@ function Slider({
   step: number;
   disabled?: boolean;
   format: (v: number) => string;
-  onCommit: (v: number) => void;
+  onCommit: (v: number) => Promise<boolean>;
 }) {
   const [local, setLocal] = useState(value);
+
+  /**
+   * Snap back when the save did not take.
+   *
+   * `local` follows the thumb, `value` is what is actually in force. On a failed
+   * save those diverge and the slider sits showing a number nothing is using —
+   * which is worse than the error message beside it, because the control looks
+   * like it worked.
+   */
+  async function commit() {
+    if (local === value) return;
+    const saved = await onCommit(local);
+    if (!saved) setLocal(value);
+  }
 
   return (
     <label className="block text-[12px] text-[var(--color-muted)]">
@@ -438,8 +488,8 @@ function Slider({
         value={local}
         disabled={disabled}
         onChange={(e) => setLocal(Number(e.target.value))}
-        onPointerUp={() => local !== value && onCommit(local)}
-        onKeyUp={() => local !== value && onCommit(local)}
+        onPointerUp={commit}
+        onKeyUp={commit}
         className="mt-2 w-full max-w-[320px] accent-[var(--color-accent)]"
       />
     </label>

@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 from loguru import logger
+from typing_extensions import TypedDict  # pydantic rejects typing.TypedDict on 3.11
 
 from engine.crypto import DecryptionFailed, decrypt, encrypt
 from engine.quota import ledger
@@ -28,6 +29,21 @@ from engine.settings import get_settings
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 API = "https://www.googleapis.com/youtube/v3"
+
+
+class PlaylistData(TypedDict):
+    """One playlist, trimmed to what a picker needs.
+
+    `count` is the third field for a reason: it is what tells two similarly-named
+    playlists apart, and without it a dropdown of "Shorts", "Shorts (old)" and
+    "shorts" is a guess.
+    """
+
+    id: str
+    title: str
+    count: int
+
+
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
 
 SCOPES = (
@@ -592,7 +608,7 @@ class YouTube:
             files=files,
         )
 
-    async def playlists(self, limit: int = 50) -> list[dict]:
+    async def playlists(self, limit: int = 50) -> list[PlaylistData]:
         """The channel's own playlists, cheapest-possible.
 
         One unit — `playlists.list` is a read — so the publish screen can offer a

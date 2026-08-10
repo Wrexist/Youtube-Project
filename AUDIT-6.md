@@ -9,7 +9,14 @@ Ranked by impact divided by effort. Every claim below was checked against `main`
 
 ---
 
-**Status.** 1, 2, 3 and 6 are built — see the `✅` headings. 4, 5, 7 and 8 are open.
+**Status.** 1 and 2 are built and verified against a running engine. 3 and 6 are
+built but **not verified end to end** — the playlist picker needs a connected
+YouTube channel and the notification needs a completed render, and neither was
+available on the machine this was written on. 4, 5, 7 and 8 are open.
+
+Each `✅` heading below carries the same distinction. The prose under a heading
+describes the state that motivated the work, which is why it is written in the past
+where the thing has since been built.
 
 **Found while building #2, and worth its own line:** `database_url` defaults to the
 *relative* `./storage/studio.db`, and the engine runs from `apps/engine` while the
@@ -86,7 +93,7 @@ than no screen — it trains you to ignore it.
 
 ---
 
-## 3. Choose a playlist when publishing ✅ done
+## 3. Choose a playlist when publishing ✅ built, E2E unverified
 
 `PlaylistStage` is complete and always skips: it returns early unless
 `ctx.inputs["playlist_id"]` is set, and `playlist_id` appears nowhere in the web app
@@ -140,7 +147,7 @@ before it is a coding one.
 
 ---
 
-## 6. Tell me when the render is done ✅ done
+## 6. Tell me when the render is done ✅ built, E2E unverified
 
 A long-form render takes tens of minutes. The window gets closed or buried, and there
 is no signal when it lands.
