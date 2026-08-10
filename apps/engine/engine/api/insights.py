@@ -12,6 +12,7 @@ from engine.api.publishing import CHANNELS
 from engine.insights import VideoRecord, analyze, map_retention_to_beats
 from engine.providers import youtube
 from engine.providers.analytics import Analytics
+from engine.review import ReviewPayload
 from engine.settings import get_settings
 
 router = APIRouter(prefix="/v1", tags=["insights"])
@@ -88,6 +89,24 @@ async def refresh_insights() -> dict:
         updated += 1
 
     return {"pulled": len(rows), "matched": updated, "unmatched": len(rows) - updated}
+
+
+@router.get("/insights/review")
+async def last_review() -> ReviewPayload | None:
+    """The most recent weekly review, or null if none has been stored.
+
+    The cron has produced one every Monday since it was written and there was no
+    way to read it: the payload went into arq's result store, which keeps results
+    for an hour. Running a fresh one was the only alternative, and that consumes
+    the baseline the real weekly diff compares against — so looking at the review
+    destroyed next week's.
+
+    Null rather than a 404: "no review yet" is the normal state of a new install,
+    not a missing resource.
+    """
+    from engine import repository
+
+    return await repository.latest_review()
 
 
 @router.post("/insights/review")

@@ -31,10 +31,14 @@ import type {
   JobStatus,
   JobSummary,
   Models,
+  Playlist,
   PublishRequest,
   Quota,
+  Review,
   Sharpened,
   SetupStatus,
+  Style,
+  StyleUpdate,
   Suggestions,
   Thumbnails,
   WorkflowGraph,
@@ -203,10 +207,15 @@ export const getSlots = (days = 14) =>
   get<CalendarSlots>(`/v1/calendar/slots?days=${days}`);
 export const getChannels = () => get<Channels>("/v1/channels");
 export const getInsights = () => get<Insights>("/v1/insights");
+/** Null both when the engine is unreachable and when no review has run yet. The
+ *  screen says the same thing for the second case; the first is a `LiveBadge`. */
+export const getReview = () => get<Review | null>("/v1/insights/review");
 export const getMonetisation = () => get<Monetisation>("/v1/analytics/monetisation");
 export const getShorts = (videoId: string, count = 3) =>
   get<Shorts>(`/v1/analytics/shorts/${encodeURIComponent(videoId)}?count=${count}`);
 export const getModels = () => get<Models>("/v1/models");
+export const getStyle = () => get<Style>("/v1/style");
+export const getPlaylists = () => get<Playlist[]>("/v1/channels/playlists");
 export const getWorkflow = (name: string) => get<WorkflowGraph>(`/v1/workflows/${name}`);
 export const getJob = (id: string) => get<Record<string, unknown>>(`/v1/jobs/${id}`);
 
@@ -245,6 +254,9 @@ export const fileUrl = (key: string) => `${BASE}/v1/files/${key}`;
 /** Route one task to one model. PUT, not POST — it replaces, it does not append. */
 export const setRoute = (task: string, model: string) =>
   put<unknown>("/v1/models/route", { task, model });
+
+/** Only what changed. The engine returns the whole style back, in force. */
+export const saveStyle = (changes: StyleUpdate) => put<Style>("/v1/style", changes);
 
 /** The "run it all locally" button. */
 export const setAllRoutes = (model: string) =>

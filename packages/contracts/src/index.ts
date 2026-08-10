@@ -75,6 +75,20 @@ export type ThumbnailVariant = Thumbnails["variants"][number];
 export type Sharpened = Ok<paths["/v1/jobs/{job_id}/thumbnails/sharpen"]["post"]>;
 export type DiagnosticCheck = components["schemas"]["DiagnosticCheck"];
 
+/** How every video sounds and looks: narrator, music, captions, motion. */
+export type Style = Ok<paths["/v1/style"]["get"]>;
+export type StyleOptions = Style["options"];
+export type StyleVoice = StyleOptions["voices"][number];
+/** The partial the Style screen sends — only what changed. */
+export type StyleUpdate = components["schemas"]["StyleUpdate"];
+
+/** The connected channel's playlists, so a publish can pick one. */
+export type Playlist = Ok<paths["/v1/channels/playlists"]["get"]>[number];
+
+/** Last Monday's review. `null` until one has been stored. */
+export type Review = components["schemas"]["ReviewPayload"];
+export type ReviewChange = Review["changes"][number];
+
 // ── things FastAPI types as `object` ────────────────────────────────────────
 //
 // Every one of these endpoints is declared `-> dict` in the engine, so the schema

@@ -9,10 +9,11 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, HTTPException
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from engine import channel as ch
-from engine.api.publishing import CHANNELS
+from engine.api.publishing import CHANNELS, credentials_for
 from engine.providers.youtube import YouTube
 from engine.workflows.base import Workflow
 from engine.workflows.channel_launch import CHANNEL_LAUNCH_STAGES, assemble
@@ -32,6 +33,38 @@ class LaunchRequest(BaseModel):
 class ApplyRequest(BaseModel):
     launch_id: str
     confirm_channel_created: bool = False
+
+
+class Playlist(BaseModel):
+    id: str
+    title: str
+    #: How many videos are already in it. The one number that tells a picker which
+    #: of five similarly-named playlists is the live one.
+    count: int
+
+
+@router.get("/playlists")
+async def playlists() -> list[Playlist]:
+    """The connected channel's playlists, so a publish can pick one.
+
+    `PlaylistStage` has been able to add a video to a playlist since it was
+    written, and skipped on every run, because `playlist_id` was never set by
+    anything — there was no way to learn an id short of reading it out of a YouTube
+    URL. One quota unit.
+
+    An empty list when no channel is connected, rather than an error: the publish
+    screen asks for this before it knows whether it will need it, and a 4xx there
+    would surface as a failure on a screen where nothing has failed.
+    """
+    creds = await credentials_for("default")
+    if creds is None:
+        return []
+    try:
+        found = await YouTube(creds).playlists()
+    except Exception as exc:  # noqa: BLE001 - a picker is not worth failing a screen for
+        logger.warning("could not list playlists: {}", exc)
+        return []
+    return [Playlist(**item) for item in found]
 
 
 @router.get("/limits")

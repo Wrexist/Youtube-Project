@@ -420,6 +420,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/channels/playlists": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Playlists
+         * @description The connected channel's playlists, so a publish can pick one.
+         *
+         *     `PlaylistStage` has been able to add a video to a playlist since it was
+         *     written, and skipped on every run, because `playlist_id` was never set by
+         *     anything — there was no way to learn an id short of reading it out of a YouTube
+         *     URL. One quota unit.
+         *
+         *     An empty list when no channel is connected, rather than an error: the publish
+         *     screen asks for this before it knows whether it will need it, and a 4xx there
+         *     would surface as a failure on a screen where nothing has failed.
+         */
+        get: operations["playlists_v1_channels_playlists_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/files/{key}": {
         parameters: {
             query?: never;
@@ -516,7 +545,20 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Last Review
+         * @description The most recent weekly review, or null if none has been stored.
+         *
+         *     The cron has produced one every Monday since it was written and there was no
+         *     way to read it: the payload went into arq's result store, which keeps results
+         *     for an hour. Running a fresh one was the only alternative, and that consumes
+         *     the baseline the real weekly diff compares against — so looking at the review
+         *     destroyed next week's.
+         *
+         *     Null rather than a 404: "no review yet" is the normal state of a new install,
+         *     not a missing resource.
+         */
+        get: operations["last_review_v1_insights_review_get"];
         put?: never;
         /**
          * Run Review
@@ -1082,6 +1124,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/style": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read */
+        get: operations["read_v1_style_get"];
+        /**
+         * Update
+         * @description Write the changed fields to `.env` and make them live in this process.
+         *
+         *     Returns the new state rather than an acknowledgement, so the screen shows what
+         *     is actually in force instead of what it hoped it had set — the same contract as
+         *     `PUT /v1/setup/keys`.
+         */
+        put: operations["update_v1_style_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workflows/{name}": {
         parameters: {
             query?: never;
@@ -1106,6 +1173,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * About
+         * @description The subject of a change, for the kind that carries no finding.
+         */
+        About: {
+            /** Dimension */
+            dimension: string;
+            /** Loser */
+            loser: string;
+            /** Metric */
+            metric: string;
+            /** Winner */
+            winner: string;
+        };
         /** AddModel */
         AddModel: {
             /**
@@ -1237,6 +1318,20 @@ export interface components {
             output_per_m: number;
             /** Provider */
             provider: string;
+        };
+        /** ChangePayload */
+        ChangePayload: {
+            about: components["schemas"]["About"] | null;
+            /** Finding */
+            finding: {
+                [key: string]: unknown;
+            } | null;
+            /** Kind */
+            kind: string;
+            /** Sentence */
+            sentence: string;
+            /** Was */
+            was: string | null;
         };
         /**
          * CredentialStatus
@@ -1436,6 +1531,22 @@ export interface components {
             watch_hours: components["schemas"]["ThresholdOut"];
         };
         /**
+         * Options
+         * @description What this install can actually choose between, right now.
+         */
+        Options: {
+            /** Fonts */
+            fonts: string[];
+            /** Tracks */
+            tracks: string[];
+            /** Tracks Dir */
+            tracks_dir: string;
+            /** Voices */
+            voices: components["schemas"]["Voice"][];
+            /** Voices Live */
+            voices_live: boolean;
+        };
+        /**
          * PendingVideo
          * @description One video waiting for a slot.
          *
@@ -1458,6 +1569,15 @@ export interface components {
              * Title
              * @default
              */
+            title: string;
+        };
+        /** Playlist */
+        Playlist: {
+            /** Count */
+            count: number;
+            /** Id */
+            id: string;
+            /** Title */
             title: string;
         };
         /**
@@ -1536,6 +1656,35 @@ export interface components {
         RerunRequest: {
             /** Stage */
             stage: string;
+        };
+        /**
+         * ReviewPayload
+         * @description The review as it crosses the arq result store and the API.
+         *
+         *     Named rather than `dict` because this shape has three consumers that never
+         *     see each other — the worker's return value, the persisted snapshot, and next
+         *     week's diff — and a silent divergence between them is exactly the failure the
+         *     review exists to catch elsewhere.
+         */
+        ReviewPayload: {
+            /** Changes */
+            changes: components["schemas"]["ChangePayload"][];
+            /** Confirmed Count */
+            confirmed_count: number;
+            /** Findings */
+            findings: {
+                [key: string]: unknown;
+            }[];
+            /** Generated At */
+            generated_at: string;
+            /** Is First */
+            is_first: boolean;
+            /** Skipped */
+            skipped: string[];
+            /** Video Count */
+            video_count: number;
+            /** Worth Reading */
+            worth_reading: boolean;
         };
         /** RouteUpdate */
         RouteUpdate: {
@@ -1633,6 +1782,47 @@ export interface components {
             note: string | null;
             /** Video Id */
             video_id: string;
+        };
+        /** Style */
+        Style: {
+            /** Bgm Enabled */
+            bgm_enabled: boolean;
+            /** Bgm Track */
+            bgm_track: string;
+            /** Bgm Volume */
+            bgm_volume: number;
+            /**
+             * Ken Burns
+             * @enum {string}
+             */
+            ken_burns: "none" | "in" | "out" | "alternate";
+            options: components["schemas"]["Options"];
+            /** Subtitle Font */
+            subtitle_font: string;
+            /** Transition Fade S */
+            transition_fade_s: number;
+            /** Voice */
+            voice: string;
+        };
+        /**
+         * StyleUpdate
+         * @description Every field optional — the screen sends what changed, not the whole form.
+         */
+        StyleUpdate: {
+            /** Bgm Enabled */
+            bgm_enabled?: boolean | null;
+            /** Bgm Track */
+            bgm_track?: string | null;
+            /** Bgm Volume */
+            bgm_volume?: number | null;
+            /** Ken Burns */
+            ken_burns?: ("none" | "in" | "out" | "alternate") | null;
+            /** Subtitle Font */
+            subtitle_font?: string | null;
+            /** Transition Fade S */
+            transition_fade_s?: number | null;
+            /** Voice */
+            voice?: string | null;
         };
         /** Suggestion */
         Suggestion: {
@@ -1736,6 +1926,22 @@ export interface components {
             template: string;
             /** Url */
             url: string;
+        };
+        /**
+         * Voice
+         * @description One narrator, described in the service's own words rather than ours.
+         */
+        Voice: {
+            /** Gender */
+            gender: string;
+            /** Id */
+            id: string;
+            /** Locale */
+            locale: string;
+            /** Name */
+            name: string;
+            /** Traits */
+            traits?: string[];
         };
         /** ApplyRequest */
         engine__api__channels__ApplyRequest: {
@@ -2350,6 +2556,26 @@ export interface operations {
             };
         };
     };
+    playlists_v1_channels_playlists_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Playlist"][];
+                };
+            };
+        };
+    };
     get_file_v1_files__key__get: {
         parameters: {
             query?: never;
@@ -2453,6 +2679,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    last_review_v1_insights_review_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPayload"] | null;
                 };
             };
         };
@@ -3247,6 +3493,59 @@ export interface operations {
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+        };
+    };
+    read_v1_style_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Style"];
+                };
+            };
+        };
+    };
+    update_v1_style_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StyleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Style"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

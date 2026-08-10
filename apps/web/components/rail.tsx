@@ -13,6 +13,10 @@ const ITEMS = [
   { href: "/calendar", label: "Calendar", icon: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4" },
   { href: "/analytics", label: "Analytics", icon: "M4 20V10M10 20V4M16 20v-8M22 20H2" },
   { href: "/models", label: "Models", icon: "M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5" },
+  // Beside Models, because it answers the same shape of question — Models decides
+  // which model writes the video, Style decides what the video sounds and looks
+  // like. A sound wave: the one glyph that reads as "voice" at 20px.
+  { href: "/style", label: "Style", icon: "M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4" },
 ];
 
 /** Pinned to the bottom, away from the daily-use items. It is the first screen a

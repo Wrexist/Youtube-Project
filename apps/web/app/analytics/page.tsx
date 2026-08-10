@@ -2,7 +2,8 @@ import { Header, Page, Card } from "@/components/ui";
 import { LiveBadge } from "@/components/live-badge";
 import { MonetisationCard } from "@/components/monetisation";
 import { ShortCuts } from "@/components/short-cuts";
-import { getMonetisation } from "@/lib/engine";
+import { NoReviewYet, WeeklyReview } from "@/components/weekly-review";
+import { getMonetisation, getReview, getSetup } from "@/lib/engine";
 import { BigNumber, StatTile, RetentionMap } from "@/components/charts";
 import {
   VIEWS_28D,
@@ -32,7 +33,13 @@ export default async function AnalyticsPage() {
   // `lib/demo.ts` — the per-video metrics need published videos to attribute, and
   // this needs only a connected channel, so the two arrive at different times and
   // the badges have to say so separately. KNOWN-ISSUES §5.5.
-  const monetisation = await getMonetisation();
+  // Together rather than in sequence: three independent reads, and awaiting them
+  // one after another makes the slowest page on the app the sum of them.
+  const [monetisation, review, setup] = await Promise.all([
+    getMonetisation(),
+    getReview(),
+    getSetup(),
+  ]);
   const total = VIEWS_28D.reduce((a, b) => a + b, 0);
   const confirmed = FINDINGS.filter((f) => f.verdict === "confirmed");
 
@@ -56,6 +63,18 @@ export default async function AnalyticsPage() {
             <MonetisationCard data={monetisation} />
           </section>
         )}
+
+        {/* Above the charts, below monetisation. It is the only thing on this
+            screen that says what *changed* — everything else is a level, and a
+            level you have already seen is not news. Rendered even when there is
+            nothing yet, because "no review has run" has a cause worth naming. */}
+        <section className="pb-10">
+          {review ? (
+            <WeeklyReview review={review} />
+          ) : (
+            <NoReviewYet workerRunning={setup?.worker_running ?? false} />
+          )}
+        </section>
 
         <section className="pb-10">
           <BigNumber

@@ -107,6 +107,36 @@ def test_playlist_is_skipped_without_a_playlist_id():
     assert stage.should_skip(Ctx()) is False
 
 
+async def test_the_playlist_stage_actually_adds_the_video():
+    """The half `should_skip` cannot tell you.
+
+    Both branches of the skip were covered and `run` never was — so the stage was
+    proven to *decline* correctly and never proven to work, which is the same
+    coverage a stage that raises on line one would have. It could afford to be: no
+    publish in this project's history ever set `playlist_id`, because nothing in
+    the web app could, so `run` had genuinely never executed.
+    """
+    stage = next(s for s in publish.publish_stages() if s.name == "playlist")
+    added: list[tuple[str, str]] = []
+
+    class Client:
+        async def add_to_playlist(self, video_id: str, playlist_id: str) -> None:
+            added.append((video_id, playlist_id))
+
+    class Ctx:
+        inputs = {"youtube_client": Client(), "playlist_id": "PL123"}
+
+        def get(self, name: str) -> str:
+            assert name == "upload"  # the id it adds is the one just uploaded
+            return "yt-abc"
+
+    output = await stage.run(Ctx())
+
+    assert added == [("yt-abc", "PL123")]
+    # The value is what the Library and the re-run path read back.
+    assert output.value == "PL123"
+
+
 # ── SRT emission ────────────────────────────────────────────────────────────
 
 

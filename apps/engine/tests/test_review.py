@@ -201,13 +201,16 @@ class TestRun:
         """Capture what run() would persist, and control what it reads back."""
         from engine import review as review_mod
 
-        box: dict = {"previous": None, "saved": []}
+        box: dict = {"previous": None, "saved": [], "reports": []}
 
         async def fake_latest():
             return box["previous"]
 
-        async def fake_save(payload, video_count):
+        async def fake_save(payload, video_count, report=None):
             box["saved"].append((payload, video_count))
+            # Kept apart from `saved`, so the existing assertions on that stay
+            # about the diff snapshot and this one is about what a reader sees.
+            box["reports"].append(report)
 
         import engine.repository as repo
 
@@ -342,6 +345,18 @@ class TestRun:
         await review_mod.run()
         assert stored["saved"], "a run that stores nothing leaves no baseline"
 
+    async def test_the_readable_report_is_stored_next_to_the_snapshot(self, stored, records):
+        """The snapshot is four strings per finding — everything the next diff
+        needs and nothing a person would read. Storing only that is why the cron
+        produced a review every Monday that nobody could ever see."""
+        from engine import review as review_mod
+
+        await review_mod.run()
+
+        assert stored["reports"], "a snapshot was saved but no readable report"
+        report = stored["reports"][-1]
+        assert set(report) >= {"generated_at", "findings", "changes", "worth_reading"}
+
 
 class _SilentLogger:
     def __getattr__(self, _name):
@@ -376,3 +391,44 @@ def _cron_job():
     from engine.worker import WorkerSettings
 
     return WorkerSettings.cron_jobs[0]
+
+
+class TestItCanBeReadBack:
+    """The review was produced every Monday and readable by nobody.
+
+    `run()` stored the diff snapshot — four strings and a verdict per finding — and
+    returned the readable report into arq's result store, where `keep_result = 3600`
+    dropped it an hour later. The only other way to see one was to run a fresh
+    review, which consumes the baseline the real weekly diff compares against, so
+    reading this week's destroyed next week's.
+    """
+
+    async def test_latest_review_returns_the_last_stored_report(self, database):
+        from engine import repository
+
+        assert await repository.latest_review() is None
+
+        await repository.save_review_snapshot(
+            {"findings": []}, video_count=1, report={"generated_at": "2026-08-03", "findings": []}
+        )
+        await repository.save_review_snapshot(
+            {"findings": []}, video_count=2, report={"generated_at": "2026-08-10", "findings": []}
+        )
+
+        latest = await repository.latest_review()
+        assert latest is not None
+        assert latest["generated_at"] == "2026-08-10"
+
+    async def test_rows_written_before_the_column_existed_are_skipped(self, database):
+        """A row with no report is not the latest review, it is an absence. Ordering
+        by date alone would return None for an install that has one readable review
+        and one older snapshot written after it by a manual run."""
+        from engine import repository
+
+        await repository.save_review_snapshot(
+            {"findings": []}, video_count=1, report={"generated_at": "2026-08-03"}
+        )
+        await repository.save_review_snapshot({"findings": []}, video_count=2)  # no report
+
+        latest = await repository.latest_review()
+        assert latest is not None and latest["generated_at"] == "2026-08-03"

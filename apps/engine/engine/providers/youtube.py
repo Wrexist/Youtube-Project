@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 from loguru import logger
+from typing_extensions import TypedDict  # pydantic rejects typing.TypedDict on 3.11
 
 from engine.crypto import DecryptionFailed, decrypt, encrypt
 from engine.quota import ledger
@@ -28,6 +29,21 @@ from engine.settings import get_settings
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 API = "https://www.googleapis.com/youtube/v3"
+
+
+class PlaylistData(TypedDict):
+    """One playlist, trimmed to what a picker needs.
+
+    `count` is the third field for a reason: it is what tells two similarly-named
+    playlists apart, and without it a dropdown of "Shorts", "Shorts (old)" and
+    "shorts" is a guess.
+    """
+
+    id: str
+    title: str
+    count: int
+
+
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
 
 SCOPES = (
@@ -591,6 +607,35 @@ class YouTube:
             params={"part": "snippet"},
             files=files,
         )
+
+    async def playlists(self, limit: int = 50) -> list[PlaylistData]:
+        """The channel's own playlists, cheapest-possible.
+
+        One unit — `playlists.list` is a read — so the publish screen can offer a
+        real picker rather than asking for an id. `PlaylistStage` has been able to
+        add a video to a playlist since it was written and skipped every time,
+        because nothing could tell it which playlist.
+
+        `mine=true` rather than a channel id: the credentials already scope this to
+        the connected account, and asking for someone else's playlists would return
+        only their public ones anyway.
+        """
+        response = await self._call(
+            "GET",
+            f"{API}/playlists",
+            "playlists.list",
+            params={"part": "snippet,contentDetails", "mine": "true", "maxResults": limit},
+        )
+        items = response.json().get("items", [])
+        return [
+            {
+                "id": item.get("id", ""),
+                "title": (item.get("snippet") or {}).get("title", ""),
+                "count": (item.get("contentDetails") or {}).get("itemCount", 0),
+            }
+            for item in items
+            if item.get("id")
+        ]
 
     async def add_to_playlist(self, video_id: str, playlist_id: str) -> None:
         await self._call(

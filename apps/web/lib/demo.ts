@@ -7,6 +7,8 @@
  */
 
 import { dayKey } from "./schedule";
+import type { Style } from "@studio/contracts";
+
 import type { Job, Stage } from "./types";
 
 export const DEMO_STAGES: Stage[] = [
@@ -612,3 +614,39 @@ export const MODEL_TASKS = [
   { task: "series", group: "Channel", needs: "structure, JSON", quality: "medium", model: "anthropic:claude-sonnet-5" },
   { task: "backlog", group: "Channel", needs: "volume, JSON", quality: "medium", model: "anthropic:claude-sonnet-5" },
 ];
+
+/**
+ * The Style screen with no engine.
+ *
+ * Every value here is the engine's real default, so the wireframe shows what a
+ * fresh install actually sounds and looks like rather than an invented
+ * configuration. The voice list is a handful of real Edge ids — the live screen
+ * offers 313 across 138 locales, which is not something to hard-code.
+ *
+ * Edits in this mode stay local; `StyleView` takes a `demo` flag and never calls
+ * the Server Action. A settings screen that appeared to save into nothing would be
+ * a worse wireframe than one that plainly cannot.
+ */
+export const DEMO_STYLE: Style = {
+  voice: "en-US-AvaNeural",
+  subtitle_font: "",
+  ken_burns: "alternate",
+  transition_fade_s: 0,
+  bgm_enabled: false,
+  bgm_volume: 0.12,
+  bgm_track: "",
+  options: {
+    voices_live: true,
+    voices: [
+      { id: "en-US-AvaNeural", name: "AvaNeural", locale: "en-US", gender: "Female", traits: ["Expressive", "Caring", "Pleasant", "Friendly"] },
+      { id: "en-US-AndrewNeural", name: "AndrewNeural", locale: "en-US", gender: "Male", traits: ["Warm", "Confident", "Authentic", "Honest"] },
+      { id: "en-US-ChristopherNeural", name: "ChristopherNeural", locale: "en-US", gender: "Male", traits: ["Reliable", "Authority"] },
+      { id: "en-US-AriaNeural", name: "AriaNeural", locale: "en-US", gender: "Female", traits: ["Positive", "Confident"] },
+      { id: "en-GB-RyanNeural", name: "RyanNeural", locale: "en-GB", gender: "Male", traits: ["Friendly", "Positive"] },
+      { id: "en-GB-SoniaNeural", name: "SoniaNeural", locale: "en-GB", gender: "Female", traits: ["Friendly", "Positive"] },
+    ],
+    fonts: [],
+    tracks: [],
+    tracks_dir: "storage/bgm",
+  },
+};

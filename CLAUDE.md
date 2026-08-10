@@ -61,13 +61,29 @@ docker compose up -d                        # postgres + redis
 npm run dev                                 # web on :3000 (one half only)
 apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
 apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
-apps/engine/.venv/bin/python -m alembic -c apps/engine/alembic.ini upgrade head   # schema
+cd apps/engine && .venv/bin/python -m alembic upgrade head   # schema — see below
 apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings   # render worker + weekly review cron
 ```
 
-`-c apps/engine/alembic.ini` is not optional from the repo root: `alembic.ini` lives
-in `apps/engine/`, and without it alembic exits with `No 'script_location' key found
-in configuration`, which reads like a corrupt config rather than a wrong cwd.
+**Migrate from `apps/engine`, not from the repo root.** `database_url` defaults to
+`sqlite+aiosqlite:///./storage/studio.db` — a *relative* path — and `npm start` runs
+the engine with its working directory set to `apps/engine`. So the engine's database
+is `apps/engine/storage/studio.db`, while
+
+```bash
+apps/engine/.venv/bin/python -m alembic -c apps/engine/alembic.ini upgrade head
+```
+
+run from the root silently creates and migrates a **second, empty** database at
+`./storage/studio.db` and reports success. The app then 500s on the first query
+touching anything the migration added, with a traceback that names a missing column
+and nothing about which file it looked in. That command is what this file used to
+recommend; it was wrong, and finding out cost a confused half hour.
+
+`-c` is still needed if you do run it from the root — `alembic.ini` lives in
+`apps/engine/`, and without it alembic exits with `No 'script_location' key found in
+configuration`, which reads like a corrupt config rather than a wrong cwd. It is
+just not sufficient.
 
 On Windows the interpreter is at `.venv/Scripts/python` instead of `.venv/bin/python`.
 

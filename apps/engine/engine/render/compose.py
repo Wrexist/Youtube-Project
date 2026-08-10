@@ -413,7 +413,10 @@ def _render_sync(
             size=(width, height),
         ).with_duration(total)
 
-        track = bgm.resolve() if bgm.should_mix(settings.bgm_volume) else None
+        # The configured track, not whatever `resolve()` felt like. It has always
+        # taken a name and this was always calling it bare, so every render drew a
+        # random bed from the directory and a chosen one was unreachable.
+        track = bgm.resolve(settings.bgm_track) if bgm.should_mix(settings.bgm_volume) else None
         video = video.with_audio(
             bgm.mix(narration, duration=total, track=track, volume=settings.bgm_volume)
         )

@@ -1,6 +1,35 @@
 {
   "components": {
     "schemas": {
+      "About": {
+        "description": "The subject of a change, for the kind that carries no finding.",
+        "properties": {
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "loser": {
+            "title": "Loser",
+            "type": "string"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "winner": {
+            "title": "Winner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dimension",
+          "metric",
+          "winner",
+          "loser"
+        ],
+        "title": "About",
+        "type": "object"
+      },
       "AddModel": {
         "properties": {
           "api_key_env": {
@@ -258,6 +287,60 @@
           "output_per_m"
         ],
         "title": "CatalogueEntry",
+        "type": "object"
+      },
+      "ChangePayload": {
+        "properties": {
+          "about": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/About"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finding": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finding"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "was": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Was"
+          }
+        },
+        "required": [
+          "kind",
+          "was",
+          "about",
+          "sentence",
+          "finding"
+        ],
+        "title": "ChangePayload",
         "type": "object"
       },
       "CredentialStatus": {
@@ -725,6 +808,49 @@
         "title": "MonetisationOut",
         "type": "object"
       },
+      "Options": {
+        "description": "What this install can actually choose between, right now.",
+        "properties": {
+          "fonts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fonts",
+            "type": "array"
+          },
+          "tracks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tracks",
+            "type": "array"
+          },
+          "tracks_dir": {
+            "title": "Tracks Dir",
+            "type": "string"
+          },
+          "voices": {
+            "items": {
+              "$ref": "#/components/schemas/Voice"
+            },
+            "title": "Voices",
+            "type": "array"
+          },
+          "voices_live": {
+            "title": "Voices Live",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "voices",
+          "voices_live",
+          "fonts",
+          "tracks",
+          "tracks_dir"
+        ],
+        "title": "Options",
+        "type": "object"
+      },
       "PendingVideo": {
         "description": "One video waiting for a slot.\n\nWas `dict`, which meant a missing `id` reached `auto_schedule` and came back\nas a 500 with a KeyError \u2014 four ordinary malformed payloads all did. Declaring\nthe shape turns each of them into a 422 naming the field.",
         "properties": {
@@ -764,6 +890,29 @@
           "id"
         ],
         "title": "PendingVideo",
+        "type": "object"
+      },
+      "Playlist": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "count"
+        ],
+        "title": "Playlist",
         "type": "object"
       },
       "PublishRequest": {
@@ -900,6 +1049,65 @@
           "stage"
         ],
         "title": "RerunRequest",
+        "type": "object"
+      },
+      "ReviewPayload": {
+        "description": "The review as it crosses the arq result store and the API.\n\nNamed rather than `dict` because this shape has three consumers that never\nsee each other \u2014 the worker's return value, the persisted snapshot, and next\nweek's diff \u2014 and a silent divergence between them is exactly the failure the\nreview exists to catch elsewhere.",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/ChangePayload"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "confirmed_count": {
+            "title": "Confirmed Count",
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "string"
+          },
+          "is_first": {
+            "title": "Is First",
+            "type": "boolean"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped",
+            "type": "array"
+          },
+          "video_count": {
+            "title": "Video Count",
+            "type": "integer"
+          },
+          "worth_reading": {
+            "title": "Worth Reading",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "generated_at",
+          "video_count",
+          "is_first",
+          "worth_reading",
+          "confirmed_count",
+          "findings",
+          "skipped",
+          "changes"
+        ],
+        "title": "ReviewPayload",
         "type": "object"
       },
       "RouteUpdate": {
@@ -1154,6 +1362,153 @@
           "note"
         ],
         "title": "ShortsOut",
+        "type": "object"
+      },
+      "Style": {
+        "properties": {
+          "bgm_enabled": {
+            "title": "Bgm Enabled",
+            "type": "boolean"
+          },
+          "bgm_track": {
+            "title": "Bgm Track",
+            "type": "string"
+          },
+          "bgm_volume": {
+            "title": "Bgm Volume",
+            "type": "number"
+          },
+          "ken_burns": {
+            "enum": [
+              "none",
+              "in",
+              "out",
+              "alternate"
+            ],
+            "title": "Ken Burns",
+            "type": "string"
+          },
+          "options": {
+            "$ref": "#/components/schemas/Options"
+          },
+          "subtitle_font": {
+            "title": "Subtitle Font",
+            "type": "string"
+          },
+          "transition_fade_s": {
+            "title": "Transition Fade S",
+            "type": "number"
+          },
+          "voice": {
+            "title": "Voice",
+            "type": "string"
+          }
+        },
+        "required": [
+          "voice",
+          "subtitle_font",
+          "ken_burns",
+          "transition_fade_s",
+          "bgm_enabled",
+          "bgm_volume",
+          "bgm_track",
+          "options"
+        ],
+        "title": "Style",
+        "type": "object"
+      },
+      "StyleUpdate": {
+        "description": "Every field optional \u2014 the screen sends what changed, not the whole form.",
+        "properties": {
+          "bgm_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bgm Enabled"
+          },
+          "bgm_track": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bgm Track"
+          },
+          "bgm_volume": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bgm Volume"
+          },
+          "ken_burns": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "in",
+                  "out",
+                  "alternate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ken Burns"
+          },
+          "subtitle_font": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtitle Font"
+          },
+          "transition_fade_s": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transition Fade S"
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice"
+          }
+        },
+        "title": "StyleUpdate",
         "type": "object"
       },
       "Suggestion": {
@@ -1429,6 +1784,42 @@
           "image_model"
         ],
         "title": "Variant",
+        "type": "object"
+      },
+      "Voice": {
+        "description": "One narrator, described in the service's own words rather than ours.",
+        "properties": {
+          "gender": {
+            "title": "Gender",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "locale": {
+            "title": "Locale",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "traits": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Traits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "locale",
+          "gender"
+        ],
+        "title": "Voice",
         "type": "object"
       },
       "engine__api__channels__ApplyRequest": {
@@ -2250,6 +2641,32 @@
         ]
       }
     },
+    "/v1/channels/playlists": {
+      "get": {
+        "description": "The connected channel's playlists, so a publish can pick one.\n\n`PlaylistStage` has been able to add a video to a playlist since it was\nwritten, and skipped on every run, because `playlist_id` was never set by\nanything \u2014 there was no way to learn an id short of reading it out of a YouTube\nURL. One quota unit.\n\nAn empty list when no channel is connected, rather than an error: the publish\nscreen asks for this before it knows whether it will need it, and a 4xx there\nwould surface as a failure on a screen where nothing has failed.",
+        "operationId": "playlists_v1_channels_playlists_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Playlist"
+                  },
+                  "title": "Response Playlists V1 Channels Playlists Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Playlists",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
     "/v1/files/{key}": {
       "get": {
         "description": "Serve a generated artifact.\n\n`ObjectStore.url()` has always pointed here and this route did not exist, so\nnothing could show a thumbnail or play a render \u2014 the Library and the variant\npicker had URLs that 404'd.\n\nThree separate checks, because this is the one endpoint that turns a string from\na client into a filesystem read: the prefix must be one we publish, the suffix\nmust be a media type we produce, and `store` must agree the resolved path is\nstill inside the storage root.",
@@ -2390,6 +2807,34 @@
       }
     },
     "/v1/insights/review": {
+      "get": {
+        "description": "The most recent weekly review, or null if none has been stored.\n\nThe cron has produced one every Monday since it was written and there was no\nway to read it: the payload went into arq's result store, which keeps results\nfor an hour. Running a fresh one was the only alternative, and that consumes\nthe baseline the real weekly diff compares against \u2014 so looking at the review\ndestroyed next week's.\n\nNull rather than a 404: \"no review yet\" is the normal state of a new install,\nnot a missing resource.",
+        "operationId": "last_review_v1_insights_review_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewPayload"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Last Review V1 Insights Review Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Last Review",
+        "tags": [
+          "insights"
+        ]
+      },
       "post": {
         "description": "Run the weekly review now, rather than waiting for Monday.\n\nThe same work the cron job does, including storing this run's snapshot \u2014 so a\nmanual run genuinely becomes the baseline the next diff compares against,\ninstead of producing a report that vanishes and lets Monday re-report\neverything it already showed.",
         "operationId": "run_review_v1_insights_review_post",
@@ -3431,6 +3876,67 @@
         "summary": "Report",
         "tags": [
           "setup"
+        ]
+      }
+    },
+    "/v1/style": {
+      "get": {
+        "operationId": "read_v1_style_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Style"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read",
+        "tags": [
+          "style"
+        ]
+      },
+      "put": {
+        "description": "Write the changed fields to `.env` and make them live in this process.\n\nReturns the new state rather than an acknowledgement, so the screen shows what\nis actually in force instead of what it hoped it had set \u2014 the same contract as\n`PUT /v1/setup/keys`.",
+        "operationId": "update_v1_style_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StyleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Style"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update",
+        "tags": [
+          "style"
         ]
       }
     },

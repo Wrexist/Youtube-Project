@@ -159,6 +159,25 @@ class ReviewSnapshot(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    #: The readable report — `Review.as_dict()`, sentences and all.
+    #:
+    #: Separate from `payload` because they answer different questions and have
+    #: different lifetimes: `payload` is the comparison state next week's diff
+    #: reads, and this is what a person reads. It used to live only in arq's result
+    #: store, where `keep_result = 3600` deleted it an hour after the cron produced
+    #: it — so the weekly review was written every Monday and readable by nobody.
+    #:
+    #: Nullable: rows written before this column existed have no report, and
+    #: "that run's report is gone" is the honest answer for them.
+    #:
+    #: `none_as_null` is load-bearing. SQLAlchemy's JSON type stores a Python
+    #: `None` as the JSON value `null` by default, not as SQL NULL — so
+    #: `report.is_not(None)` matched every report-less row, and `latest_review`
+    #: happily returned the JSON null of the newest one. A snapshot written without
+    #: a report would have hidden the last real review.
+    report: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True, default=None
+    )
     video_count: Mapped[int] = mapped_column(Integer, default=0)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, index=True
