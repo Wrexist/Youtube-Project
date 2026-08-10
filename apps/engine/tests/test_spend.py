@@ -7,6 +7,13 @@ usable at volume rather than once.
 Read off the `jobs` table rather than out of `automation.SpendLedger`. The ledger is
 in-memory, series-scoped, and written by nothing; the jobs table is where `cost_usd`
 is actually recorded, by the same stage boundary that spends the money.
+
+The endpoint is called directly rather than through `TestClient`. `TestClient` runs
+the app on a blocking portal with its own event loop, and these tests also write
+rows on pytest's loop — which aiosqlite tolerates and asyncpg does not: the pool
+ends up shared across two loops and CI dies with "attached to a different loop".
+The rest of this suite already splits the same way, `database`-fixture tests on one
+side and `TestClient` tests on the other.
 """
 
 from __future__ import annotations
@@ -17,16 +24,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from engine import repository
+from engine.api import insights
 from engine.workflows import video
 from engine.workflows.base import Provenance, StageOutput, StageStatus
 
 
-@pytest.fixture
-def client(database):
-    from engine.main import app
-
-    with TestClient(app) as c:
-        yield c
+async def _spend(days: int = 90) -> dict:
+    """The endpoint, as the router would call it, on this test's own loop."""
+    return (await insights.spend(days=days)).model_dump()
 
 
 async def _job(job_id: str, *, cost: float, days_ago: int, status: str, workflow: str = "video"):
@@ -69,8 +74,8 @@ async def _job(job_id: str, *, cost: float, days_ago: int, status: str, workflow
         await db.execute(update(Job).where(Job.id == job_id).values(created_at=when))
 
 
-async def test_no_jobs_is_zero_not_an_error(client):
-    body = client.get("/v1/spend").json()
+async def test_no_jobs_is_zero_not_an_error(database):
+    body = await _spend()
 
     assert body["days"] == []
     assert body["total_usd"] == 0
@@ -80,12 +85,12 @@ async def test_no_jobs_is_zero_not_an_error(client):
     assert body["completed_videos"] == 0
 
 
-async def test_it_totals_by_day_oldest_first(client):
+async def test_it_totals_by_day_oldest_first(database):
     await _job("a", cost=1.02, days_ago=2, status="completed")
     await _job("b", cost=0.41, days_ago=2, status="completed")
     await _job("c", cost=1.27, days_ago=0, status="failed")
 
-    body = client.get("/v1/spend").json()
+    body = await _spend()
 
     assert [d["date"] for d in body["days"]] == sorted(d["date"] for d in body["days"])
     two_days_ago = next(d for d in body["days"] if d["jobs"] == 2)
@@ -94,12 +99,12 @@ async def test_it_totals_by_day_oldest_first(client):
     assert body["total_usd"] == pytest.approx(2.70)
 
 
-async def test_the_per_video_average_counts_only_finished_videos(client):
+async def test_the_per_video_average_counts_only_finished_videos(database):
     await _job("done-1", cost=1.00, days_ago=1, status="completed")
     await _job("done-2", cost=2.00, days_ago=1, status="completed")
     await _job("lost", cost=1.27, days_ago=1, status="failed")
 
-    body = client.get("/v1/spend").json()
+    body = await _spend()
 
     # 1.50, not 1.42: a failed run is not a video, so averaging it in answers a
     # different question than "what does a video cost me". It stays in the total.
@@ -108,29 +113,37 @@ async def test_the_per_video_average_counts_only_finished_videos(client):
     assert body["total_usd"] == pytest.approx(4.27)
 
 
-async def test_a_publish_job_does_not_dilute_the_average(client):
+async def test_a_publish_job_does_not_dilute_the_average(database):
     """A publish is a separate row costing almost nothing. Counting it would halve
     the apparent price of a video by adding a near-zero sample."""
     await _job("vid", cost=2.00, days_ago=1, status="completed")
     await _job("pub", cost=0.00, days_ago=1, status="completed", workflow="publish")
 
-    body = client.get("/v1/spend").json()
+    body = await _spend()
 
     assert body["per_video_usd"] == pytest.approx(2.00)
     assert body["completed_videos"] == 1
 
 
-async def test_the_window_excludes_older_jobs(client):
+async def test_the_window_excludes_older_jobs(database):
     await _job("old", cost=9.99, days_ago=40, status="completed")
     await _job("new", cost=1.00, days_ago=1, status="completed")
 
-    body = client.get("/v1/spend?days=7").json()
+    body = await _spend(days=7)
 
     assert body["total_usd"] == pytest.approx(1.00)
     assert len(body["days"]) == 1
 
 
-async def test_the_window_is_bounded(client):
-    """A caller asking for ten years would scan the whole table."""
-    assert client.get("/v1/spend?days=0").status_code == 422
-    assert client.get("/v1/spend?days=9999").status_code == 422
+def test_the_window_is_bounded():
+    """A caller asking for ten years would scan the whole table.
+
+    Through the app, because the bound is FastAPI's `Query` and not the handler's.
+    No `database` fixture and no rows: validation rejects before the handler runs,
+    so nothing here touches a connection pool.
+    """
+    from engine.main import app
+
+    with TestClient(app) as client:
+        assert client.get("/v1/spend?days=0").status_code == 422
+        assert client.get("/v1/spend?days=9999").status_code == 422
