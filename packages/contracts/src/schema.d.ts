@@ -1072,6 +1072,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/repurpose/auth/tiktok": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Begin Tiktok Auth
+         * @description Where the browser goes to connect a TikTok account for Lane A.
+         *
+         *     Returns the URL rather than redirecting, for the reason `beginYouTubeAuth`
+         *     already documents: a server following the redirect would authorise the server
+         *     rather than the person sitting in front of it.
+         */
+        get: operations["begin_tiktok_auth_v1_repurpose_auth_tiktok_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/repurpose/clips": {
         parameters: {
             query?: never;
@@ -1155,6 +1179,35 @@ export interface paths {
         put?: never;
         /** Select */
         post: operations["select_v1_repurpose_clips__source_id__select_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover
+         * @description Lane A: sweep the operator's own TikToks, score them for this channel.
+         *
+         *     **Only their own.** TikTok's Display API returns the authenticated user's
+         *     content and nothing else, and the Research API is closed to non-academics, so
+         *     there is no endpoint here that sweeps other creators — see
+         *     `providers/tiktok.py`. Lane B material does not arrive this way at all: a
+         *     campaign supplies its own source and its own rules.
+         *
+         *     Returns `configured: false` rather than erroring when TikTok credentials are
+         *     absent, so the screen can say what is missing instead of showing a failure.
+         */
+        post: operations["discover_v1_repurpose_discover_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1634,6 +1687,40 @@ export interface components {
             ready: boolean;
             /** Warnings */
             warnings: number;
+        };
+        /**
+         * DiscoverRequest
+         * @description Sweep Lane A for clips worth building from.
+         *
+         *     `access_token` is passed in rather than read from a store because TikTok
+         *     connection is not yet persisted — see the note on the endpoint. When it is,
+         *     this field goes and the token comes from the channel row, like YouTube's.
+         */
+        DiscoverRequest: {
+            /**
+             * Access Token
+             * @default
+             */
+            access_token: string;
+            /**
+             * Channel Key
+             * @default main
+             */
+            channel_key: string;
+            /**
+             * Limit
+             * @default 20
+             */
+            limit: number;
+        };
+        /** Discovered */
+        Discovered: {
+            /** Based On */
+            based_on: string[];
+            /** Clips */
+            clips: components["schemas"]["ClipOut"][];
+            /** Configured */
+            configured: boolean;
         };
         /** EditRequest */
         EditRequest: {
@@ -3936,6 +4023,39 @@ export interface operations {
             };
         };
     };
+    begin_tiktok_auth_v1_repurpose_auth_tiktok_get: {
+        parameters: {
+            query: {
+                redirect_uri: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     clips_v1_repurpose_clips_get: {
         parameters: {
             query?: {
@@ -4050,6 +4170,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_v1_repurpose_discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiscoverRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Discovered"];
+                };
             };
             /** @description Validation Error */
             422: {

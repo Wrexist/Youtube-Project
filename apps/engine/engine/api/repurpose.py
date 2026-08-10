@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from engine import repository
+from engine.providers import tiktok
 from engine.repurpose.gate import Corpus, Timeline, TimelineSegment, evaluate
 from engine.repurpose.rights import Grant, Lane
 
@@ -240,6 +241,104 @@ async def dismiss(source_id: str) -> None:
 async def select(source_id: str) -> None:
     if not await repository.set_clip_status(source_id, "selected"):
         raise HTTPException(404, f"no clip {source_id}")
+
+
+class DiscoverRequest(BaseModel):
+    """Sweep Lane A for clips worth building from.
+
+    `access_token` is passed in rather than read from a store because TikTok
+    connection is not yet persisted — see the note on the endpoint. When it is,
+    this field goes and the token comes from the channel row, like YouTube's.
+    """
+
+    channel_key: str = "main"
+    access_token: str = ""
+    limit: int = Field(default=20, ge=1, le=20)
+
+
+class Discovered(BaseModel):
+    clips: list[ClipOut]
+    #: What the scoring compared against. Empty means the channel has no history,
+    #: which is reported rather than quietly scoring every clip identically.
+    based_on: list[str]
+    configured: bool
+
+
+@router.post("/discover")
+async def discover(body: DiscoverRequest) -> Discovered:
+    """Lane A: sweep the operator's own TikToks, score them for this channel.
+
+    **Only their own.** TikTok's Display API returns the authenticated user's
+    content and nothing else, and the Research API is closed to non-academics, so
+    there is no endpoint here that sweeps other creators — see
+    `providers/tiktok.py`. Lane B material does not arrive this way at all: a
+    campaign supplies its own source and its own rules.
+
+    Returns `configured: false` rather than erroring when TikTok credentials are
+    absent, so the screen can say what is missing instead of showing a failure.
+    """
+    from engine.repurpose import discover as discovery
+
+    topics = _channel_topics()
+
+    if not tiktok.configured() or not body.access_token:
+        return Discovered(clips=[], based_on=topics, configured=tiktok.configured())
+
+    try:
+        await discovery.discover_own(
+            body.access_token,
+            channel_key=body.channel_key,
+            channel_topics=topics,
+            limit=body.limit,
+        )
+    except tiktok.TikTokUnavailable as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    rows = await repository.clip_sources(channel_key=body.channel_key, limit=body.limit)
+    out = []
+    for row in rows:
+        row.pop("grant", None)
+        grant = await repository.latest_grant(row["id"])
+        out.append(ClipOut(**row, grant=_grant_out(grant)))
+    return Discovered(clips=out, based_on=topics, configured=True)
+
+
+@router.get("/auth/tiktok")
+async def begin_tiktok_auth(redirect_uri: str) -> dict:
+    """Where the browser goes to connect a TikTok account for Lane A.
+
+    Returns the URL rather than redirecting, for the reason `beginYouTubeAuth`
+    already documents: a server following the redirect would authorise the server
+    rather than the person sitting in front of it.
+    """
+    import uuid
+
+    if not tiktok.configured():
+        raise HTTPException(
+            409,
+            "TikTok is not configured. Set STUDIO_TIKTOK_CLIENT_KEY and "
+            "STUDIO_TIKTOK_CLIENT_SECRET, then restart the engine.",
+        )
+    return {"url": tiktok.authorize_url(redirect_uri, uuid.uuid4().hex)}
+
+
+def _channel_topics(count: int = 12) -> list[str]:
+    """What this channel has already published, for adjacency scoring.
+
+    Imported inside the function, like `api/ideas.py::_recent_topics` and for the
+    same reason: `engine.main` imports this router at module level, so a
+    module-level import back would be a cycle.
+    """
+    from engine.main import JOBS
+
+    seen: list[str] = []
+    for job in reversed(list(JOBS.values())):
+        topic = str(job.get("inputs", {}).get("topic", "")).strip()
+        if topic and topic not in seen:
+            seen.append(topic)
+        if len(seen) >= count:
+            break
+    return seen
 
 
 @router.post("/evaluate")

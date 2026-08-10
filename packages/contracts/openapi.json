@@ -651,6 +651,59 @@
         "title": "Diagnostics",
         "type": "object"
       },
+      "DiscoverRequest": {
+        "description": "Sweep Lane A for clips worth building from.\n\n`access_token` is passed in rather than read from a store because TikTok\nconnection is not yet persisted \u2014 see the note on the endpoint. When it is,\nthis field goes and the token comes from the channel row, like YouTube's.",
+        "properties": {
+          "access_token": {
+            "default": "",
+            "title": "Access Token",
+            "type": "string"
+          },
+          "channel_key": {
+            "default": "main",
+            "title": "Channel Key",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "DiscoverRequest",
+        "type": "object"
+      },
+      "Discovered": {
+        "properties": {
+          "based_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Based On",
+            "type": "array"
+          },
+          "clips": {
+            "items": {
+              "$ref": "#/components/schemas/ClipOut"
+            },
+            "title": "Clips",
+            "type": "array"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "clips",
+          "based_on",
+          "configured"
+        ],
+        "title": "Discovered",
+        "type": "object"
+      },
       "EditRequest": {
         "properties": {
           "stage": {
@@ -4504,6 +4557,51 @@
         ]
       }
     },
+    "/v1/repurpose/auth/tiktok": {
+      "get": {
+        "description": "Where the browser goes to connect a TikTok account for Lane A.\n\nReturns the URL rather than redirecting, for the reason `beginYouTubeAuth`\nalready documents: a server following the redirect would authorise the server\nrather than the person sitting in front of it.",
+        "operationId": "begin_tiktok_auth_v1_repurpose_auth_tiktok_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "redirect_uri",
+            "required": true,
+            "schema": {
+              "title": "Redirect Uri",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Begin Tiktok Auth V1 Repurpose Auth Tiktok Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Begin Tiktok Auth",
+        "tags": [
+          "repurpose"
+        ]
+      }
+    },
     "/v1/repurpose/clips": {
       "get": {
         "description": "Discovered clips for a channel, best fit first.\n\nEach carries its grant, because the rights chip is what decides whether the\ncard is usable at all and a second round trip per card to find that out would\nmake the grid useless.",
@@ -4689,6 +4787,48 @@
           }
         },
         "summary": "Select",
+        "tags": [
+          "repurpose"
+        ]
+      }
+    },
+    "/v1/repurpose/discover": {
+      "post": {
+        "description": "Lane A: sweep the operator's own TikToks, score them for this channel.\n\n**Only their own.** TikTok's Display API returns the authenticated user's\ncontent and nothing else, and the Research API is closed to non-academics, so\nthere is no endpoint here that sweeps other creators \u2014 see\n`providers/tiktok.py`. Lane B material does not arrive this way at all: a\ncampaign supplies its own source and its own rules.\n\nReturns `configured: false` rather than erroring when TikTok credentials are\nabsent, so the screen can say what is missing instead of showing a failure.",
+        "operationId": "discover_v1_repurpose_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovered"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discover",
         "tags": [
           "repurpose"
         ]
