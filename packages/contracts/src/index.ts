@@ -85,6 +85,24 @@ export type StyleUpdate = components["schemas"]["StyleUpdate"];
 /** The connected channel's playlists, so a publish can pick one. */
 export type Playlist = Ok<paths["/v1/channels/playlists"]["get"]>[number];
 
+/**
+ * Repurpose: discovered clips, and the two gates between one and a published video.
+ *
+ * `ClipGrant` answers "may we use this" and `Report` answers "is it original
+ * enough" — separate types because they are separate questions with separate
+ * failure modes, and blending them in the UI would hide the common state of
+ * "cleared to use, not yet transformative enough".
+ */
+export type Clips = Ok<paths["/v1/repurpose/clips"]["get"]>;
+export type Clip = Clips["clips"][number];
+export type ClipGrant = components["schemas"]["GrantOut"];
+export type ClipGrantRequest = components["schemas"]["GrantIn"];
+export type ClipLane = components["schemas"]["Lane"];
+export type RightsProblem = components["schemas"]["ProblemOut"];
+/** The originality report — both verdicts, never blended into one score. */
+export type OriginalityReport = Ok<paths["/v1/repurpose/evaluate"]["post"]>;
+export type TimelineRequest = components["schemas"]["TimelineIn"];
+
 /** The standing list of researched ideas, and one of its entries. */
 export type Backlog = Ok<paths["/v1/ideas/backlog"]["get"]>;
 export type BacklogIdea = Backlog["ideas"][number];

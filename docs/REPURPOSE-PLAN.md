@@ -4,9 +4,12 @@
 channel, clears the right to use them, rebuilds them into something YouTube will
 monetise, and hands the result to the pipeline that already exists.
 
-This document is the design. Nothing is built yet. Read
+This document is the design. **R0 (the rights spine) and R4 (the originality gate)
+are built** — see §7 for what that covers and what is still ahead. Read
 [the finding](#1-the-finding-that-reshapes-the-brief) first — it changes one of the
-four stated requirements, and the reason is technical, not squeamish.
+four stated requirements, and the reason is technical, not squeamish. Then
+[RESEARCH §2](REPURPOSE-RESEARCH.md#2-the-correction-permission-does-not-satisfy-the-reused-content-policy),
+which corrected this document once already.
 
 ---
 
@@ -456,10 +459,19 @@ violation.
 
 Each ends with something runnable, per PLAN.md's convention.
 
-**R0 — Rights spine *(1 day)*.** Four tables, the migration, `clip_sources` +
-`clip_rights` CRUD, the rights chip, the permission-request record. No media
-anywhere. *Exit:* you can record that you own or have licensed a clip, and it
-survives a restart.
+**R0 — Rights spine — ✅ built.** Four tables (`clip_sources`, `clip_grants`,
+`clip_assets`, `repurpose_projects`) + migration `e5b93c17d24a`,
+[`engine/repurpose/rights.py`](../apps/engine/engine/repurpose/rights.py),
+repository layer, [`api/repurpose.py`](../apps/engine/engine/api/repurpose.py),
+and the screen at [`app/repurpose`](../apps/web/app/repurpose). No media anywhere.
+The invariant — no media without a live grant — is enforced in
+`repository.record_asset`, not left to the acquire stage.
+
+**R4 — The gate — ✅ built, ahead of schedule.** Pure logic, so it needed no
+credentials and was worth having before anything could produce a timeline to
+score. [`engine/repurpose/gate.py`](../apps/engine/engine/repurpose/gate.py),
+both verdicts, all hard blocks, the corpus checks, versioned thresholds.
+`POST /v1/repurpose/evaluate` scores a proposed edit before it is built.
 
 **R1 — Discovery & fit *(1.5 days)*.** Creative Center trend pull, Semrush/keyword
 cross-check, fit scoring against the channel profile, candidate grid with the
@@ -477,10 +489,10 @@ density, **caption styling preset** (4–7 words, synced, safe-zoned), credit ca
 commentary over it, a licensed bed, and captions that don't look like the current
 defaults.
 
-**R4 — The gate *(1.5 days)*.** Both verdicts (§6.0), all hard blocks, all scored
-signals including the corpus-level three, the report, wiring into the publish gate.
-*Exit:* a deliberately lazy edit is refused, with the specific reason and which of
-the two gates it failed.
+**R4b — Gate wiring *(0.5 day)*.** The scoring is done; what remains is running it
+as a workflow stage and blocking `POST /v1/jobs/{id}/publish` on the result.
+*Exit:* a deliberately lazy edit is refused at the approval gate, with the specific
+reason and which of the two gates it failed.
 
 **R5 — Lanes B–E *(2 days)*.** Campaign/programme enrolment and its content rules,
 permission-request flow with recorded evidence, open-licence attribution strings.

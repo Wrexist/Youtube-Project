@@ -650,3 +650,101 @@ export const DEMO_STYLE: Style = {
     tracks_dir: "storage/bgm",
   },
 };
+
+/**
+ * Repurpose candidates.
+ *
+ * Deliberately spread across every rights state, because the rights chip is the
+ * only thing on a card that decides whether it is usable and a fixture showing
+ * four cleared clips would make the screen look like a browsing gallery. Two of
+ * these five can be built with. That ratio is the honest one.
+ *
+ * The lanes shown are the two being built: `own` (Lane A, building the channel)
+ * and `campaign` (Lane B, the paid-per-view route that is where the money is).
+ */
+export const REPURPOSE_CLIPS = [
+  {
+    id: "clip_a1",
+    creator_handle: "@yourhandle",
+    caption: "the bit about compound interest nobody believes",
+    duration_s: 41,
+    fit_score: 0.91,
+    fit_reasons: ["your own upload", "adjacent to your last three videos"],
+    lane: "own" as const,
+    cleared: true,
+    stats: { views: 184_000, likes: 22_400 },
+  },
+  {
+    id: "clip_a2",
+    creator_handle: "@streamer",
+    caption: "reacting to the worst financial advice on the internet",
+    duration_s: 58,
+    fit_score: 0.84,
+    fit_reasons: ["paid campaign · $2.00 / 1k views", "topic matches your niche"],
+    lane: "campaign" as const,
+    cleared: true,
+    stats: { views: 1_240_000, likes: 198_000 },
+  },
+  {
+    id: "clip_a3",
+    creator_handle: "@analyst",
+    caption: "why this chart is lying to you",
+    duration_s: 33,
+    fit_score: 0.79,
+    fit_reasons: ["strong topical match", "no rights recorded yet"],
+    lane: null,
+    cleared: false,
+    stats: { views: 92_000, likes: 8_100 },
+  },
+  {
+    id: "clip_a4",
+    creator_handle: "@creator",
+    caption: "the three-minute explanation that beat my whole course",
+    duration_s: 47,
+    fit_score: 0.71,
+    fit_reasons: ["permission requested 2 days ago", "awaiting reply"],
+    lane: null,
+    cleared: false,
+    stats: { views: 415_000, likes: 61_000 },
+  },
+  {
+    id: "clip_a5",
+    creator_handle: "@oldcampaign",
+    caption: "the one that started the whole trend",
+    duration_s: 29,
+    fit_score: 0.64,
+    fit_reasons: ["campaign ended 4 days ago", "grant has lapsed"],
+    lane: "campaign" as const,
+    cleared: false,
+    stats: { views: 2_900_000, likes: 402_000 },
+  },
+];
+
+/**
+ * A worked originality report — a real one, for the demo timeline below.
+ *
+ * Blocked rather than passing, on purpose. A fixture showing a green gate teaches
+ * the wrong thing about what this screen is for: the gate exists to refuse, and
+ * the shape of a refusal is what someone judging the design needs to see.
+ */
+export const REPURPOSE_REPORT = {
+  publishable: false,
+  headline: "Blocked on originality — 2 checks failed.",
+  thresholds_version: 1,
+  rights: { cleared: true, ungranted: [], problems: {} },
+  transformation: {
+    passed: false,
+    signals: [
+      { name: "watermark", severity: "ok", message: "no third-party watermarks", value: null, threshold: null },
+      { name: "audio_bed", severity: "ok", message: "audio bed replaced", value: null, threshold: null },
+      { name: "attribution", severity: "ok", message: "source credited on screen and in text", value: null, threshold: null },
+      { name: "authored_share", severity: "block", message: "38% of the runtime carries original narration, annotation or footage — needs 50%", value: 0.38, threshold: 0.5 },
+      { name: "bare_source_share", severity: "ok", message: "31% of the runtime is source footage with nothing added", value: 0.31, threshold: 0.35 },
+      { name: "longest_bare_run", severity: "block", message: "longest unbroken lift is 22s — over 15s reads as a reupload however good the totals look", value: 22, threshold: 15 },
+      { name: "narration_over_source", severity: "warn", message: "narration covers 44% of the source footage — commentary should play *over* the clips, not around them", value: 0.44, threshold: 0.6 },
+      { name: "cut_density", severity: "ok", message: "a cut every 4.1s", value: 4.1, threshold: 5 },
+      { name: "corpus_similarity", severity: "ok", message: "closest match among your last 18 uploads scores 41%", value: 0.41, threshold: 0.85 },
+      { name: "narration_template", severity: "ok", message: "narration structure varies across uploads", value: null, threshold: null },
+    ],
+  },
+};

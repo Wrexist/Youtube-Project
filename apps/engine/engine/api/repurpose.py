@@ -123,6 +123,42 @@ class TimelineIn(BaseModel):
     compared_against: int = 0
 
 
+class SignalOut(BaseModel):
+    name: str
+    severity: str
+    message: str
+    value: float | None
+    threshold: float | None
+
+
+class RightsVerdictOut(BaseModel):
+    cleared: bool
+    ungranted: list[str]
+    problems: dict[str, list[ProblemOut]]
+
+
+class TransformationVerdictOut(BaseModel):
+    passed: bool
+    signals: list[SignalOut]
+
+
+class ReportOut(BaseModel):
+    """Both verdicts, never blended.
+
+    Declared rather than returned as a bare `dict`: the response model is what
+    `packages/contracts` generates from, and an endpoint typed `-> dict` produces a
+    TypeScript type of `Record<string, never>` — which is worse than no type,
+    because the screen then hand-writes the shape it expects and CLAUDE.md forbids
+    exactly that.
+    """
+
+    publishable: bool
+    headline: str
+    thresholds_version: int
+    rights: RightsVerdictOut
+    transformation: TransformationVerdictOut
+
+
 def _grant_out(grant: Grant | None, *, platform: str = "youtube") -> GrantOut | None:
     if grant is None:
         return None
@@ -207,7 +243,7 @@ async def select(source_id: str) -> None:
 
 
 @router.post("/evaluate")
-async def evaluate_timeline(body: TimelineIn) -> dict:
+async def evaluate_timeline(body: TimelineIn) -> ReportOut:
     """Score a proposed edit against both gates, before building it.
 
     Cheap and side-effect free on purpose. The same evaluation runs as a stage in
@@ -242,4 +278,4 @@ async def evaluate_timeline(body: TimelineIn) -> dict:
         structure_repeats=body.structure_repeats,
         compared_against=body.compared_against,
     )
-    return evaluate(timeline, grants, corpus=corpus).as_dict()
+    return ReportOut(**evaluate(timeline, grants, corpus=corpus).as_dict())

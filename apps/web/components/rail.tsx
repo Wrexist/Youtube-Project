@@ -9,6 +9,10 @@ const ITEMS = [
   { href: "/queue", label: "Queue", icon: "M4 6h16M4 12h16M4 18h10" },
   { href: "/series", label: "Series", icon: "M4 7h16M4 12h16M4 17h9M18 15v6M15 18h6" },
   { href: "/new-channel", label: "New channel", icon: "M12 8v8M8 12h8M12 3a9 9 0 100 18 9 9 0 000-18z" },
+  // Beside Library because it produces Library entries — it sits with the content
+  // screens, not the configuration ones. Scissors: the one glyph that reads as
+  // "cut a clip out of something" at 20px.
+  { href: "/repurpose", label: "Repurpose", icon: "M6 4l12 12M6 20L18 8M8 6a2 2 0 11-4 0 2 2 0 014 0zM8 18a2 2 0 11-4 0 2 2 0 014 0z" },
   { href: "/library", label: "Library", icon: "M4 5h7v6H4zM13 5h7v6h-7zM4 13h7v6H4zM13 13h7v6h-7z" },
   { href: "/calendar", label: "Calendar", icon: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4" },
   { href: "/analytics", label: "Analytics", icon: "M4 20V10M10 20V4M16 20v-8M22 20H2" },

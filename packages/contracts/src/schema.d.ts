@@ -1072,6 +1072,121 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/repurpose/clips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Clips
+         * @description Discovered clips for a channel, best fit first.
+         *
+         *     Each carries its grant, because the rights chip is what decides whether the
+         *     card is usable at all and a second round trip per card to find that out would
+         *     make the grid useless.
+         */
+        get: operations["clips_v1_repurpose_clips_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/clips/{source_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss
+         * @description Refuse a clip, durably.
+         *
+         *     Kept rather than deleted: discovery re-runs on the same trend data and would
+         *     cheerfully re-propose it tomorrow.
+         */
+        post: operations["dismiss_v1_repurpose_clips__source_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/clips/{source_id}/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Grant
+         * @description Record how a clip may be used.
+         *
+         *     Refuses to store a grant that is already invalid — a lane with no grantor, a
+         *     licence with no evidence. Catching it here rather than at build time means the
+         *     operator finds out while they still have the DM open, instead of forty minutes
+         *     into a render.
+         */
+        post: operations["record_grant_v1_repurpose_clips__source_id__grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/clips/{source_id}/select": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select */
+        post: operations["select_v1_repurpose_clips__source_id__select_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evaluate Timeline
+         * @description Score a proposed edit against both gates, before building it.
+         *
+         *     Cheap and side-effect free on purpose. The same evaluation runs as a stage in
+         *     the workflow, but an operator assembling an episode should be able to see
+         *     "62% authored, longest lift 11s" *while* they drag segments around — finding
+         *     out after a render that the edit was never going to pass is the failure this
+         *     endpoint exists to prevent.
+         */
+        post: operations["evaluate_timeline_v1_repurpose_evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/setup": {
         parameters: {
             query?: never;
@@ -1427,6 +1542,45 @@ export interface components {
             /** Was */
             was: string | null;
         };
+        /** ClipOut */
+        ClipOut: {
+            /** Acquired */
+            acquired: boolean;
+            /** Caption */
+            caption: string;
+            /** Cleared */
+            cleared: boolean;
+            /** Creator Handle */
+            creator_handle: string;
+            /** Duration S */
+            duration_s: number;
+            /** External Id */
+            external_id: string;
+            /** Fit Reasons */
+            fit_reasons: string[];
+            /** Fit Score */
+            fit_score: number;
+            grant: components["schemas"]["GrantOut"] | null;
+            /** Hashtags */
+            hashtags: string[];
+            /** Id */
+            id: string;
+            /** Platform */
+            platform: string;
+            /** Stats */
+            stats: {
+                [key: string]: unknown;
+            };
+            /** Status */
+            status: string;
+            /** Url */
+            url: string;
+        };
+        /** Clips */
+        Clips: {
+            /** Clips */
+            clips: components["schemas"]["ClipOut"][];
+        };
         /**
          * CredentialStatus
          * @description One credential, as the setup screen sees it. Never carries the value.
@@ -1487,6 +1641,72 @@ export interface components {
             stage: string;
             /** Value */
             value: unknown;
+        };
+        /**
+         * GrantIn
+         * @description Authority to use a clip, as the rights panel submits it.
+         */
+        GrantIn: {
+            /**
+             * Evidence Kind
+             * @default
+             */
+            evidence_kind: string;
+            /**
+             * Evidence Ref
+             * @default
+             */
+            evidence_ref: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /**
+             * Grantor
+             * @default
+             */
+            grantor: string;
+            lane: components["schemas"]["Lane"];
+            /** Platforms */
+            platforms?: string[];
+            /**
+             * Rules
+             * @default
+             */
+            rules: string;
+        };
+        /**
+         * GrantOut
+         * @description A stored grant, with what is wrong with it already worked out.
+         *
+         *     The problems travel with the grant so the rights panel never has to decide for
+         *     itself what a lapsed licence means — that judgement lives in one place.
+         */
+        GrantOut: {
+            /** Cleared */
+            cleared: boolean;
+            /** Evidence Kind */
+            evidence_kind: string;
+            /** Evidence Ref */
+            evidence_ref: string;
+            /** Expires At */
+            expires_at: string | null;
+            /** Granted At */
+            granted_at: string | null;
+            /** Grantor */
+            grantor: string;
+            /** Id */
+            id: number | null;
+            /** Lane */
+            lane: string;
+            /** Needs Attribution */
+            needs_attribution: boolean;
+            /** Platforms */
+            platforms: string[];
+            /** Problems */
+            problems: components["schemas"]["ProblemOut"][];
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Rules */
+            rules: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1568,6 +1788,15 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /**
+         * Lane
+         * @description How a clip came to be usable.
+         *
+         *     Ordered by how much friction stands between discovering a clip and building
+         *     with it, which is also — not coincidentally — the order to build them in.
+         * @enum {string}
+         */
+        Lane: "own" | "campaign" | "licensed" | "commentary" | "open_licence";
         /** LaunchRequest */
         LaunchRequest: {
             /**
@@ -1674,6 +1903,15 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** ProblemOut */
+        ProblemOut: {
+            /** Code */
+            code: string;
+            /** Fatal */
+            fatal: boolean;
+            /** Message */
+            message: string;
+        };
         /**
          * PublishRequest
          * @description Choices the operator makes at the approval gate.
@@ -1746,6 +1984,26 @@ export interface components {
             /** Instruction */
             instruction: string;
         };
+        /**
+         * ReportOut
+         * @description Both verdicts, never blended.
+         *
+         *     Declared rather than returned as a bare `dict`: the response model is what
+         *     `packages/contracts` generates from, and an endpoint typed `-> dict` produces a
+         *     TypeScript type of `Record<string, never>` — which is worse than no type,
+         *     because the screen then hand-writes the shape it expects and CLAUDE.md forbids
+         *     exactly that.
+         */
+        ReportOut: {
+            /** Headline */
+            headline: string;
+            /** Publishable */
+            publishable: boolean;
+            rights: components["schemas"]["RightsVerdictOut"];
+            /** Thresholds Version */
+            thresholds_version: number;
+            transformation: components["schemas"]["TransformationVerdictOut"];
+        };
         /** RerunRequest */
         RerunRequest: {
             /** Stage */
@@ -1779,6 +2037,17 @@ export interface components {
             video_count: number;
             /** Worth Reading */
             worth_reading: boolean;
+        };
+        /** RightsVerdictOut */
+        RightsVerdictOut: {
+            /** Cleared */
+            cleared: boolean;
+            /** Problems */
+            problems: {
+                [key: string]: components["schemas"]["ProblemOut"][];
+            };
+            /** Ungranted */
+            ungranted: string[];
         };
         /** RouteUpdate */
         RouteUpdate: {
@@ -1815,6 +2084,25 @@ export interface components {
             at: string;
             /** Video Id */
             video_id: string;
+        };
+        /** SegmentIn */
+        SegmentIn: {
+            /**
+             * Annotated
+             * @default false
+             */
+            annotated: boolean;
+            /** End S */
+            end_s: number;
+            /**
+             * Narrated
+             * @default false
+             */
+            narrated: boolean;
+            /** Source Id */
+            source_id?: string | null;
+            /** Start S */
+            start_s: number;
         };
         /** SetupStatus */
         SetupStatus: {
@@ -1876,6 +2164,19 @@ export interface components {
             note: string | null;
             /** Video Id */
             video_id: string;
+        };
+        /** SignalOut */
+        SignalOut: {
+            /** Message */
+            message: string;
+            /** Name */
+            name: string;
+            /** Severity */
+            severity: string;
+            /** Threshold */
+            threshold: number | null;
+            /** Value */
+            value: number | null;
         };
         /**
          * Spend
@@ -2017,6 +2318,65 @@ export interface components {
             cost_per_generation: number;
             /** Variants */
             variants: components["schemas"]["Variant"][];
+        };
+        /** TimelineIn */
+        TimelineIn: {
+            /**
+             * Attribution In Description
+             * @default false
+             */
+            attribution_in_description: boolean;
+            /**
+             * Attribution On Screen
+             * @default false
+             */
+            attribution_on_screen: boolean;
+            /**
+             * Audio Bed Replaced
+             * @default false
+             */
+            audio_bed_replaced: boolean;
+            /**
+             * Compared Against
+             * @default 0
+             */
+            compared_against: number;
+            /**
+             * Cuts
+             * @default 0
+             */
+            cuts: number;
+            /**
+             * Is Compilation
+             * @default false
+             */
+            is_compilation: boolean;
+            /**
+             * Max Similarity
+             * @default 0
+             */
+            max_similarity: number;
+            /** Segments */
+            segments?: components["schemas"]["SegmentIn"][];
+            /**
+             * Structure Repeats
+             * @default 0
+             */
+            structure_repeats: number;
+            /**
+             * Template Repeats
+             * @default 0
+             */
+            template_repeats: number;
+            /** Watermarked Sources */
+            watermarked_sources?: string[];
+        };
+        /** TransformationVerdictOut */
+        TransformationVerdictOut: {
+            /** Passed */
+            passed: boolean;
+            /** Signals */
+            signals: components["schemas"]["SignalOut"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -3572,6 +3932,165 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuotaResponse"];
+                };
+            };
+        };
+    };
+    clips_v1_repurpose_clips_get: {
+        parameters: {
+            query?: {
+                channel_key?: string;
+                status?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Clips"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_v1_repurpose_clips__source_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_grant_v1_repurpose_clips__source_id__grant_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_v1_repurpose_clips__source_id__select_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluate_timeline_v1_repurpose_evaluate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TimelineIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

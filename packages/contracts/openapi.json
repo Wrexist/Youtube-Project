@@ -406,6 +406,118 @@
         "title": "ChangePayload",
         "type": "object"
       },
+      "ClipOut": {
+        "properties": {
+          "acquired": {
+            "title": "Acquired",
+            "type": "boolean"
+          },
+          "caption": {
+            "title": "Caption",
+            "type": "string"
+          },
+          "cleared": {
+            "title": "Cleared",
+            "type": "boolean"
+          },
+          "creator_handle": {
+            "title": "Creator Handle",
+            "type": "string"
+          },
+          "duration_s": {
+            "title": "Duration S",
+            "type": "number"
+          },
+          "external_id": {
+            "title": "External Id",
+            "type": "string"
+          },
+          "fit_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fit Reasons",
+            "type": "array"
+          },
+          "fit_score": {
+            "title": "Fit Score",
+            "type": "number"
+          },
+          "grant": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GrantOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hashtags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hashtags",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "stats": {
+            "additionalProperties": true,
+            "title": "Stats",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "external_id",
+          "url",
+          "creator_handle",
+          "caption",
+          "hashtags",
+          "stats",
+          "duration_s",
+          "fit_score",
+          "fit_reasons",
+          "status",
+          "grant",
+          "cleared",
+          "acquired"
+        ],
+        "title": "ClipOut",
+        "type": "object"
+      },
+      "Clips": {
+        "properties": {
+          "clips": {
+            "items": {
+              "$ref": "#/components/schemas/ClipOut"
+            },
+            "title": "Clips",
+            "type": "array"
+          }
+        },
+        "required": [
+          "clips"
+        ],
+        "title": "Clips",
+        "type": "object"
+      },
       "CredentialStatus": {
         "description": "One credential, as the setup screen sees it. Never carries the value.",
         "properties": {
@@ -554,6 +666,166 @@
           "value"
         ],
         "title": "EditRequest",
+        "type": "object"
+      },
+      "GrantIn": {
+        "description": "Authority to use a clip, as the rights panel submits it.",
+        "properties": {
+          "evidence_kind": {
+            "default": "",
+            "title": "Evidence Kind",
+            "type": "string"
+          },
+          "evidence_ref": {
+            "default": "",
+            "title": "Evidence Ref",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "grantor": {
+            "default": "",
+            "title": "Grantor",
+            "type": "string"
+          },
+          "lane": {
+            "$ref": "#/components/schemas/Lane"
+          },
+          "platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Platforms",
+            "type": "array"
+          },
+          "rules": {
+            "default": "",
+            "title": "Rules",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lane"
+        ],
+        "title": "GrantIn",
+        "type": "object"
+      },
+      "GrantOut": {
+        "description": "A stored grant, with what is wrong with it already worked out.\n\nThe problems travel with the grant so the rights panel never has to decide for\nitself what a lapsed licence means \u2014 that judgement lives in one place.",
+        "properties": {
+          "cleared": {
+            "title": "Cleared",
+            "type": "boolean"
+          },
+          "evidence_kind": {
+            "title": "Evidence Kind",
+            "type": "string"
+          },
+          "evidence_ref": {
+            "title": "Evidence Ref",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "granted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granted At"
+          },
+          "grantor": {
+            "title": "Grantor",
+            "type": "string"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "lane": {
+            "title": "Lane",
+            "type": "string"
+          },
+          "needs_attribution": {
+            "title": "Needs Attribution",
+            "type": "boolean"
+          },
+          "platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Platforms",
+            "type": "array"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/ProblemOut"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "rules": {
+            "title": "Rules",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "lane",
+          "grantor",
+          "evidence_kind",
+          "evidence_ref",
+          "granted_at",
+          "expires_at",
+          "revoked_at",
+          "platforms",
+          "rules",
+          "needs_attribution",
+          "cleared",
+          "problems"
+        ],
+        "title": "GrantOut",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -744,6 +1016,18 @@
         },
         "title": "KeyUpdate",
         "type": "object"
+      },
+      "Lane": {
+        "description": "How a clip came to be usable.\n\nOrdered by how much friction stands between discovering a clip and building\nwith it, which is also \u2014 not coincidentally \u2014 the order to build them in.",
+        "enum": [
+          "own",
+          "campaign",
+          "licensed",
+          "commentary",
+          "open_licence"
+        ],
+        "title": "Lane",
+        "type": "string"
       },
       "LaunchRequest": {
         "properties": {
@@ -978,6 +1262,29 @@
         "title": "Playlist",
         "type": "object"
       },
+      "ProblemOut": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "fatal": {
+            "title": "Fatal",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "fatal"
+        ],
+        "title": "ProblemOut",
+        "type": "object"
+      },
       "PublishRequest": {
         "description": "Choices the operator makes at the approval gate.\n\nAll optional: the defaults publish the top-scored title and first thumbnail\nimmediately and publicly, which is the common case.",
         "properties": {
@@ -1101,6 +1408,38 @@
         "title": "Regenerate",
         "type": "object"
       },
+      "ReportOut": {
+        "description": "Both verdicts, never blended.\n\nDeclared rather than returned as a bare `dict`: the response model is what\n`packages/contracts` generates from, and an endpoint typed `-> dict` produces a\nTypeScript type of `Record<string, never>` \u2014 which is worse than no type,\nbecause the screen then hand-writes the shape it expects and CLAUDE.md forbids\nexactly that.",
+        "properties": {
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "publishable": {
+            "title": "Publishable",
+            "type": "boolean"
+          },
+          "rights": {
+            "$ref": "#/components/schemas/RightsVerdictOut"
+          },
+          "thresholds_version": {
+            "title": "Thresholds Version",
+            "type": "integer"
+          },
+          "transformation": {
+            "$ref": "#/components/schemas/TransformationVerdictOut"
+          }
+        },
+        "required": [
+          "publishable",
+          "headline",
+          "thresholds_version",
+          "rights",
+          "transformation"
+        ],
+        "title": "ReportOut",
+        "type": "object"
+      },
       "RerunRequest": {
         "properties": {
           "stage": {
@@ -1171,6 +1510,38 @@
           "changes"
         ],
         "title": "ReviewPayload",
+        "type": "object"
+      },
+      "RightsVerdictOut": {
+        "properties": {
+          "cleared": {
+            "title": "Cleared",
+            "type": "boolean"
+          },
+          "problems": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/ProblemOut"
+              },
+              "type": "array"
+            },
+            "title": "Problems",
+            "type": "object"
+          },
+          "ungranted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Ungranted",
+            "type": "array"
+          }
+        },
+        "required": [
+          "cleared",
+          "ungranted",
+          "problems"
+        ],
+        "title": "RightsVerdictOut",
         "type": "object"
       },
       "RouteUpdate": {
@@ -1249,6 +1620,45 @@
           "at"
         ],
         "title": "ScheduledVideo",
+        "type": "object"
+      },
+      "SegmentIn": {
+        "properties": {
+          "annotated": {
+            "default": false,
+            "title": "Annotated",
+            "type": "boolean"
+          },
+          "end_s": {
+            "title": "End S",
+            "type": "number"
+          },
+          "narrated": {
+            "default": false,
+            "title": "Narrated",
+            "type": "boolean"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "start_s": {
+            "title": "Start S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s"
+        ],
+        "title": "SegmentIn",
         "type": "object"
       },
       "SetupStatus": {
@@ -1425,6 +1835,53 @@
           "note"
         ],
         "title": "ShortsOut",
+        "type": "object"
+      },
+      "SignalOut": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "name",
+          "severity",
+          "message",
+          "value",
+          "threshold"
+        ],
+        "title": "SignalOut",
         "type": "object"
       },
       "Spend": {
@@ -1826,6 +2283,92 @@
           "cost_per_generation"
         ],
         "title": "Thumbnails",
+        "type": "object"
+      },
+      "TimelineIn": {
+        "properties": {
+          "attribution_in_description": {
+            "default": false,
+            "title": "Attribution In Description",
+            "type": "boolean"
+          },
+          "attribution_on_screen": {
+            "default": false,
+            "title": "Attribution On Screen",
+            "type": "boolean"
+          },
+          "audio_bed_replaced": {
+            "default": false,
+            "title": "Audio Bed Replaced",
+            "type": "boolean"
+          },
+          "compared_against": {
+            "default": 0,
+            "title": "Compared Against",
+            "type": "integer"
+          },
+          "cuts": {
+            "default": 0,
+            "title": "Cuts",
+            "type": "integer"
+          },
+          "is_compilation": {
+            "default": false,
+            "title": "Is Compilation",
+            "type": "boolean"
+          },
+          "max_similarity": {
+            "default": 0.0,
+            "title": "Max Similarity",
+            "type": "number"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentIn"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
+          "structure_repeats": {
+            "default": 0,
+            "title": "Structure Repeats",
+            "type": "integer"
+          },
+          "template_repeats": {
+            "default": 0,
+            "title": "Template Repeats",
+            "type": "integer"
+          },
+          "watermarked_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Watermarked Sources",
+            "type": "array"
+          }
+        },
+        "title": "TimelineIn",
+        "type": "object"
+      },
+      "TransformationVerdictOut": {
+        "properties": {
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "signals": {
+            "items": {
+              "$ref": "#/components/schemas/SignalOut"
+            },
+            "title": "Signals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "passed",
+          "signals"
+        ],
+        "title": "TransformationVerdictOut",
         "type": "object"
       },
       "ValidationError": {
@@ -3958,6 +4501,238 @@
         "summary": "Quota",
         "tags": [
           "publishing"
+        ]
+      }
+    },
+    "/v1/repurpose/clips": {
+      "get": {
+        "description": "Discovered clips for a channel, best fit first.\n\nEach carries its grant, because the rights chip is what decides whether the\ncard is usable at all and a second round trip per card to find that out would\nmake the grid useless.",
+        "operationId": "clips_v1_repurpose_clips_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "channel_key",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Channel Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "default": "discovered",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Clips"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clips",
+        "tags": [
+          "repurpose"
+        ]
+      }
+    },
+    "/v1/repurpose/clips/{source_id}/dismiss": {
+      "post": {
+        "description": "Refuse a clip, durably.\n\nKept rather than deleted: discovery re-runs on the same trend data and would\ncheerfully re-propose it tomorrow.",
+        "operationId": "dismiss_v1_repurpose_clips__source_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss",
+        "tags": [
+          "repurpose"
+        ]
+      }
+    },
+    "/v1/repurpose/clips/{source_id}/grant": {
+      "post": {
+        "description": "Record how a clip may be used.\n\nRefuses to store a grant that is already invalid \u2014 a lane with no grantor, a\nlicence with no evidence. Catching it here rather than at build time means the\noperator finds out while they still have the DM open, instead of forty minutes\ninto a render.",
+        "operationId": "record_grant_v1_repurpose_clips__source_id__grant_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Grant",
+        "tags": [
+          "repurpose"
+        ]
+      }
+    },
+    "/v1/repurpose/clips/{source_id}/select": {
+      "post": {
+        "operationId": "select_v1_repurpose_clips__source_id__select_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select",
+        "tags": [
+          "repurpose"
+        ]
+      }
+    },
+    "/v1/repurpose/evaluate": {
+      "post": {
+        "description": "Score a proposed edit against both gates, before building it.\n\nCheap and side-effect free on purpose. The same evaluation runs as a stage in\nthe workflow, but an operator assembling an episode should be able to see\n\"62% authored, longest lift 11s\" *while* they drag segments around \u2014 finding\nout after a render that the edit was never going to pass is the failure this\nendpoint exists to prevent.",
+        "operationId": "evaluate_timeline_v1_repurpose_evaluate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimelineIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Evaluate Timeline",
+        "tags": [
+          "repurpose"
         ]
       }
     },

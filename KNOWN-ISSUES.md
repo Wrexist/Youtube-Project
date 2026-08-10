@@ -327,6 +327,7 @@ right. Per screen, as of today:
 | Calendar | mixed even when live: quota and bookings come from the engine, the draggable video tray is always `PENDING_VIDEOS` |
 | Analytics | partly live: the monetisation card reads `GET /v1/analytics/monetisation` and hides itself when the engine is unreachable or no channel is connected. Everything below it is still demo — the per-video, retention and Short-cut panels remain unwired. The Short-cut fixture in `demo.ts` is at least the genuine output of `engine/shorts.py` run over the demo retention curve, not an invented one |
 | Series, New channel | demo only, **no network call at all** — there is no series table, and the channel-launch endpoint has no caller |
+| Repurpose | live for reads (`GET /v1/repurpose/clips`), falling back to `demo.ts`. Both write paths — "Record" in the rights panel and "Build episode" — are `disabled` when the engine is unreachable and carry the reason. The originality report is **always the fixture**: `POST /v1/repurpose/evaluate` works and is typed, but nothing assembles a timeline to send it yet, so the card is labelled "example report" rather than presented as this channel's |
 
 Series and New channel used to ship five buttons wired to nothing, including both
 screens' single primary action: pressing the one prominent control did nothing at
