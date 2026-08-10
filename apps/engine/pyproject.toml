@@ -31,6 +31,11 @@ dependencies = [
     # while the operator can plainly see the same sites loading in their browser.
     # Corporate proxies and VPNs do the same thing. See engine/tls.py.
     "truststore>=0.10",
+    # Imported directly by `review.py`, not merely inherited from pydantic. On
+    # Python 3.11 — the version this project targets and CI runs — pydantic refuses
+    # to build a schema from a `typing.TypedDict` and demands this one, and
+    # `ReviewPayload` is the response model of `GET /v1/insights/review`.
+    "typing-extensions>=4.12",
     "loguru>=0.7",
     "sse-starlette>=2.1",
     "pillow>=11.0",

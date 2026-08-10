@@ -26,9 +26,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import Any
 
 from loguru import logger
+
+# `typing_extensions`, not `typing`. Pydantic refuses to build a schema from a
+# `typing.TypedDict` on Python < 3.12 — "Please use `typing_extensions.TypedDict`"
+# — and `ReviewPayload` became a FastAPI response model with
+# `GET /v1/insights/review`. This project targets 3.11 (CLAUDE.md); a 3.13 venv
+# builds it happily and says nothing, which is exactly how this reached CI.
+from typing_extensions import TypedDict
 
 from engine.insights import Finding, InsightReport, Verdict
 
