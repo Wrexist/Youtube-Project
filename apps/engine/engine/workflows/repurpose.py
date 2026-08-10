@@ -62,6 +62,10 @@ class ClearedClips:
 
     source_ids: list[str] = field(default_factory=list)
     grants: dict[str, Grant] = field(default_factory=dict)
+    #: Creator handle per source id. Carried from here because this is the stage
+    #: that establishes *which clips, from whom* — and because the feedback loop
+    #: needs it at publish time, long after the clip rows have been re-queried.
+    handles: dict[str, str] = field(default_factory=dict)
 
     def summary(self) -> str:
         lanes = sorted({g.lane.value for g in self.grants.values()})
@@ -136,7 +140,9 @@ class RightsStage(Stage[ClearedClips]):
             )
 
         return StageOutput(
-            value=ClearedClips(source_ids=source_ids, grants=grants),
+            value=ClearedClips(
+                source_ids=source_ids, grants=grants, handles=await _handles(source_ids)
+            ),
             provenance=Provenance(
                 params={
                     "platform": platform,
@@ -515,6 +521,22 @@ async def _captions(source_ids: list[str]) -> dict[str, str]:
     return {r["id"]: r.get("caption", "") for r in rows if r["id"] in set(source_ids)}
 
 
+async def _handles(source_ids: list[str]) -> dict[str, str]:
+    """Creator handle per source id, best effort.
+
+    Never fatal: a missing handle costs a credit line and one dimension in the
+    feedback loop, and neither is worth failing a run over.
+    """
+    try:
+        rows = await repository.clip_sources(channel_key="", status="selected", limit=200)
+        rows += await repository.clip_sources(channel_key="", status="discovered", limit=200)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not read creator handles: {}", exc)
+        return {}
+    wanted = set(source_ids)
+    return {r["id"]: r.get("creator_handle", "") for r in rows if r["id"] in wanted}
+
+
 async def _credits(cleared: ClearedClips) -> dict[str, str]:
     """Who to credit on screen, by source id.
 
@@ -525,14 +547,7 @@ async def _credits(cleared: ClearedClips) -> dict[str, str]:
     Falls back to the grantor when the handle is unknown, because a credit naming
     the campaign is still a credit and an empty one is a blank box on screen.
     """
-    handles: dict[str, str] = {}
-    try:
-        rows = await repository.clip_sources(channel_key="", status="selected", limit=200)
-        rows += await repository.clip_sources(channel_key="", status="discovered", limit=200)
-        handles = {r["id"]: r.get("creator_handle", "") for r in rows}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("could not read creator handles for credits: {}", exc)
-
+    handles = cleared.handles
     out: dict[str, str] = {}
     for source_id, grant in cleared.grants.items():
         if not grant.needs_attribution:

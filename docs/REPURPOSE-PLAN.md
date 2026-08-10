@@ -520,27 +520,38 @@ lane with its own evidence requirements, live in the rights panel and enforced e
 to end. *Still to build:* pulling campaign listings automatically, and the
 per-view payout reconciliation that makes the economics visible.
 
-**R6 — Polish — partly done.** `KNOWN-ISSUES` §5.5 row, contracts regenerated,
-engine tests in `apps/engine/tests/`, web tests beside their components.
-*Still to build:* multi-clip episodes with a thesis, per-platform packaging, and
-clip attribution into the existing feedback loop (§6.5).
+**R6 — Polish — ✅ built.** Multi-clip episodes with a thesis (the editorial claim
+is now a stage, not an aspiration), per-platform packaging
+([`packaging.py`](../apps/engine/engine/repurpose/packaging.py)), and clip
+attribution into the existing feedback loop — `clip_lane`, `clip_source` and
+`hook_teased` are dimensions `insights.analyze` compares, behind the same
+8-per-group / p<0.05 / ≥8% gate as everything else.
 
-### What is left, in order
+Packaging deliberately does not re-encode. Practitioners vary the hook text, the
+caption and the first frame per platform; re-rendering three files to change a
+caption would triple the cost for something the platform draws itself. Only
+YouTube is marked `publishable`, because only YouTube has a publish path here —
+stated in the type rather than left to be discovered.
 
-1. **A timeline editor on the screen**, so "Build episode" has something to send.
-   The workflow runs end to end from `POST /v1/jobs`; the screen is what cannot
-   yet describe an episode.
-2. **TikTok app review** for Display API credentials, which turns R1/R2 from
-   reviewed code into proven code. Out of our hands and the longest lead time —
-   worth starting regardless of everything else.
-3. **Caption styling preset and credit cards** — the last of R3's polish. Captions
-   at 4–7 words, synced, safe-zoned; credit burnt in for the lanes that need it.
-   Note the gate already *blocks* on missing attribution, so until this lands a
-   Lane B video has to have its credit added by hand.
-4. **Per-platform packaging** — one clip, N native versions differing in hook
-   text, caption and first frame.
-5. **Feedback-loop attribution** (§6.5) — point `insights.py` at clip performance
-   so volume becomes knowledge rather than a templating violation.
+### What is left
+
+**One thing, and it is not code.** TikTok app review for Display API credentials.
+Until that lands, `providers/tiktok.py` and `repurpose/acquire.py` are reviewed
+code rather than proven code — the same status `PLAN.md` §7 records for the
+YouTube publish path, and for the same reason. It is out of our hands and it has
+the longest lead time, so it is worth filing before anything else.
+
+Everything else is judgement calls that want real usage first:
+
+- **Threshold tuning.** §6.1's numbers are calibrated to the policy's language,
+  not to outcomes. Every report records `thresholds_version`, which is what makes
+  tuning against real review results possible — but there are no results yet.
+- **Cross-posting.** `packaging.py` produces native packages for TikTok and
+  Reels; nothing posts them. That needs each platform's publish API, which is a
+  separate piece of work with its own approvals.
+- **The standalone originality card** on the screen is still the `demo.ts`
+  fixture, because it describes no particular episode. The pre-check inside the
+  builder is live, and that is the one that answers a question anyone is asking.
 
 ---
 

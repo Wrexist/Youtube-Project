@@ -776,7 +776,50 @@ def _published_record(job: dict) -> VideoRecord | None:
         # `getattr(..., [])` hid it. Carried as plain dicts so the record survives
         # the JSON column unchanged.
         beats=_published_beats(job),
+        # Repurpose provenance, carried through so the feedback loop can attribute
+        # a clip channel's performance to the decisions that made it: which rights
+        # lane, whose clips, and whether the edit teased its hook. All empty for a
+        # from-scratch video, which is what keeps them out of the comparison until
+        # there are enough repurposed videos to compare.
+        **_repurpose_provenance(job),
     )
+
+
+def _repurpose_provenance(job: dict) -> dict:
+    """The repurpose dimensions for a published video, or blanks.
+
+    `clip_source` is the *creator*, not the clip id — an id is unique per clip, so
+    grouping on it would put every video in a group of one and `analyze` would drop
+    all of them. The question worth answering is whose clips perform.
+
+    Several creators in one episode is recorded as a sorted join rather than
+    picking one. A compilation is not attributable to any single source, and
+    silently crediting the first would make the strongest signal in the table a
+    lie about which clips did the work.
+    """
+    states = job.get("states", {})
+
+    def value(name: str, default=None):
+        state = states.get(name)
+        return state.output.value if state is not None and state.output else default
+
+    cleared = value("rights")
+    if cleared is None:
+        return {}
+
+    grants = getattr(cleared, "grants", {}) or {}
+    lanes = sorted({g.lane.value for g in grants.values()})
+
+    cuts = value("segment")
+    hook = getattr(cuts, "hook", None) if cuts is not None else None
+
+    handles = sorted({h for h in (getattr(cleared, "handles", {}) or {}).values() if h})
+
+    return {
+        "clip_lane": "+".join(lanes),
+        "clip_source": "+".join(handles),
+        "hook_teased": "teased" if (hook or {}).get("teased") else "in-order",
+    }
 
 
 def _published_beats(job: dict) -> list[dict]:
