@@ -182,6 +182,150 @@ class BacklogIdea(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ClipSource(Base):
+    """A short-form clip we found. **Metadata only — never the media.**
+
+    The split between this table and `ClipAsset` is the rights model made physical.
+    Public metadata about a public post is fine to hold indefinitely: a URL, a
+    handle, a view count. The *file* is another matter, and it does not exist in
+    this system until a `ClipGrant` says it may. A discovered clip with no grant
+    stays a row here forever, which is the correct end state for most of them.
+
+    `external_id` is unique per platform because discovery re-runs constantly and
+    re-proposing the same TikTok every sweep would fill the workspace with the
+    same twenty clips — the same problem `BacklogIdea.topic` solves upstream.
+    """
+
+    __tablename__ = "clip_sources"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(16), default="tiktok", index=True)
+    external_id: Mapped[str] = mapped_column(String(64), index=True)
+    url: Mapped[str] = mapped_column(Text, default="")
+    creator_handle: Mapped[str] = mapped_column(String(64), default="", index=True)
+    #: The caption as posted. Untrusted — it reaches an LLM prompt and must go
+    #: through `untrusted.fence()` at every call site that interpolates it.
+    caption: Mapped[str] = mapped_column(Text, default="")
+    hashtags: Mapped[list] = mapped_column(JSON, default=list)
+    sound_id: Mapped[str] = mapped_column(String(64), default="")
+    #: Public counters at discovery time. A document, read whole, never queried.
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    region: Mapped[str] = mapped_column(String(8), default="")
+    duration_s: Mapped[float] = mapped_column(default=0.0)
+    fit_score: Mapped[float] = mapped_column(default=0.0, index=True)
+    fit_reasons: Mapped[list] = mapped_column(JSON, default=list)
+    #: Which channel this was scored for. Fit is not a property of a clip, it is a
+    #: property of a clip *and a channel*, and the same TikTok can be an obvious
+    #: yes for one and irrelevant to another.
+    channel_key: Mapped[str] = mapped_column(String(64), default="", index=True)
+    #: `discovered`, `selected`, `dismissed`. Resolved rows are kept, not deleted —
+    #: "I said no to this" is a reason not to surface it again next sweep.
+    status: Mapped[str] = mapped_column(String(16), default="discovered", index=True)
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, index=True
+    )
+
+
+Index("ix_clip_sources_platform_external", ClipSource.platform, ClipSource.external_id, unique=True)
+
+
+class ClipGrant(Base):
+    """Authority to use one clip, and the evidence for it.
+
+    A table rather than columns on `ClipSource` because grants have a *lifetime*.
+    A campaign ends, a licence runs its term, a creator withdraws permission — and
+    a video published under the old grant is still live. Flattening this into the
+    source row would overwrite the history that answers "were we allowed to publish
+    that, at the time we published it", which is the only question that matters
+    when somebody eventually asks.
+
+    Mirrors `engine.repurpose.rights.Grant` field for field; `repository` converts.
+    """
+
+    __tablename__ = "clip_grants"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("clip_sources.id", ondelete="CASCADE"), index=True
+    )
+    lane: Mapped[str] = mapped_column(String(16))
+    grantor: Mapped[str] = mapped_column(String(128), default="")
+    evidence_kind: Mapped[str] = mapped_column(String(32), default="")
+    #: A storage key or a URL. Deliberately not prose — "they said yes on stream"
+    #: is not something anyone can check six months later, and six months later is
+    #: exactly when it gets checked.
+    evidence_ref: Mapped[str] = mapped_column(Text, default="")
+    granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    platforms: Mapped[list] = mapped_column(JSON, default=list)
+    #: Campaign content rules verbatim. Prose, because that is how campaign owners
+    #: write them and a human has to read them — parsing them into flags would
+    #: invent precision that is not in the source.
+    rules: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ClipAsset(Base):
+    """Media on disk for a cleared clip.
+
+    A row here is proof that a grant existed at fetch time — the acquire stage
+    checks `Grant.permits_acquisition` before a byte moves, so an asset without a
+    grant is not a policy violation, it is a bug.
+
+    `sha256` is for deduplication, not for evading anything: the same clip reaches
+    us through several discovery paths and there is no reason to store it twice.
+    """
+
+    __tablename__ = "clip_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("clip_sources.id", ondelete="CASCADE"), index=True
+    )
+    storage_key: Mapped[str] = mapped_column(Text)
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    duration_s: Mapped[float] = mapped_column(default=0.0)
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
+    #: Whether a third-party watermark was found, and where. Independently
+    #: disqualifying for Shorts monetisation, so it is a stored fact rather than
+    #: something re-derived at publish time.
+    has_watermark: Mapped[bool] = mapped_column(default=False)
+    watermark_regions: Mapped[list] = mapped_column(JSON, default=list)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class RepurposeProject(Base):
+    """An episode: which clips, cut where, and why they are together.
+
+    `segments` is JSON because it is a document rewritten whole on every edit, and
+    a schema migration per new segment field would tax the thing this feature
+    changes most — the same reasoning as `Job.states`.
+    """
+
+    __tablename__ = "repurpose_projects"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    channel_key: Mapped[str] = mapped_column(String(64), default="", index=True)
+    #: The editorial argument binding the clips. Without one this is a bag of
+    #: clips, which is the shape the reused-content policy names as failing.
+    thesis: Mapped[str] = mapped_column(Text, default="")
+    segments: Mapped[list] = mapped_column(JSON, default=list)
+    job_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    #: The last `gate.Report` this project produced, verbatim. Stored rather than
+    #: recomputed because it records the threshold version that judged it, and
+    #: "what did we check, and when" is the question a channel review asks.
+    report: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
 class ReviewSnapshot(Base):
     """What the weekly review believed, one row per run.
 

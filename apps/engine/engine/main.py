@@ -30,6 +30,7 @@ from engine.api.insights import RECORDS
 from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
+from engine.api.repurpose import router as repurpose_router
 from engine.api.setup import router as setup_router
 from engine.api.style import router as style_router
 from engine.api.thumbnails import router as thumbnails_router
@@ -95,6 +96,7 @@ app.include_router(insights_router)
 app.include_router(channels_router)
 app.include_router(models_router)
 app.include_router(setup_router)
+app.include_router(repurpose_router)
 app.include_router(style_router)
 app.include_router(thumbnails_router)
 app.add_middleware(

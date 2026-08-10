@@ -24,6 +24,7 @@ startup so a job that was mid-render when the process died comes back as
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import asdict, fields
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -36,14 +37,22 @@ from sqlalchemy.exc import IntegrityError
 from engine.db import session
 from engine.insights import VideoRecord
 
+# Safe at module level: `repurpose.rights` imports only the standard library, so
+# there is no cycle back through here.
+from engine.repurpose.rights import Grant, Lane
+
 if TYPE_CHECKING:  # `review` imports this module at call time; keep the cycle unrun.
     from engine.review import Snapshot
 from engine.tables import (
     BacklogIdea,
     Channel,
     ChannelLaunch,
+    ClipAsset,
+    ClipGrant,
+    ClipSource,
     Job,
     PerformanceRecord,
+    RepurposeProject,
     ReviewSnapshot,
     ScheduleSlot,
 )
@@ -1036,3 +1045,329 @@ async def load_launches() -> dict[str, dict]:
     return {
         r.id: {"id": r.id, "status": r.status, "niche": r.niche, **(r.payload or {})} for r in rows
     }
+
+
+# ── repurpose: clips, grants, assets ────────────────────────────────────────
+#
+# The split enforced here is the one from `engine/repurpose/rights.py`: metadata
+# about a public post is free to keep, media is not. `record_asset` refuses to
+# write without a live grant, so the invariant is a property of the persistence
+# layer rather than a rule the acquire stage is trusted to remember.
+
+
+def _grant_from_row(row: ClipGrant) -> Grant:
+    """A stored grant as the rights module sees it."""
+    return Grant(
+        lane=Lane(row.lane),
+        grantor=row.grantor,
+        evidence_kind=row.evidence_kind,
+        evidence_ref=row.evidence_ref,
+        granted_at=row.granted_at,
+        expires_at=row.expires_at,
+        revoked_at=row.revoked_at,
+        platforms=frozenset(row.platforms or ()),
+        rules=row.rules,
+    )
+
+
+async def upsert_clip_sources(sources: list[dict], *, channel_key: str = "") -> int:
+    """Record discovered clips. Returns how many were new.
+
+    Already-known clips are left alone rather than refreshed. Discovery re-runs
+    constantly and an update would reset `status`, resurrecting every clip the
+    operator already dismissed — the same mistake `add_backlog_ideas` avoids, for
+    the same reason.
+
+    Per-row inside a savepoint: the pre-query is a read, so two sweeps running at
+    once can both pass it and collide on `(platform, external_id)`. Losing one clip
+    is fine; a 500 on the whole sweep is not.
+    """
+    if not _persistence_enabled() or not sources:
+        return 0
+
+    unique: dict[tuple[str, str], dict] = {}
+    for source in sources:
+        platform = str(source.get("platform") or "tiktok")
+        external = str(source.get("external_id") or "").strip()
+        if external:
+            unique.setdefault((platform, external), source)
+
+    added = 0
+    async with session() as db:
+        known = {
+            (platform, external)
+            for platform, external in (
+                await db.execute(
+                    select(ClipSource.platform, ClipSource.external_id).where(
+                        ClipSource.external_id.in_([e for _, e in unique])
+                    )
+                )
+            ).all()
+        }
+        for (platform, external), source in unique.items():
+            if (platform, external) in known:
+                continue
+            try:
+                async with db.begin_nested():
+                    db.add(
+                        ClipSource(
+                            id=uuid.uuid4().hex[:12],
+                            platform=platform,
+                            external_id=external,
+                            url=str(source.get("url") or ""),
+                            creator_handle=str(source.get("creator_handle") or ""),
+                            caption=str(source.get("caption") or ""),
+                            hashtags=list(source.get("hashtags") or []),
+                            sound_id=str(source.get("sound_id") or ""),
+                            stats=dict(source.get("stats") or {}),
+                            region=str(source.get("region") or ""),
+                            duration_s=float(source.get("duration_s") or 0.0),
+                            fit_score=float(source.get("fit_score") or 0.0),
+                            fit_reasons=list(source.get("fit_reasons") or []),
+                            channel_key=channel_key,
+                        )
+                    )
+                added += 1
+            except IntegrityError:
+                logger.debug("clip {}:{} was discovered concurrently", platform, external)
+    return added
+
+
+async def clip_sources(
+    *, channel_key: str = "", status: str = "discovered", limit: int = 50
+) -> list[dict]:
+    """Discovered clips for a channel, best fit first, each with its grant if any.
+
+    The grant travels with the clip because the card cannot be drawn without it:
+    the rights chip is the one thing that decides whether the clip is usable, and
+    a second round trip per card to find out would make the grid useless.
+    """
+    if not _persistence_enabled():
+        return []
+    async with session() as db:
+        query = select(ClipSource).where(ClipSource.status == status)
+        if channel_key:
+            query = query.where(ClipSource.channel_key == channel_key)
+        rows = (
+            (await db.execute(query.order_by(ClipSource.fit_score.desc()).limit(limit)))
+            .scalars()
+            .all()
+        )
+        grants = {
+            g.source_id: g
+            for g in (
+                await db.execute(
+                    select(ClipGrant)
+                    .where(ClipGrant.source_id.in_([r.id for r in rows]))
+                    .order_by(ClipGrant.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        }
+        assets = {
+            a.source_id
+            for a in (
+                await db.execute(
+                    select(ClipAsset).where(ClipAsset.source_id.in_([r.id for r in rows]))
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+    out = []
+    for row in rows:
+        grant_row = grants.get(row.id)
+        grant = _grant_from_row(grant_row) if grant_row else None
+        out.append(
+            {
+                "id": row.id,
+                "platform": row.platform,
+                "external_id": row.external_id,
+                "url": row.url,
+                "creator_handle": row.creator_handle,
+                "caption": row.caption,
+                "hashtags": row.hashtags or [],
+                "stats": row.stats or {},
+                "duration_s": row.duration_s,
+                "fit_score": row.fit_score,
+                "fit_reasons": row.fit_reasons or [],
+                "status": row.status,
+                "grant": grant.as_dict() if grant else None,
+                "cleared": bool(grant and grant.cleared()),
+                "acquired": row.id in assets,
+            }
+        )
+    return out
+
+
+async def set_clip_status(source_id: str, status: str) -> bool:
+    """Select or dismiss a clip. Rows are kept, never deleted — a dismissal is a
+    fact worth remembering, and the next sweep would otherwise re-propose it."""
+    if not _persistence_enabled():
+        return False
+    async with session() as db:
+        row = await db.get(ClipSource, source_id)
+        if row is None:
+            return False
+        row.status = status
+    return True
+
+
+async def record_grant(source_id: str, grant: Grant) -> int | None:
+    """Store authority to use a clip. Returns the grant id.
+
+    Appends rather than replaces. A superseded grant is history — it is what
+    answers "were we allowed to publish that, at the time we published it", and
+    an update would erase exactly that.
+    """
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        if await db.get(ClipSource, source_id) is None:
+            raise KeyError(f"no clip source {source_id!r}")
+        row = ClipGrant(
+            source_id=source_id,
+            lane=grant.lane.value,
+            grantor=grant.grantor,
+            evidence_kind=grant.evidence_kind,
+            evidence_ref=grant.evidence_ref,
+            granted_at=grant.granted_at or datetime.now(UTC),
+            expires_at=grant.expires_at,
+            revoked_at=grant.revoked_at,
+            platforms=sorted(grant.platforms),
+            rules=grant.rules,
+        )
+        db.add(row)
+        await db.flush()
+        return row.id
+
+
+async def latest_grant(source_id: str) -> Grant | None:
+    """The current grant for a clip, or None if it has never had one."""
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = (
+            (
+                await db.execute(
+                    select(ClipGrant)
+                    .where(ClipGrant.source_id == source_id)
+                    .order_by(ClipGrant.created_at.desc(), ClipGrant.id.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+    return _grant_from_row(row) if row else None
+
+
+async def grants_for(source_ids: list[str]) -> dict[str, Grant]:
+    """Current grants for several clips at once — what the gate needs."""
+    if not _persistence_enabled() or not source_ids:
+        return {}
+    async with session() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(ClipGrant)
+                    .where(ClipGrant.source_id.in_(source_ids))
+                    .order_by(ClipGrant.created_at, ClipGrant.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    # Later rows win: the query is ascending, so the last write for each source is
+    # the one left standing.
+    return {row.source_id: _grant_from_row(row) for row in rows}
+
+
+async def record_asset(source_id: str, asset: dict) -> int:
+    """Store media for a cleared clip.
+
+    **Refuses without a live grant.** This is the enforcement point for the rule in
+    `repurpose/rights.py` — putting it here rather than only in the acquire stage
+    means a future caller that forgets cannot quietly create the situation the
+    whole rights model exists to prevent: a directory of other people's video with
+    no record of why any of it is there.
+    """
+    grant = await latest_grant(source_id)
+    if grant is None:
+        raise PermissionError(
+            f"clip {source_id!r} has no grant — media cannot be stored for it. "
+            "Record how this clip may be used first."
+        )
+    if not grant.permits_acquisition():
+        raise PermissionError(
+            f"the {grant.lane.value} grant on clip {source_id!r} is no longer live "
+            "(expired or revoked), so its media must not be fetched or kept."
+        )
+
+    async with session() as db:
+        row = ClipAsset(
+            source_id=source_id,
+            storage_key=str(asset.get("storage_key") or ""),
+            sha256=str(asset.get("sha256") or ""),
+            duration_s=float(asset.get("duration_s") or 0.0),
+            width=int(asset.get("width") or 0),
+            height=int(asset.get("height") or 0),
+            has_watermark=bool(asset.get("has_watermark")),
+            watermark_regions=list(asset.get("watermark_regions") or []),
+        )
+        db.add(row)
+        await db.flush()
+        return row.id
+
+
+async def save_project(
+    project_id: str,
+    *,
+    channel_key: str = "",
+    thesis: str = "",
+    segments: list | None = None,
+    job_id: str | None = None,
+    report: dict | None = None,
+) -> None:
+    """Create or update an episode.
+
+    `report` is stored verbatim rather than recomputed. It carries the threshold
+    version that judged the video, and "what did we check, and when" is the
+    question a channel review asks — one that cannot be answered after the fact if
+    the thresholds have since moved.
+    """
+    if not _persistence_enabled():
+        return
+    async with session() as db:
+        row = await db.get(RepurposeProject, project_id)
+        if row is None:
+            row = RepurposeProject(id=project_id)
+            db.add(row)
+        row.channel_key = channel_key or row.channel_key
+        row.thesis = thesis or row.thesis
+        if segments is not None:
+            row.segments = segments
+        if job_id is not None:
+            row.job_id = job_id
+        if report is not None:
+            row.report = report
+
+
+async def load_project(project_id: str) -> dict | None:
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = await db.get(RepurposeProject, project_id)
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "channel_key": row.channel_key,
+            "thesis": row.thesis,
+            "segments": row.segments or [],
+            "job_id": row.job_id,
+            "report": row.report,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
