@@ -545,7 +545,20 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Last Review
+         * @description The most recent weekly review, or null if none has been stored.
+         *
+         *     The cron has produced one every Monday since it was written and there was no
+         *     way to read it: the payload went into arq's result store, which keeps results
+         *     for an hour. Running a fresh one was the only alternative, and that consumes
+         *     the baseline the real weekly diff compares against — so looking at the review
+         *     destroyed next week's.
+         *
+         *     Null rather than a 404: "no review yet" is the normal state of a new install,
+         *     not a missing resource.
+         */
+        get: operations["last_review_v1_insights_review_get"];
         put?: never;
         /**
          * Run Review
@@ -1160,6 +1173,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * About
+         * @description The subject of a change, for the kind that carries no finding.
+         */
+        About: {
+            /** Dimension */
+            dimension: string;
+            /** Loser */
+            loser: string;
+            /** Metric */
+            metric: string;
+            /** Winner */
+            winner: string;
+        };
         /** AddModel */
         AddModel: {
             /**
@@ -1291,6 +1318,20 @@ export interface components {
             output_per_m: number;
             /** Provider */
             provider: string;
+        };
+        /** ChangePayload */
+        ChangePayload: {
+            about: components["schemas"]["About"] | null;
+            /** Finding */
+            finding: {
+                [key: string]: unknown;
+            } | null;
+            /** Kind */
+            kind: string;
+            /** Sentence */
+            sentence: string;
+            /** Was */
+            was: string | null;
         };
         /**
          * CredentialStatus
@@ -1615,6 +1656,35 @@ export interface components {
         RerunRequest: {
             /** Stage */
             stage: string;
+        };
+        /**
+         * ReviewPayload
+         * @description The review as it crosses the arq result store and the API.
+         *
+         *     Named rather than `dict` because this shape has three consumers that never
+         *     see each other — the worker's return value, the persisted snapshot, and next
+         *     week's diff — and a silent divergence between them is exactly the failure the
+         *     review exists to catch elsewhere.
+         */
+        ReviewPayload: {
+            /** Changes */
+            changes: components["schemas"]["ChangePayload"][];
+            /** Confirmed Count */
+            confirmed_count: number;
+            /** Findings */
+            findings: {
+                [key: string]: unknown;
+            }[];
+            /** Generated At */
+            generated_at: string;
+            /** Is First */
+            is_first: boolean;
+            /** Skipped */
+            skipped: string[];
+            /** Video Count */
+            video_count: number;
+            /** Worth Reading */
+            worth_reading: boolean;
         };
         /** RouteUpdate */
         RouteUpdate: {
@@ -2609,6 +2679,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    last_review_v1_insights_review_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPayload"] | null;
                 };
             };
         };

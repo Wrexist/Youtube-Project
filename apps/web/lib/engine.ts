@@ -34,6 +34,7 @@ import type {
   Playlist,
   PublishRequest,
   Quota,
+  Review,
   Sharpened,
   SetupStatus,
   Style,
@@ -206,6 +207,9 @@ export const getSlots = (days = 14) =>
   get<CalendarSlots>(`/v1/calendar/slots?days=${days}`);
 export const getChannels = () => get<Channels>("/v1/channels");
 export const getInsights = () => get<Insights>("/v1/insights");
+/** Null both when the engine is unreachable and when no review has run yet. The
+ *  screen says the same thing for the second case; the first is a `LiveBadge`. */
+export const getReview = () => get<Review | null>("/v1/insights/review");
 export const getMonetisation = () => get<Monetisation>("/v1/analytics/monetisation");
 export const getShorts = (videoId: string, count = 3) =>
   get<Shorts>(`/v1/analytics/shorts/${encodeURIComponent(videoId)}?count=${count}`);

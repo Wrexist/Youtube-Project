@@ -358,7 +358,10 @@ async def run() -> Review:
 
     previous = await latest_review_snapshot()
     review = build(report, previous, video_count=len(records))
-    await save_review_snapshot(snapshot(report), video_count=len(records))
+    # The report as well as the snapshot. Without it the review the cron produces
+    # every Monday lives only in arq's result store, which drops it after an hour —
+    # so the feature ran weekly and nothing could ever show it.
+    await save_review_snapshot(snapshot(report), video_count=len(records), report=review.as_dict())
 
     logger.info(
         "weekly review: {} findings, {} confirmed, {} change(s)",

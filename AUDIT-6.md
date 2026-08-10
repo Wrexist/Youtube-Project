@@ -9,7 +9,18 @@ Ranked by impact divided by effort. Every claim below was checked against `main`
 
 ---
 
-**Status.** 1, 3 and 6 are built — see the `✅` headings. 2, 4, 5, 7 and 8 are open.
+**Status.** 1, 2, 3 and 6 are built — see the `✅` headings. 4, 5, 7 and 8 are open.
+
+**Found while building #2, and worth its own line:** `database_url` defaults to the
+*relative* `./storage/studio.db`, and the engine runs from `apps/engine` while the
+documented alembic command ran from the repo root. So migrating created a second,
+empty database and reported success, and the app 500'd on a missing column with a
+traceback that never mentioned which file it opened. The command in CLAUDE.md is
+fixed; the underlying footgun — a relative database path in an app that legitimately
+starts from two directories — is not. `env_path()` already solves exactly this for
+`.env` by checking both locations. Storage deserves the same and did not get it here,
+because moving where a database lives is not a change to make at the end of a long
+session.
 
 ## The finding behind most of this
 
@@ -57,7 +68,7 @@ the UI has to say plainly rather than implying Studio provides music.
 
 ---
 
-## 2. A screen for the weekly review
+## 2. A screen for the weekly review ✅ done
 
 The cron runs Monday 06:00 UTC, `review.run()` produces findings, and the only way to
 read them is the API or the worker log. `Review.worth_reading` exists for a notifier

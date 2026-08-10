@@ -462,12 +462,41 @@ async def load_performance_records() -> dict[str, VideoRecord]:
     return records
 
 
-async def save_review_snapshot(payload: Snapshot, video_count: int) -> None:
-    """Record what the weekly review believed, for next week's diff to read."""
+async def save_review_snapshot(
+    payload: Snapshot, video_count: int, report: dict | None = None
+) -> None:
+    """Record what the weekly review believed, and what it said.
+
+    Two things, one row, because they are produced together and a report without
+    the snapshot it was diffed against is not interpretable. `report` is optional
+    only so the older call signature keeps working.
+    """
     if not _persistence_enabled():
         return
     async with session() as db:
-        db.add(ReviewSnapshot(payload=payload, video_count=video_count))
+        db.add(ReviewSnapshot(payload=payload, video_count=video_count, report=report))
+
+
+async def latest_review() -> dict | None:
+    """The most recent readable review, or None if none has been stored.
+
+    Distinct from `latest_review_snapshot`, which returns the diff baseline. This
+    is the one a screen renders. None covers both "no review has ever run" and
+    "the last run predates this column"; the screen says the same thing for both,
+    because from the reader's side they are the same thing.
+    """
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = (
+            await db.execute(
+                select(ReviewSnapshot)
+                .where(ReviewSnapshot.report.is_not(None))
+                .order_by(ReviewSnapshot.generated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    return row.report if row is not None else None
 
 
 async def latest_review_snapshot() -> Snapshot | None:

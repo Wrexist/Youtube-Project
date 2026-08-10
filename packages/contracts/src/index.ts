@@ -85,6 +85,10 @@ export type StyleUpdate = components["schemas"]["StyleUpdate"];
 /** The connected channel's playlists, so a publish can pick one. */
 export type Playlist = Ok<paths["/v1/channels/playlists"]["get"]>[number];
 
+/** Last Monday's review. `null` until one has been stored. */
+export type Review = components["schemas"]["ReviewPayload"];
+export type ReviewChange = Review["changes"][number];
+
 // ── things FastAPI types as `object` ────────────────────────────────────────
 //
 // Every one of these endpoints is declared `-> dict` in the engine, so the schema
