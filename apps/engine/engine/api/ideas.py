@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
@@ -63,6 +63,63 @@ class Suggestions(BaseModel):
     #: which is a state the screen shows differently rather than filling with
     #: generic ideas nobody asked for.
     based_on: list[str]
+
+
+class BacklogIdeaOut(Suggestion):
+    """A suggestion that has been written down, so it can be referred to later."""
+
+    id: int
+
+
+class Backlog(BaseModel):
+    ideas: list[BacklogIdeaOut]
+    based_on: list[str]
+
+
+@router.get("/backlog")
+async def backlog(limit: int = 6) -> Backlog:
+    """The standing list of ideas, best first, topped up when it runs short.
+
+    The suggestions endpoint proposes, scores, shows and forgets — a cache with a
+    thirty-minute life and no memory of what the operator already refused. This is
+    the same research, kept.
+
+    Topping up is lazy on purpose: generating costs a model call and an
+    autocomplete sweep per candidate, so it happens when the list is nearly empty
+    rather than on a schedule nobody asked for.
+    """
+    from engine import repository
+
+    recent = _recent_topics()
+    existing = await repository.open_backlog_ideas(limit)
+
+    if len(existing) < limit and recent:
+        try:
+            candidates = await _propose(recent)
+            scored = await _score(candidates, published=recent)
+        except ProviderUnavailable as exc:
+            # Whatever is already on the list is still worth showing.
+            logger.warning("cannot top up the backlog: {}", exc)
+        else:
+            added = await repository.add_backlog_ideas(scored)
+            if added:
+                existing = await repository.open_backlog_ideas(limit)
+
+    return Backlog(ideas=[BacklogIdeaOut(**i) for i in existing], based_on=recent)
+
+
+@router.post("/backlog/{idea_id}/dismiss", status_code=204)
+async def dismiss(idea_id: int) -> None:
+    """Refuse an idea, permanently.
+
+    The row is kept rather than deleted. "I said no to this" is a reason not to
+    propose it again, and a delete forgets that — the adjacency generator would
+    cheerfully re-derive it from the same published history next week.
+    """
+    from engine import repository
+
+    if not await repository.resolve_backlog_idea(idea_id=idea_id, status="dismissed"):
+        raise HTTPException(404, f"no open idea {idea_id}")
 
 
 @router.get("/suggestions")

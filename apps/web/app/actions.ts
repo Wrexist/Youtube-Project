@@ -27,6 +27,8 @@ import {
   getThumbnails,
   regenerateThumbnail,
   sharpenThumbnailInstruction,
+  dismissIdea,
+  getBacklog,
   getDiagnosticReport,
   getPlaylists,
   isLive,
@@ -45,6 +47,7 @@ import {
 } from "@/lib/engine";
 import { ONBOARDED_COOKIE, ONBOARDED_MAX_AGE } from "@/lib/onboarding";
 import type {
+  BacklogIdea,
   Brief,
   Diagnostics,
   JobRequest,
@@ -95,6 +98,29 @@ export async function ideaSuggestions(): Promise<ActionResult<Suggestion[]>> {
   const data = await getIdeaSuggestions(4);
   if (!data) return { ok: false, error: "the engine did not answer" };
   return { ok: true, data: data.suggestions };
+}
+
+/**
+ * The standing backlog, rather than a fresh set of suggestions.
+ *
+ * `ideaSuggestions` proposes, scores and forgets — the same channel gets the same
+ * ideas re-derived every half hour, and refusing one lasts until reload. This is
+ * the same research, written down: it depletes when a video is made from an idea
+ * and it never re-proposes one that was refused.
+ */
+export async function ideaBacklog(): Promise<ActionResult<BacklogIdea[]>> {
+  const data = await getBacklog(6);
+  if (!data) return { ok: false, error: "the engine did not answer" };
+  return { ok: true, data: data.ideas };
+}
+
+export async function refuseIdea(id: number): Promise<ActionResult<null>> {
+  try {
+    await dismissIdea(id);
+    return { ok: true, data: null };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
 }
 
 // ── thumbnails ──────────────────────────────────────────────────────────────

@@ -478,6 +478,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/ideas/backlog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backlog
+         * @description The standing list of ideas, best first, topped up when it runs short.
+         *
+         *     The suggestions endpoint proposes, scores, shows and forgets — a cache with a
+         *     thirty-minute life and no memory of what the operator already refused. This is
+         *     the same research, kept.
+         *
+         *     Topping up is lazy on purpose: generating costs a model call and an
+         *     autocomplete sweep per candidate, so it happens when the list is nearly empty
+         *     rather than on a schedule nobody asked for.
+         */
+        get: operations["backlog_v1_ideas_backlog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ideas/backlog/{idea_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss
+         * @description Refuse an idea, permanently.
+         *
+         *     The row is kept rather than deleted. "I said no to this" is a reason not to
+         *     propose it again, and a delete forgets that — the adjacency generator would
+         *     cheerfully re-derive it from the same published history next week.
+         */
+        post: operations["dismiss_v1_ideas_backlog__idea_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/ideas/suggestions": {
         parameters: {
             query?: never;
@@ -1275,6 +1327,31 @@ export interface components {
             shorts_per_week: number;
             /** Videos */
             videos: components["schemas"]["PendingVideo"][];
+        };
+        /** Backlog */
+        Backlog: {
+            /** Based On */
+            based_on: string[];
+            /** Ideas */
+            ideas: components["schemas"]["BacklogIdeaOut"][];
+        };
+        /**
+         * BacklogIdeaOut
+         * @description A suggestion that has been written down, so it can be referred to later.
+         */
+        BacklogIdeaOut: {
+            /** Competition */
+            competition: number;
+            /** Demand */
+            demand: number;
+            /** Id */
+            id: number;
+            /** Score */
+            score: number;
+            /** Topic */
+            topic: string;
+            /** Why */
+            why: string;
         };
         /** Brief */
         Brief: {
@@ -2641,6 +2718,66 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backlog_v1_ideas_backlog_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Backlog"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_v1_ideas_backlog__idea_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                idea_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
