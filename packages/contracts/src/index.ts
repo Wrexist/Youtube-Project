@@ -85,6 +85,9 @@ export type StyleUpdate = components["schemas"]["StyleUpdate"];
 /** The connected channel's playlists, so a publish can pick one. */
 export type Playlist = Ok<paths["/v1/channels/playlists"]["get"]>[number];
 
+/** What the channel has cost, per day and in total. */
+export type Spend = Ok<paths["/v1/spend"]["get"]>;
+
 /** Last Monday's review. `null` until one has been stored. */
 export type Review = components["schemas"]["ReviewPayload"];
 export type ReviewChange = Review["changes"][number];

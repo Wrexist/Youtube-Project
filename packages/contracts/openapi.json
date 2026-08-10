@@ -1364,6 +1364,73 @@
         "title": "ShortsOut",
         "type": "object"
       },
+      "Spend": {
+        "description": "What this channel has cost, over time.\n\nCost has always been metered per stage and capped per video, and nothing could\nanswer \"what have I spent this month\" \u2014 the one question that decides whether\nthe product is usable at volume rather than once.",
+        "properties": {
+          "completed_videos": {
+            "title": "Completed Videos",
+            "type": "integer"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/SpendDay"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "month_usd": {
+            "title": "Month Usd",
+            "type": "number"
+          },
+          "per_video_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Video Usd"
+          },
+          "total_usd": {
+            "title": "Total Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "days",
+          "total_usd",
+          "month_usd",
+          "per_video_usd",
+          "completed_videos"
+        ],
+        "title": "Spend",
+        "type": "object"
+      },
+      "SpendDay": {
+        "properties": {
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "jobs": {
+            "title": "Jobs",
+            "type": "integer"
+          },
+          "usd": {
+            "title": "Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "date",
+          "usd",
+          "jobs"
+        ],
+        "title": "SpendDay",
+        "type": "object"
+      },
       "Style": {
         "properties": {
           "bgm_enabled": {
@@ -3876,6 +3943,51 @@
         "summary": "Report",
         "tags": [
           "setup"
+        ]
+      }
+    },
+    "/v1/spend": {
+      "get": {
+        "operationId": "spend_v1_spend_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 90,
+              "maximum": 365,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Spend"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Spend",
+        "tags": [
+          "insights"
         ]
       }
     },

@@ -25,7 +25,7 @@ startup so a job that was mid-render when the process died comes back as
 from __future__ import annotations
 
 from dataclasses import asdict, fields
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
@@ -475,6 +475,62 @@ async def save_review_snapshot(
         return
     async with session() as db:
         db.add(ReviewSnapshot(payload=payload, video_count=video_count, report=report))
+
+
+async def spend_by_day(days: int = 90) -> list[tuple[str, float, int]]:
+    """What the channel cost, per UTC day: `(date, usd, jobs)`, oldest first.
+
+    Read off the `jobs` table rather than out of `automation.SpendLedger`. The
+    ledger is in-memory, series-scoped and written by nothing, so persisting it
+    would mean inventing a second record of a number the jobs table already holds
+    — and the jobs table is the one that is actually true, because `cost_usd` is
+    written there by the same stage boundary that spends the money.
+
+    Grouped in Python, not in SQL. `date_trunc` is Postgres, `strftime` is SQLite,
+    and this runs on both; ninety days of jobs is a few hundred rows.
+    """
+    if not _persistence_enabled():
+        return []
+    since = datetime.now(UTC) - timedelta(days=days)
+    async with session() as db:
+        rows = (
+            await db.execute(select(Job.created_at, Job.cost_usd).where(Job.created_at >= since))
+        ).all()
+
+    totals: dict[str, tuple[float, int]] = {}
+    for created_at, cost in rows:
+        # SQLite hands back naive datetimes even for a timezone-aware column, so
+        # a bare `.astimezone()` would read them as *local* and shift a late-night
+        # job into the next day.
+        moment = created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
+        key = moment.astimezone(UTC).date().isoformat()
+        usd, count = totals.get(key, (0.0, 0))
+        totals[key] = (usd + (cost or 0.0), count + 1)
+
+    return [(day, round(usd, 4), count) for day, (usd, count) in sorted(totals.items())]
+
+
+async def completed_video_costs(days: int = 90) -> list[float]:
+    """What each finished video actually cost, for the per-video average.
+
+    `workflow == "video"` on purpose. A publish job is a separate row that costs
+    almost nothing, and counting it would halve the apparent price of a video by
+    adding a near-zero sample rather than by making anything cheaper.
+    """
+    if not _persistence_enabled():
+        return []
+    since = datetime.now(UTC) - timedelta(days=days)
+    async with session() as db:
+        rows = (
+            await db.execute(
+                select(Job.cost_usd).where(
+                    Job.created_at >= since,
+                    Job.status == "completed",
+                    Job.workflow == "video",
+                )
+            )
+        ).all()
+    return [cost or 0.0 for (cost,) in rows]
 
 
 async def latest_review() -> dict | None:

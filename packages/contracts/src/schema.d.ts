@@ -1124,6 +1124,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Spend */
+        get: operations["spend_v1_spend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/style": {
         parameters: {
             query?: never;
@@ -1782,6 +1799,35 @@ export interface components {
             note: string | null;
             /** Video Id */
             video_id: string;
+        };
+        /**
+         * Spend
+         * @description What this channel has cost, over time.
+         *
+         *     Cost has always been metered per stage and capped per video, and nothing could
+         *     answer "what have I spent this month" — the one question that decides whether
+         *     the product is usable at volume rather than once.
+         */
+        Spend: {
+            /** Completed Videos */
+            completed_videos: number;
+            /** Days */
+            days: components["schemas"]["SpendDay"][];
+            /** Month Usd */
+            month_usd: number;
+            /** Per Video Usd */
+            per_video_usd: number | null;
+            /** Total Usd */
+            total_usd: number;
+        };
+        /** SpendDay */
+        SpendDay: {
+            /** Date */
+            date: string;
+            /** Jobs */
+            jobs: number;
+            /** Usd */
+            usd: number;
         };
         /** Style */
         Style: {
@@ -3493,6 +3539,37 @@ export interface operations {
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+        };
+    };
+    spend_v1_spend_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Spend"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
