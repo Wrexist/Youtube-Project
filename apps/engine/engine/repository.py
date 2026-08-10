@@ -38,6 +38,7 @@ from engine.insights import VideoRecord
 if TYPE_CHECKING:  # `review` imports this module at call time; keep the cycle unrun.
     from engine.review import Snapshot
 from engine.tables import (
+    BacklogIdea,
     Channel,
     ChannelLaunch,
     Job,
@@ -475,6 +476,97 @@ async def save_review_snapshot(
         return
     async with session() as db:
         db.add(ReviewSnapshot(payload=payload, video_count=video_count, report=report))
+
+
+async def add_backlog_ideas(ideas: list[dict]) -> int:
+    """Put freshly scored ideas on the backlog. Returns how many were new.
+
+    Anything already on the list — open, made, or refused — is skipped rather than
+    updated. Re-scoring an idea the operator already said no to and floating it
+    back to the top is the behaviour a backlog exists to stop.
+    """
+    if not _persistence_enabled() or not ideas:
+        return 0
+    async with session() as db:
+        known = {
+            row
+            for (row,) in (
+                await db.execute(
+                    select(BacklogIdea.topic).where(
+                        BacklogIdea.topic.in_([i["topic"] for i in ideas])
+                    )
+                )
+            ).all()
+        }
+        fresh = [i for i in ideas if i["topic"] not in known]
+        for idea in fresh:
+            db.add(
+                BacklogIdea(
+                    topic=idea["topic"],
+                    score=float(idea.get("score") or 0.0),
+                    demand=float(idea.get("demand") or 0.0),
+                    competition=float(idea.get("competition") or 0.0),
+                    why=idea.get("why") or "",
+                )
+            )
+    return len(fresh)
+
+
+async def open_backlog_ideas(limit: int = 20) -> list[dict]:
+    """The unmade, unrefused ideas, best first."""
+    if not _persistence_enabled():
+        return []
+    async with session() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(BacklogIdea)
+                    .where(BacklogIdea.status == "open")
+                    .order_by(BacklogIdea.score.desc(), BacklogIdea.created_at)
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        {
+            "id": r.id,
+            "topic": r.topic,
+            "score": r.score,
+            "demand": r.demand,
+            "competition": r.competition,
+            "why": r.why,
+        }
+        for r in rows
+    ]
+
+
+async def resolve_backlog_idea(
+    *, idea_id: int | None = None, topic: str | None = None, status: str, job_id: str | None = None
+) -> bool:
+    """Take an idea off the list, by id or by topic. True if one was open.
+
+    By topic as well as by id because that is how an idea gets *used*: the Create
+    screen sends a topic to `POST /v1/jobs` and never mentions the backlog, so the
+    only thing linking the two is the string.
+    """
+    if not _persistence_enabled() or (idea_id is None and topic is None):
+        return False
+    async with session() as db:
+        query = select(BacklogIdea).where(BacklogIdea.status == "open")
+        query = (
+            query.where(BacklogIdea.id == idea_id)
+            if idea_id
+            else query.where(BacklogIdea.topic == topic)
+        )
+        row = (await db.execute(query)).scalar_one_or_none()
+        if row is None:
+            return False
+        row.status = status
+        row.job_id = job_id
+        row.resolved_at = datetime.now(UTC)
+    return True
 
 
 async def spend_by_day(days: int = 90) -> list[tuple[str, float, int]]:

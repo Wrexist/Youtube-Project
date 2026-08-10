@@ -85,6 +85,10 @@ export type StyleUpdate = components["schemas"]["StyleUpdate"];
 /** The connected channel's playlists, so a publish can pick one. */
 export type Playlist = Ok<paths["/v1/channels/playlists"]["get"]>[number];
 
+/** The standing list of researched ideas, and one of its entries. */
+export type Backlog = Ok<paths["/v1/ideas/backlog"]["get"]>;
+export type BacklogIdea = Backlog["ideas"][number];
+
 /** What the channel has cost, per day and in total. */
 export type Spend = Ok<paths["/v1/spend"]["get"]>;
 

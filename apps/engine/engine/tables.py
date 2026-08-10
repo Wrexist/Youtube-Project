@@ -143,6 +143,38 @@ class PerformanceRecord(Base):
     measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 
+class BacklogIdea(Base):
+    """A researched video idea, kept until it is made or refused.
+
+    `api/ideas.py` has always scored ideas well and remembered them for thirty
+    minutes in a process-local dict, so the same channel got the same suggestions
+    proposed, scored, shown and forgotten over and over — and there was no way to
+    say "not that one" that survived a reload. A backlog is the difference between
+    a suggestion box and a plan.
+
+    `topic` is unique because the generator is adjacency-based and will happily
+    re-propose something already on the list; without the constraint the backlog
+    fills with near-duplicates of whatever the channel last published.
+    """
+
+    __tablename__ = "backlog_ideas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    topic: Mapped[str] = mapped_column(String(300), unique=True, index=True)
+    score: Mapped[float] = mapped_column(default=0.0)
+    demand: Mapped[float] = mapped_column(default=0.0)
+    competition: Mapped[float] = mapped_column(default=0.0)
+    why: Mapped[str] = mapped_column(Text, default="")
+    #: `open`, `used` or `dismissed`. Resolved rows are kept rather than deleted:
+    #: "we already made this" and "I said no to this" are both reasons not to
+    #: propose it again, and a delete forgets the difference.
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    #: Which job consumed it, when one did.
+    job_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ReviewSnapshot(Base):
     """What the weekly review believed, one row per run.
 
