@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { Clip, ClipGrantRequest } from "@studio/contracts";
 import { Button, Card, Empty } from "@/components/ui";
-import { saveGrant } from "@/app/actions";
+import { findClips, saveGrant } from "@/app/actions";
 import { EpisodeBuilder } from "./episode-builder";
 import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
 
@@ -106,13 +106,21 @@ export function RepurposeView({
     return (
       <Empty
         title="No candidates yet"
-        hint="Discovery finds clips that fit this channel. Nothing has been swept in yet."
-      />
+        hint="Discovery sweeps your connected TikTok account and scores each post against this channel."
+      >
+        <Sweep live={live} />
+      </Empty>
     );
   }
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Secondary, and placed above the grid it refills. The screen's primary
+          action is building an episode; re-sweeping is maintenance. */}
+      <div className="flex justify-end">
+        <Sweep live={live} />
+      </div>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {rows.map((clip) => {
           const isSelected = selected.includes(clip.id);
@@ -201,6 +209,64 @@ export function RepurposeView({
           live={live}
           onClose={() => setOpenId(null)}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Run a sweep, and say which kind of nothing came back.
+ *
+ * Four outcomes, four different next steps, and the reason the engine reports
+ * `configured` and `connected` separately rather than just handing back a list:
+ * credentials unset, nobody signed in, a connected account with nothing usable,
+ * and clips found. Collapsing those into an empty grid is how "it shows nothing"
+ * becomes a question nobody can answer.
+ */
+function Sweep({ live }: { live: boolean }) {
+  const [sweeping, setSweeping] = useState(false);
+  const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
+
+  async function run() {
+    setSweeping(true);
+    setNote(null);
+    const outcome = await findClips();
+    setSweeping(false);
+
+    if (!outcome.ok || !outcome.data) {
+      setNote({ text: outcome.error ?? "The sweep failed.", bad: true });
+      return;
+    }
+    const { found, configured, connected } = outcome.data;
+    if (!configured) {
+      setNote({ text: "TikTok is not set up yet — add the keys in Setup.", bad: true });
+    } else if (!connected) {
+      setNote({ text: "No TikTok account is connected — connect one in Setup.", bad: true });
+    } else if (found === 0) {
+      setNote({ text: "Connected, but that account has no posts to work from." });
+    } else {
+      setNote({ text: `${found} clip${found === 1 ? "" : "s"} scored for this channel.` });
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <Button
+        variant="ghost"
+        onClick={run}
+        disabled={!live || sweeping}
+        title={live ? undefined : "Sweeping needs the engine running"}
+      >
+        {sweeping ? "Sweeping…" : "Find clips"}
+      </Button>
+      {note && (
+        <p
+          role="status"
+          className="text-[12px]"
+          style={{ color: note.bad ? "var(--color-bad)" : "var(--color-muted)" }}
+        >
+          {note.text}
+        </p>
       )}
     </div>
   );

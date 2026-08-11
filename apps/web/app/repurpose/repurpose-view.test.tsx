@@ -5,11 +5,17 @@ import { RepurposeView } from "./repurpose-view";
 import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
 
 const saveGrant = vi.hoisted(() => vi.fn());
-vi.mock("@/app/actions", () => ({ saveGrant }));
+const findClips = vi.hoisted(() => vi.fn());
+vi.mock("@/app/actions", () => ({ saveGrant, findClips }));
 
 beforeEach(() => {
   saveGrant.mockReset();
   saveGrant.mockResolvedValue({ ok: true, data: {} });
+  findClips.mockReset();
+  findClips.mockResolvedValue({
+    ok: true,
+    data: { found: 3, configured: true, connected: true },
+  });
 });
 
 /**
@@ -308,5 +314,90 @@ describe("live data", () => {
   it("shows an empty state rather than demo clips when the engine has none", () => {
     renderView([]);
     expect(screen.getByText(/no candidates yet/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Finding clips.
+ *
+ * The screen used to say "nothing has been swept in yet" above no control that
+ * swept anything, which made the whole TikTok integration unreachable from the
+ * UI. These pin the way back out, and — more importantly — that the four ways a
+ * sweep can come back empty stay four different sentences.
+ */
+describe("sweeping", () => {
+  it("offers a way out of the empty state", async () => {
+    render(
+      <RepurposeView clips={[]} demoClips={REPURPOSE_CLIPS} demoReport={REPURPOSE_REPORT} />,
+    );
+
+    const sweep = screen.getByRole("button", { name: /find clips/i });
+    expect(sweep).toBeEnabled();
+
+    fireEvent.click(sweep);
+
+    await waitFor(() => expect(findClips).toHaveBeenCalled());
+    expect(await screen.findByRole("status")).toHaveTextContent(/3 clips/i);
+  });
+
+  it("sends an unconfigured install to Setup rather than showing an empty grid", async () => {
+    findClips.mockResolvedValue({
+      ok: true,
+      data: { found: 0, configured: false, connected: false },
+    });
+    render(
+      <RepurposeView clips={[]} demoClips={REPURPOSE_CLIPS} demoReport={REPURPOSE_REPORT} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /find clips/i }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(/not set up/i);
+  });
+
+  it("distinguishes 'nobody signed in' from 'not set up'", async () => {
+    findClips.mockResolvedValue({
+      ok: true,
+      data: { found: 0, configured: true, connected: false },
+    });
+    render(
+      <RepurposeView clips={[]} demoClips={REPURPOSE_CLIPS} demoReport={REPURPOSE_REPORT} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /find clips/i }));
+
+    const note = await screen.findByRole("status");
+    expect(note).toHaveTextContent(/no tiktok account is connected/i);
+    expect(note).not.toHaveTextContent(/not set up/i);
+  });
+
+  it("says a connected-but-empty account is connected", async () => {
+    findClips.mockResolvedValue({
+      ok: true,
+      data: { found: 0, configured: true, connected: true },
+    });
+    render(
+      <RepurposeView clips={[]} demoClips={REPURPOSE_CLIPS} demoReport={REPURPOSE_REPORT} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /find clips/i }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(/no posts to work from/i);
+  });
+
+  it("surfaces a failed sweep instead of looking like an empty account", async () => {
+    findClips.mockResolvedValue({ ok: false, error: "Reconnect the account to continue." });
+    render(
+      <RepurposeView clips={[]} demoClips={REPURPOSE_CLIPS} demoReport={REPURPOSE_REPORT} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /find clips/i }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(/reconnect the account/i);
+  });
+
+  it("cannot sweep without an engine", () => {
+    renderView();
+
+    expect(screen.getByRole("button", { name: /find clips/i })).toBeDisabled();
   });
 });

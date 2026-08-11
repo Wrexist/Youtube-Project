@@ -48,6 +48,7 @@ import {
   dismissClip,
   selectClip,
   evaluateTimeline,
+  sweepClips,
   getTikTokStatus,
   beginTikTokAuth,
 } from "@/lib/engine";
@@ -671,6 +672,36 @@ export async function buildEpisode(input: {
   }
 }
 
+
+/**
+ * Sweep TikTok for clips that fit this channel.
+ *
+ * Returns the count rather than the clips: the grid is rendered by a Server
+ * Component reading `getClips`, so `revalidatePath` is what actually puts new
+ * cards on screen and handing them back too would give the page two sources for
+ * the same list.
+ *
+ * `configured` and `connected` do come back, because "found nothing" has three
+ * different causes with three different fixes and the button has to say which.
+ */
+export async function findClips(
+  channelKey = "main",
+): Promise<ActionResult<{ found: number; configured: boolean; connected: boolean }>> {
+  try {
+    const result = await sweepClips(channelKey);
+    revalidatePath("/repurpose");
+    return {
+      ok: true,
+      data: {
+        found: result.clips.length,
+        configured: result.configured,
+        connected: result.connected,
+      },
+    };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
 
 /** Whether TikTok is configured and connected. Two separate answers. */
 export async function tiktokStatus(): Promise<ActionResult<TikTokStatus>> {

@@ -486,14 +486,24 @@ Lane A only and a test asserts it exposes no search or download surface.
 
 **R2 — Lane A acquisition — ✅ built, and hardened.**
 
-The provider was rebuilt for reliability after an audit found four ways it would
+The provider was rebuilt for reliability after an audit found five ways it would
 stop working without anything looking wrong: TikTok answers **200 with an error
 body** so a status check passes; access tokens last **24 hours** so an
 integration with no refresh dies on day two; `video.list` is **paginated** so a
-sweep saw the newest 20 posts only; and an expired token returned `[]`, which is
-indistinguishable from an empty account. All four are now handled, with tokens
-stored encrypted (migration `f1a72e9c3d48`) and refreshed transparently, OAuth
-state checked against CSRF, and retries that honour `Retry-After`.
+sweep saw the newest 20 posts only; an expired token returned `[]`, which is
+indistinguishable from an empty account; and **two refreshes at once kill the
+connection**, because the refresh token is rotated — so the worker's scheduled
+sweep and an operator pressing Discover both spend the same stored token, and the
+loser writes its failure over the winner's good one. All five are now handled,
+with tokens stored encrypted (migration `f1a72e9c3d48`), refreshed transparently
+and behind a lock, OAuth state checked against CSRF, and retries that honour
+`Retry-After`.
+
+Re-sweeping follows one rule: **measurements refresh, decisions do not.** A known
+clip has its `stats` and `fit_score` brought up to date and nothing else — because
+the best repurposing candidate is usually a clip that took off *after* discovery
+first saw it, and because writing anything more would reset `status` and refill
+the grid with everything the operator has already dismissed.
 
 [`repurpose/acquire.py`](../apps/engine/engine/repurpose/acquire.py): grant check
 before the network *and* before the row, streamed download with a size ceiling,

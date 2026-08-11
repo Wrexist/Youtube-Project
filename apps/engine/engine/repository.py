@@ -24,6 +24,7 @@ startup so a job that was mid-render when the process died comes back as
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import asdict, fields
 from datetime import UTC, datetime, timedelta
@@ -1074,10 +1075,18 @@ def _grant_from_row(row: ClipGrant) -> Grant:
 async def upsert_clip_sources(sources: list[dict], *, channel_key: str = "") -> int:
     """Record discovered clips. Returns how many were new.
 
-    Already-known clips are left alone rather than refreshed. Discovery re-runs
-    constantly and an update would reset `status`, resurrecting every clip the
-    operator already dismissed — the same mistake `add_backlog_ideas` avoids, for
-    the same reason.
+    **Measurements refresh; decisions do not.** A known clip has its `stats` and
+    `fit_score` brought up to date, and nothing else. That split is the whole rule:
+
+      * Refreshing everything resets `status`, resurrecting every clip the operator
+        already dismissed — the mistake `add_backlog_ideas` avoids for the same
+        reason. A dismissal is a decision and re-running discovery is not new
+        information about it.
+      * Refreshing nothing freezes each clip's view count at the moment it was
+        first seen, and `fit.score_clip` weights reach. The clip that took off
+        *after* discovery first noticed it is the single best repurposing
+        candidate there is, and a sweep that can never re-rank it would leave it
+        buried under whatever was popular a month ago, for ever.
 
     Per-row inside a savepoint: the pre-query is a read, so two sweeps running at
     once can both pass it and collide on `(platform, external_id)`. Losing one clip
@@ -1096,17 +1105,19 @@ async def upsert_clip_sources(sources: list[dict], *, channel_key: str = "") -> 
     added = 0
     async with session() as db:
         known = {
-            (platform, external)
-            for platform, external in (
+            (row.platform, row.external_id): row
+            for row in (
                 await db.execute(
-                    select(ClipSource.platform, ClipSource.external_id).where(
-                        ClipSource.external_id.in_([e for _, e in unique])
-                    )
+                    select(ClipSource).where(ClipSource.external_id.in_([e for _, e in unique]))
                 )
-            ).all()
+            )
+            .scalars()
+            .all()
         }
         for (platform, external), source in unique.items():
-            if (platform, external) in known:
+            row = known.get((platform, external))
+            if row is not None:
+                _refresh_clip_measurements(row, source)
                 continue
             try:
                 async with db.begin_nested():
@@ -1132,6 +1143,27 @@ async def upsert_clip_sources(sources: list[dict], *, channel_key: str = "") -> 
             except IntegrityError:
                 logger.debug("clip {}:{} was discovered concurrently", platform, external)
     return added
+
+
+def _refresh_clip_measurements(row: ClipSource, source: dict) -> None:
+    """Bring a known clip's numbers up to date, and touch nothing else.
+
+    Explicitly field-by-field rather than a loop over `source`: the danger here is
+    writing a field that carries a decision, and an allowlist of three is the only
+    version of this that stays safe when someone adds a column later.
+
+    `fit_score` is only written when the sweep actually computed one — a discovery
+    pass that could not reach the keyword provider scores zero, and letting that
+    overwrite a real score would push good clips off the front of the grid.
+    """
+    stats = source.get("stats")
+    if isinstance(stats, dict) and stats:
+        row.stats = dict(stats)
+
+    score = float(source.get("fit_score") or 0.0)
+    if score > 0:
+        row.fit_score = score
+        row.fit_reasons = list(source.get("fit_reasons") or [])
 
 
 async def clip_sources(
@@ -1448,31 +1480,83 @@ async def tiktok_access_token(key: str = "default") -> str:
     token in the database is 24 hours from useless at all times, and a cached one
     is a sweep that fails tomorrow for a reason nobody can see today.
 
+    **Refreshes are serialised.** TikTok rotates the refresh token on refresh, so
+    two callers refreshing at once — which is the ordinary shape of this system,
+    with the worker sweeping on a schedule while someone presses Discover — both
+    spend the same stored token, and the second spends one TikTok has already
+    retired. The loser then writes its failure over the winner's good token and
+    the connection is dead until a human reconnects. The lock plus the re-read
+    inside it means the second caller finds the fresh token and makes no call at
+    all.
+
     Raises `TikTokAuthExpired` when only a human can fix it — no stored account, a
     refresh token past its own expiry, or a refresh TikTok refused.
     """
-    from engine.crypto import DecryptionFailed, decrypt
     from engine.providers import tiktok
 
     if not _persistence_enabled():
         raise tiktok.TikTokAuthExpired("persistence is off, so no TikTok account is stored")
+
+    live = await _stored_tiktok_token(key)
+    if live is not None:
+        return live
+
+    async with _tiktok_refresh_lock():
+        # Re-read: whoever held the lock has very likely just refreshed, and this
+        # is the check that turns a stampede into one call rather than N.
+        live = await _stored_tiktok_token(key)
+        if live is not None:
+            return live
+
+        refresh_token = await _tiktok_refresh_token(key)
+        tokens = await tiktok.refresh(refresh_token)
+        await save_tiktok_account(tokens, key=key)
+        return tokens.access_token
+
+
+async def _stored_tiktok_token(key: str) -> str | None:
+    """The stored access token if it is comfortably live, else None.
+
+    None means "needs refreshing", not "broken" — the two cases that are broken
+    raise instead, because no amount of refreshing fixes a missing account.
+    """
+    from engine.providers import tiktok
 
     async with session() as db:
         row = await db.get(TikTokAccount, key)
         if row is None or not row.refresh_token_encrypted:
             raise tiktok.TikTokAuthExpired("no TikTok account connected")
 
-        expires_at = row.expires_at
         # SQLite drops the timezone (see `repurpose/rights._aware` for the same
         # trap and why it only bites outside CI).
-        if expires_at is not None and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=UTC)
+        expires_at = _aware_utc(row.expires_at)
+        refresh_expires_at = _aware_utc(row.refresh_expires_at)
+        now = datetime.now(UTC)
 
-        if row.access_token and expires_at and datetime.now(UTC) < expires_at - _REFRESH_MARGIN:
+        # Checked here rather than left to TikTok: a refresh token past its own
+        # expiry cannot be refreshed, so calling anyway spends a round trip to be
+        # told what the row already said. Refresh tokens last about a year, so
+        # this fires on an install nobody has swept in a long time.
+        if refresh_expires_at is not None and now >= refresh_expires_at:
+            raise tiktok.TikTokAuthExpired(
+                "the TikTok connection has expired — reconnect the account"
+            )
+
+        if row.access_token and expires_at and now < expires_at - _REFRESH_MARGIN:
             return row.access_token
+        return None
 
+
+async def _tiktok_refresh_token(key: str) -> str:
+    from engine.crypto import DecryptionFailed, decrypt
+    from engine.providers import tiktok
+
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None or not row.refresh_token_encrypted:
+            raise tiktok.TikTokAuthExpired("no TikTok account connected")
         try:
-            refresh_token = decrypt(row.refresh_token_encrypted)
+            return decrypt(row.refresh_token_encrypted)
         except DecryptionFailed as exc:
             # The secret key changed. The stored token is unrecoverable and the
             # only fix is reconnecting, so say that rather than reporting a
@@ -1481,9 +1565,30 @@ async def tiktok_access_token(key: str = "default") -> str:
                 "the stored TikTok token cannot be decrypted — reconnect the account"
             ) from exc
 
-    tokens = await tiktok.refresh(refresh_token)
-    await save_tiktok_account(tokens, key=key)
-    return tokens.access_token
+
+def _aware_utc(value: datetime | None) -> datetime | None:
+    return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+
+_refresh_lock: asyncio.Lock | None = None
+_refresh_lock_loop: Any = None
+
+
+def _tiktok_refresh_lock() -> asyncio.Lock:
+    """The refresh lock for the running loop.
+
+    Rebound when the loop changes rather than created at import, for the reason
+    `quota.Ledger._serialised` sets out at length: an `asyncio.Lock` binds to the
+    first loop that awaits it, and the test suite and the CLI both call in through
+    separate `asyncio.run`s. Serialising within one loop is what is needed; two
+    loops racing over one database row is not a shape this system has.
+    """
+    global _refresh_lock, _refresh_lock_loop
+
+    loop = asyncio.get_running_loop()
+    if _refresh_lock is None or _refresh_lock_loop is not loop:
+        _refresh_lock, _refresh_lock_loop = asyncio.Lock(), loop
+    return _refresh_lock
 
 
 #: Mirrors `tiktok.REFRESH_MARGIN`. Imported lazily there, restated here so this

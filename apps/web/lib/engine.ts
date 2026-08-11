@@ -31,6 +31,7 @@ import type {
   Monetisation,
   OriginalityReport,
   Shorts,
+  Discovered,
   TikTokStatus,
   TimelineRequest,
   JobCreated,
@@ -460,6 +461,20 @@ export const selectClip = (sourceId: string) =>
  */
 export const evaluateTimeline = (body: TimelineRequest) =>
   post<OriginalityReport>("/v1/repurpose/evaluate", body);
+
+/**
+ * Sweep the connected TikTok account and re-score what comes back.
+ *
+ * Through `send` rather than `get` for the same reason as `beginTikTokAuth`: the
+ * engine distinguishes a revoked connection (409, with the way to reconnect) from
+ * TikTok being down (502), and `get`'s null-on-failure would flatten both into the
+ * empty grid this whole path exists to stop being ambiguous.
+ */
+export const sweepClips = (channelKey = "main", limit = 40) =>
+  send<Discovered>("POST", "/v1/repurpose/discover", {
+    channel_key: channelKey,
+    limit,
+  });
 
 /** Whether TikTok is configured, and whether anyone has signed in. */
 export const getTikTokStatus = () =>

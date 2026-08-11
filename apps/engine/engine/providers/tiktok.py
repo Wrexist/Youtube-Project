@@ -18,7 +18,7 @@ recorded through `repurpose/rights.py`.
 
 ## Reliability
 
-Four things this has to get right, and each one is a way the integration silently
+Five things this has to get right, and each one is a way the integration silently
 stops working rather than failing loudly:
 
 1. **TikTok answers 200 with an error body.** `{"error": {"code": "access_token_
@@ -34,6 +34,12 @@ stops working rather than failing loudly:
 4. **An expired token and an empty account look identical** if every failure
    returns `[]`. Auth failures raise, so the screen can say *reconnect*; only
    genuinely transient trouble degrades to an empty list.
+5. **Refreshing twice at once destroys the connection.** The refresh token is
+   rotated, so two callers spending the same stored one leave the second holding
+   a token TikTok has retired — and its failure overwrites the first one's good
+   token. Serialising that is `repository.tiktok_access_token`'s job, not this
+   module's; `refresh()` here is deliberately a plain call with no state of its
+   own, and must stay that way or the lock will be guarding the wrong thing.
 
 **Unverified against the live API.** Reviewed code, not proven code — the same
 status `PLAN.md` records for the YouTube publish path, and for the same reason: it

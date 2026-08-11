@@ -252,3 +252,85 @@ async def test_saving_a_project_twice_updates_it(database):
     assert project is not None
     assert project["thesis"] == "second"
     assert project["channel_key"] == "main", "an unspecified field is left alone"
+
+
+# ── re-sweeping ─────────────────────────────────────────────────────────────
+
+
+async def test_a_clip_that_took_off_is_re_ranked_on_the_next_sweep(database):
+    """The best repurposing candidate is usually one that went viral *after* you
+    first saw it. A sweep that can never notice that leaves it buried under
+    whatever was popular the day discovery first ran."""
+    from engine import repository
+
+    first = {
+        "platform": "tiktok",
+        "external_id": "climber",
+        "url": "https://tiktok.example/v/climber",
+        "stats": {"views": 900},
+        "fit_score": 0.2,
+        "fit_reasons": ["thin reach"],
+    }
+    await repository.upsert_clip_sources([first], channel_key="main")
+
+    added = await repository.upsert_clip_sources(
+        [{**first, "stats": {"views": 500_000}, "fit_score": 0.9, "fit_reasons": ["took off"]}],
+        channel_key="main",
+    )
+
+    assert added == 0, "a re-sweep must not count a known clip as new"
+    clip = (await repository.clip_sources(channel_key="main"))[0]
+    assert clip["stats"]["views"] == 500_000
+    assert clip["fit_score"] == 0.9
+    assert clip["fit_reasons"] == ["took off"]
+
+
+async def test_re_sweeping_cannot_resurrect_a_dismissal(database):
+    """Discovery re-runs constantly. If it undid dismissals, the grid would refill
+    with the same rejects every time and the dismiss button would be decorative."""
+    from engine import repository
+
+    source = {
+        "platform": "tiktok",
+        "external_id": "rejected",
+        "url": "https://tiktok.example/v/rejected",
+        "stats": {"views": 10},
+        "fit_score": 0.3,
+    }
+    await repository.upsert_clip_sources([source], channel_key="main")
+    clip_id = (await repository.clip_sources(channel_key="main"))[0]["id"]
+    assert await repository.set_clip_status(clip_id, "dismissed")
+
+    await repository.upsert_clip_sources(
+        [{**source, "stats": {"views": 999_999}, "fit_score": 0.95}], channel_key="main"
+    )
+
+    assert await repository.clip_sources(channel_key="main") == []
+    still = await repository.clip_sources(channel_key="main", status="dismissed")
+    assert len(still) == 1
+    # The numbers still refreshed — it is the decision that is sticky, not the row.
+    assert still[0]["stats"]["views"] == 999_999
+
+
+async def test_a_scoreless_sweep_does_not_wipe_a_real_score(database):
+    """A discovery pass that could not reach the keyword provider scores zero.
+    Letting that overwrite a real score would push good clips off the grid for a
+    reason that has nothing to do with the clips."""
+    from engine import repository
+
+    source = {
+        "platform": "tiktok",
+        "external_id": "graded",
+        "url": "https://tiktok.example/v/graded",
+        "fit_score": 0.8,
+        "fit_reasons": ["on topic"],
+    }
+    await repository.upsert_clip_sources([source], channel_key="main")
+
+    await repository.upsert_clip_sources(
+        [{**source, "fit_score": 0.0, "fit_reasons": []}], channel_key="main"
+    )
+
+    clip = (await repository.clip_sources(channel_key="main"))[0]
+    assert clip["fit_score"] == 0.8
+    assert clip["fit_reasons"] == ["on topic"]

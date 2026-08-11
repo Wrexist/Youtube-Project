@@ -105,6 +105,9 @@ export type TimelineRequest = components["schemas"]["TimelineIn"];
 /** Whether TikTok is configured, and whether an account has signed in. Two
  *  separate questions with two different fixes — see `api/repurpose.py`. */
 export type TikTokStatus = Ok<paths["/v1/repurpose/auth/tiktok/status"]["get"]>;
+/** The result of a sweep. Carries `configured` and `connected` so an empty result
+ *  can say *which* kind of empty it is — the screen has three fixes to offer. */
+export type Discovered = Ok<paths["/v1/repurpose/discover"]["post"]>;
 
 /** The standing list of researched ideas, and one of its entries. */
 export type Backlog = Ok<paths["/v1/ideas/backlog"]["get"]>;

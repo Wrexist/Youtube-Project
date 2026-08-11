@@ -207,3 +207,61 @@ async def test_an_undecryptable_token_says_reconnect_not_decrypt_error(database,
 
     with pytest.raises(TikTokAuthExpired, match="reconnect"):
         await repository.tiktok_access_token()
+
+
+# ── concurrency ─────────────────────────────────────────────────────────────
+
+
+async def test_simultaneous_sweeps_refresh_once_between_them(database, monkeypatch):
+    """The stampede that kills the connection.
+
+    TikTok rotates the refresh token on refresh. Two callers that both find the
+    access token expired both spend the *same* stored refresh token — and the
+    second spends one TikTok has already retired, so its failure gets written over
+    the first one's good token and the account is dead until a human reconnects.
+
+    This is the ordinary shape of the system, not a rare race: the worker sweeps on
+    a schedule and the operator presses Discover whenever they like.
+    """
+    import asyncio
+
+    calls = 0
+
+    async def fake_refresh(_token):
+        nonlocal calls
+        calls += 1
+        # Long enough that a second caller would certainly be inside the window if
+        # nothing serialised them.
+        await asyncio.sleep(0.05)
+        return _tokens(access_token="fresh", refresh_token="rotated")
+
+    monkeypatch.setattr(tiktok, "refresh", fake_refresh)
+
+    await repository.save_tiktok_account(
+        _tokens(expires_at=datetime.now(UTC) - timedelta(minutes=1)), handle="@me"
+    )
+
+    got = await asyncio.gather(
+        *(repository.tiktok_access_token() for _ in range(4)),
+    )
+
+    assert calls == 1, "each concurrent sweep spent the rotated-away refresh token"
+    assert got == ["fresh"] * 4
+
+
+async def test_a_refresh_token_past_its_own_expiry_asks_for_a_reconnect(database):
+    """No network call: the stored row already says the answer.
+
+    Refresh tokens last about a year, so this is the install nobody has swept in a
+    long time — the one case where a round trip buys nothing but a slower error.
+    """
+    await repository.save_tiktok_account(
+        _tokens(
+            expires_at=datetime.now(UTC) - timedelta(hours=1),
+            refresh_expires_at=datetime.now(UTC) - timedelta(days=1),
+        ),
+        handle="@me",
+    )
+
+    with pytest.raises(TikTokAuthExpired, match="reconnect"):
+        await repository.tiktok_access_token()
