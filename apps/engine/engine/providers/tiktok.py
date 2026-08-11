@@ -8,30 +8,48 @@ other people's videos, and no amount of engineering changes that:
   * **Research API** is restricted to approved academic researchers.
   * Neither serves raw media for arbitrary creators.
 
-So there is no `search_all_of_tiktok()` here and there must never be one. What
-exists instead:
-
-  * `own_videos()` — Lane A. The authenticated user's posts, with a real media URL.
-  * `trends()` — public trend signal (hashtags, keywords) for *discovery*, which is
-    a different problem from acquisition. Knowing that a topic is moving requires
-    no video files and infringes nothing.
+So there is no `search_all_of_tiktok()` here and there must never be one. This is
+an API client, not a scraper: every request is authenticated as the account whose
+content it returns.
 
 Lane B (campaign clipping) does not come through here at all. A campaign supplies
 its own source material and its own content rules; the rights basis is enrolment,
-recorded through `repurpose/rights.py`, and the media arrives by whatever route the
-campaign specifies.
+recorded through `repurpose/rights.py`.
 
-**Unverified against the live API.** This is reviewed code, not proven code — the
-same status `PLAN.md` records for the YouTube publishing path, and for the same
-reason: it needs credentials nobody has yet. Everything degrades to an empty list
-when unconfigured rather than raising, so a keyless install still renders the
-screen.
+## Reliability
+
+Four things this has to get right, and each one is a way the integration silently
+stops working rather than failing loudly:
+
+1. **TikTok answers 200 with an error body.** `{"error": {"code": "access_token_
+   invalid", ...}}` arrives with HTTP 200, so `raise_for_status()` sees nothing
+   wrong. Every response goes through `_unwrap`, which is the only place that
+   decides whether a call succeeded.
+2. **Access tokens last 24 hours.** Without refresh the connection works on the
+   day you set it up and is dead by the next sweep — the failure mode that looks
+   like "the feature stopped working" a day after anyone tested it.
+3. **`video.list` is paginated.** It returns at most 20 rows plus a cursor. A
+   sweep that ignores `has_more` sees the newest 20 posts and nothing else, which
+   is indistinguishable from a working sweep on a small account.
+4. **An expired token and an empty account look identical** if every failure
+   returns `[]`. Auth failures raise, so the screen can say *reconnect*; only
+   genuinely transient trouble degrades to an empty list.
+
+**Unverified against the live API.** Reviewed code, not proven code — the same
+status `PLAN.md` records for the YouTube publish path, and for the same reason: it
+needs credentials nobody has yet. The error-code strings in `_AUTH_ERRORS` are the
+likeliest thing to be wrong, so `_unwrap` also treats any 401 as an auth failure
+regardless of the code it carries.
 """
 
 from __future__ import annotations
 
+import asyncio
+import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from loguru import logger
@@ -65,11 +83,76 @@ VIDEO_FIELDS = (
     "create_time",
 )
 
+USER_FIELDS = ("open_id", "display_name", "username")
+
 TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
+
+#: TikTok's own page size for `video.list`. Asking for more is rejected, so a
+#: bigger sweep is more pages rather than a bigger page.
+PAGE_SIZE = 20
+
+#: Stop paginating here however much `has_more` insists. A runaway cursor — which
+#: a malformed response can produce — would otherwise sweep forever.
+MAX_PAGES = 25
+
+#: Attempts per request, and the base for exponential backoff.
+MAX_ATTEMPTS = 3
+BACKOFF_BASE_S = 1.0
+
+#: Refresh a token this long before it actually expires. A sweep that starts with
+#: 30 seconds left on the clock finishes with an invalid one.
+REFRESH_MARGIN = timedelta(minutes=5)
+
+#: Error codes that mean "the human must re-authorise". Raised rather than
+#: swallowed, so the screen can say *reconnect* instead of showing an empty grid.
+#: Not exhaustive — `_unwrap` also treats any 401 as an auth failure, which is the
+#: backstop for a code not on this list.
+_AUTH_ERRORS = frozenset(
+    {
+        "access_token_invalid",
+        "access_token_expired",
+        "refresh_token_invalid",
+        "refresh_token_expired",
+        "scope_not_authorized",
+        "scope_permission_missed",
+    }
+)
 
 
 class TikTokUnavailable(Exception):
-    """No credentials, or TikTok refused. Never fatal to a screen render."""
+    """TikTok cannot be reached or refused. Transient, or a configuration fault."""
+
+
+class TikTokAuthExpired(TikTokUnavailable):
+    """The connection is dead and only a human re-authorising fixes it.
+
+    Its own type because the remedy is different: everything else is worth a
+    retry, and this is worth a button that says *Reconnect*.
+    """
+
+
+@dataclass
+class Tokens:
+    """What an OAuth exchange or refresh returns.
+
+    `refresh_token` is encrypted before storage by the caller — it is durable
+    access to an account and there is no column for a plaintext one, the same rule
+    `tables.Channel` states for YouTube.
+    """
+
+    access_token: str = ""
+    refresh_token: str = ""
+    open_id: str = ""
+    expires_at: datetime | None = None
+    refresh_expires_at: datetime | None = None
+    scope: str = ""
+
+    @property
+    def expired(self) -> bool:
+        """True inside `REFRESH_MARGIN` of expiry, not just after it."""
+        if self.expires_at is None:
+            return False
+        return datetime.now(UTC) >= self.expires_at - REFRESH_MARGIN
 
 
 @dataclass
@@ -115,7 +198,6 @@ def authorize_url(redirect_uri: str, state: str) -> str:
     """Where the browser goes to grant Lane A access."""
     if not configured():
         raise TikTokUnavailable("TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET are not set")
-    from urllib.parse import urlencode
 
     return (
         AUTH_URL
@@ -132,18 +214,134 @@ def authorize_url(redirect_uri: str, state: str) -> str:
     )
 
 
-async def exchange_code(code: str, redirect_uri: str) -> dict[str, Any]:
-    """Trade an authorisation code for tokens.
+# ── the transport ───────────────────────────────────────────────────────────
 
-    The refresh token goes to `crypto.encrypt` before storage, like YouTube's —
-    it is durable access to an account and there is no column for a plaintext one.
+
+def _unwrap(response: httpx.Response) -> dict:
+    """The only place that decides whether a TikTok call succeeded.
+
+    **TikTok answers 200 with an error body.** `raise_for_status()` is therefore
+    not enough on its own and never was: an invalid access token arrives as a
+    perfectly ordinary 200 carrying `{"error": {"code": "access_token_invalid"}}`.
+    A client that trusts the status code treats that as a successful empty sweep.
     """
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise TikTokUnavailable(
+            f"TikTok returned {response.status_code} with a body that is not JSON"
+        ) from exc
+
+    error = payload.get("error") or {}
+    code = str(error.get("code") or "")
+    # "ok" is success; the field is absent on some endpoints, which is also success.
+    failed = bool(code) and code != "ok"
+
+    if response.status_code == 401 or (failed and code in _AUTH_ERRORS):
+        raise TikTokAuthExpired(
+            f"TikTok rejected the credentials ({code or response.status_code}). "
+            "Reconnect the account to continue."
+        )
+    if failed or response.status_code >= 400:
+        raise TikTokUnavailable(
+            f"TikTok error {code or response.status_code}: "
+            f"{error.get('message') or response.text[:200]}"
+        )
+    return payload
+
+
+async def _request(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    **kwargs: Any,
+) -> dict:
+    """One call, retried on the failures that are worth retrying.
+
+    Retries 429 and 5xx; never retries an auth failure, which will fail
+    identically three times and only delay the "reconnect" the operator needs to
+    see. `Retry-After` is honoured when TikTok sends one, because guessing a
+    backoff shorter than the one it asked for is how a rate limit becomes a ban.
+    """
+    last: Exception | None = None
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            response = await client.request(method, url, **kwargs)
+        except httpx.HTTPError as exc:
+            last = TikTokUnavailable(f"could not reach TikTok: {exc}")
+        else:
+            if response.status_code == 429 or response.status_code >= 500:
+                last = TikTokUnavailable(
+                    f"TikTok returned {response.status_code}"
+                    + (" (rate limited)" if response.status_code == 429 else "")
+                )
+                retry_after = _retry_after(response)
+            else:
+                return _unwrap(response)  # raises TikTokAuthExpired without retrying
+            if attempt < MAX_ATTEMPTS:
+                await asyncio.sleep(retry_after or BACKOFF_BASE_S * 2 ** (attempt - 1))
+                continue
+
+        if attempt < MAX_ATTEMPTS:
+            await asyncio.sleep(BACKOFF_BASE_S * 2 ** (attempt - 1))
+
+    raise last or TikTokUnavailable("TikTok request failed")
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    raw = response.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        # Capped: a header asking us to wait an hour should surface as a failure
+        # the operator sees, not as a request that hangs for an hour.
+        return min(float(raw), 30.0)
+    except ValueError:
+        return None
+
+
+# ── tokens ──────────────────────────────────────────────────────────────────
+
+
+def _tokens_from(payload: dict) -> Tokens:
+    """A token response as `Tokens`.
+
+    v2 returns the fields at the top level; some older documentation shows them
+    nested under `data`. Both are accepted because getting this wrong produces an
+    empty token that fails later and further away.
+    """
+    body = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    body = body or {}
+    now = datetime.now(UTC)
+
+    def seconds(name: str) -> datetime | None:
+        raw = body.get(name)
+        try:
+            return now + timedelta(seconds=int(raw)) if raw else None
+        except (TypeError, ValueError):
+            return None
+
+    return Tokens(
+        access_token=str(body.get("access_token") or ""),
+        refresh_token=str(body.get("refresh_token") or ""),
+        open_id=str(body.get("open_id") or ""),
+        expires_at=seconds("expires_in"),
+        refresh_expires_at=seconds("refresh_expires_in"),
+        scope=str(body.get("scope") or ""),
+    )
+
+
+async def exchange_code(code: str, redirect_uri: str) -> Tokens:
+    """Trade an authorisation code for tokens."""
     if not configured():
         raise TikTokUnavailable("TikTok credentials are not configured")
 
     settings = get_settings()
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        response = await client.post(
+        payload = await _request(
+            client,
+            "POST",
             TOKEN_URL,
             data={
                 "client_key": settings.tiktok_client_key,
@@ -154,45 +352,153 @@ async def exchange_code(code: str, redirect_uri: str) -> dict[str, Any]:
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-    if response.status_code >= 400:
-        # The body carries TikTok's own error description, which is the only thing
-        # that distinguishes a bad code from a mismatched redirect URI.
-        raise TikTokUnavailable(f"token exchange failed ({response.status_code}): {response.text}")
-    return response.json()
+
+    tokens = _tokens_from(payload)
+    if not tokens.access_token:
+        raise TikTokUnavailable("TikTok returned no access token for that code")
+    return tokens
+
+
+async def refresh(refresh_token: str) -> Tokens:
+    """Trade a refresh token for a new access token.
+
+    Access tokens last 24 hours. Without this the integration works on the day it
+    is set up and is dead by the next sweep — which reads as "the feature broke"
+    rather than as "a token expired", and is the single likeliest way this stops
+    working unattended.
+    """
+    if not configured():
+        raise TikTokUnavailable("TikTok credentials are not configured")
+    if not refresh_token:
+        raise TikTokAuthExpired("no refresh token stored — reconnect the account")
+
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        payload = await _request(
+            client,
+            "POST",
+            TOKEN_URL,
+            data={
+                "client_key": settings.tiktok_client_key,
+                "client_secret": settings.tiktok_client_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    tokens = _tokens_from(payload)
+    if not tokens.access_token:
+        raise TikTokAuthExpired("TikTok refused the refresh token — reconnect the account")
+    # TikTok rotates the refresh token on some grants and omits it on others.
+    # Carrying the old one forward when none comes back keeps a working connection
+    # working; overwriting it with "" would end the connection at the next expiry.
+    if not tokens.refresh_token:
+        tokens.refresh_token = refresh_token
+    return tokens
+
+
+# ── reads ───────────────────────────────────────────────────────────────────
+
+
+async def creator_handle(access_token: str) -> str:
+    """The authenticated account's @handle.
+
+    Fetched once per sweep rather than per clip. Without it `creator_handle` is
+    empty on every row, which quietly disables two things that read it: the
+    on-screen credit, and `clip_source` in the feedback loop — so the most
+    actionable attribution dimension would group every video under "".
+    """
+    if not access_token:
+        return ""
+
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        payload = await _request(
+            client,
+            "GET",
+            f"{API}/user/info/",
+            params={"fields": ",".join(USER_FIELDS)},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+    user = (payload.get("data") or {}).get("user") or {}
+    handle = str(user.get("username") or user.get("display_name") or "")
+    return f"@{handle}" if handle and not handle.startswith("@") else handle
 
 
 async def own_videos(access_token: str, *, limit: int = 20) -> list[Clip]:
-    """Lane A: the authenticated user's own posts.
+    """Lane A: the authenticated user's own posts, across as many pages as needed.
 
-    The only path in this module that yields media. Returns an empty list rather
-    than raising when TikTok is unreachable — discovery failing must not take the
-    screen with it.
+    Two rules about failure, and they are in tension on purpose:
+
+      * **A sweep that collected nothing raises.** Returning `[]` for an outage is
+        the confusion this module exists to avoid — an empty account and a broken
+        connection would look identical to every caller.
+      * **A sweep that collected something returns it.** One bad page late in a
+        sweep must not discard the pages that worked, and the operator is better
+        served by 40 clips and a warning than by an exception and none.
     """
     if not access_token:
         return []
 
+    collected: list[Clip] = []
+    cursor: int | None = None
+    handle = ""
+    failure: TikTokUnavailable | None = None
+
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            response = await client.post(
-                f"{API}/video/list/",
-                params={"fields": ",".join(VIDEO_FIELDS)},
-                json={"max_count": min(limit, 20)},
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/json",
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-    except Exception as exc:  # noqa: BLE001 — any failure here is "no clips today"
-        logger.warning("TikTok video.list failed: {}", exc)
-        return []
+        handle = await creator_handle(access_token)
+    except TikTokAuthExpired:
+        raise
+    except TikTokUnavailable as exc:
+        # A missing handle costs a credit line, not the sweep.
+        logger.warning("could not read the TikTok handle: {}", exc)
 
-    videos = (payload.get("data") or {}).get("videos") or []
-    return [_clip(v) for v in videos]
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        for page in range(MAX_PAGES):
+            body: dict[str, Any] = {"max_count": min(PAGE_SIZE, max(1, limit - len(collected)))}
+            if cursor is not None:
+                body["cursor"] = cursor
+
+            try:
+                payload = await _request(
+                    client,
+                    "POST",
+                    f"{API}/video/list/",
+                    params={"fields": ",".join(VIDEO_FIELDS)},
+                    json=body,
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+            except TikTokAuthExpired:
+                raise
+            except TikTokUnavailable as exc:
+                logger.warning("TikTok video.list failed on page {}: {}", page + 1, exc)
+                failure = exc
+                break
+
+            data = payload.get("data") or {}
+            videos = data.get("videos") or []
+            collected.extend(_clip(v, creator=handle) for v in videos)
+
+            if len(collected) >= limit or not data.get("has_more") or not videos:
+                break
+
+            next_cursor = data.get("cursor")
+            # A cursor that does not advance is how a malformed response turns a
+            # sweep into an infinite loop that re-reads page one forever.
+            if next_cursor is None or next_cursor == cursor:
+                break
+            cursor = next_cursor
+
+    if not collected and failure is not None:
+        raise failure
+    return collected[:limit]
 
 
-def _clip(raw: dict) -> Clip:
+def _clip(raw: dict, *, creator: str = "") -> Clip:
     """One API row as a `Clip`.
 
     Defensive throughout: TikTok omits fields rather than nulling them, and a
@@ -203,6 +509,7 @@ def _clip(raw: dict) -> Clip:
         external_id=str(raw.get("id") or ""),
         url=str(raw.get("share_url") or ""),
         caption=caption,
+        creator_handle=creator,
         duration_s=float(raw.get("duration") or 0),
         cover_url=str(raw.get("cover_image_url") or ""),
         hashtags=_hashtags(caption),
@@ -220,8 +527,6 @@ def _clip(raw: dict) -> Clip:
 
 
 def _hashtags(caption: str) -> list[str]:
-    import re
-
     return re.findall(r"#\w+", caption)
 
 

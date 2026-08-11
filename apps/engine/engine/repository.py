@@ -55,6 +55,7 @@ from engine.tables import (
     RepurposeProject,
     ReviewSnapshot,
     ScheduleSlot,
+    TikTokAccount,
 )
 from engine.workflows.base import StageState, StageStatus
 
@@ -1371,3 +1372,132 @@ async def load_project(project_id: str) -> dict | None:
             "report": row.report,
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
+
+
+# ── TikTok accounts (Lane A) ────────────────────────────────────────────────
+#
+# The refresh token is encrypted at rest, like YouTube's. `access_token` is not:
+# it lives 24 hours, it is replaced on every refresh, and encrypting a value that
+# short-lived buys nothing while making the "is it still valid" check a decrypt.
+
+
+async def save_tiktok_account(
+    tokens,
+    *,
+    key: str = "default",
+    handle: str = "",
+) -> None:
+    """Store or replace the connection for an account.
+
+    Upsert on `key` rather than insert: reconnecting is the normal way to recover
+    from an expired refresh token, and a second row would leave `load_tiktok_tokens`
+    picking between two credentials with no way to know which is live.
+    """
+    if not _persistence_enabled():
+        return
+
+    from engine.crypto import encrypt
+
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None:
+            row = TikTokAccount(key=key, refresh_token_encrypted="")
+            db.add(row)
+        row.open_id = tokens.open_id or row.open_id
+        row.handle = handle or row.handle
+        if tokens.refresh_token:
+            row.refresh_token_encrypted = encrypt(tokens.refresh_token)
+        row.access_token = tokens.access_token
+        row.expires_at = tokens.expires_at
+        row.refresh_expires_at = tokens.refresh_expires_at
+        row.scope = tokens.scope or row.scope
+
+
+async def load_tiktok_account(key: str = "default") -> dict | None:
+    """The stored connection, without decrypting anything.
+
+    Deliberately does not return the refresh token: this is what the Setup screen
+    reads to say whether an account is connected, and a status endpoint has no
+    business handling a credential. `tiktok_access_token` is the one path that
+    decrypts, and it is called by the sweep.
+    """
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None:
+            return None
+        return {
+            "key": row.key,
+            "open_id": row.open_id,
+            "handle": row.handle,
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "refresh_expires_at": (
+                row.refresh_expires_at.isoformat() if row.refresh_expires_at else None
+            ),
+            "scope": row.scope,
+            "connected": bool(row.refresh_token_encrypted),
+        }
+
+
+async def tiktok_access_token(key: str = "default") -> str:
+    """A *live* access token, refreshing it first if it is close to expiring.
+
+    This is the function every read path should call. Callers must not cache what
+    it returns beyond the request they need it for: the whole point is that the
+    token in the database is 24 hours from useless at all times, and a cached one
+    is a sweep that fails tomorrow for a reason nobody can see today.
+
+    Raises `TikTokAuthExpired` when only a human can fix it — no stored account, a
+    refresh token past its own expiry, or a refresh TikTok refused.
+    """
+    from engine.crypto import DecryptionFailed, decrypt
+    from engine.providers import tiktok
+
+    if not _persistence_enabled():
+        raise tiktok.TikTokAuthExpired("persistence is off, so no TikTok account is stored")
+
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None or not row.refresh_token_encrypted:
+            raise tiktok.TikTokAuthExpired("no TikTok account connected")
+
+        expires_at = row.expires_at
+        # SQLite drops the timezone (see `repurpose/rights._aware` for the same
+        # trap and why it only bites outside CI).
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+
+        if row.access_token and expires_at and datetime.now(UTC) < expires_at - _REFRESH_MARGIN:
+            return row.access_token
+
+        try:
+            refresh_token = decrypt(row.refresh_token_encrypted)
+        except DecryptionFailed as exc:
+            # The secret key changed. The stored token is unrecoverable and the
+            # only fix is reconnecting, so say that rather than reporting a
+            # decrypt error nobody can act on.
+            raise tiktok.TikTokAuthExpired(
+                "the stored TikTok token cannot be decrypted — reconnect the account"
+            ) from exc
+
+    tokens = await tiktok.refresh(refresh_token)
+    await save_tiktok_account(tokens, key=key)
+    return tokens.access_token
+
+
+#: Mirrors `tiktok.REFRESH_MARGIN`. Imported lazily there, restated here so this
+#: module does not import the provider at module scope.
+_REFRESH_MARGIN = timedelta(minutes=5)
+
+
+async def disconnect_tiktok(key: str = "default") -> bool:
+    """Forget an account. True if there was one."""
+    if not _persistence_enabled():
+        return False
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None:
+            return False
+        await db.delete(row)
+    return True

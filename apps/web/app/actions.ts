@@ -48,6 +48,8 @@ import {
   dismissClip,
   selectClip,
   evaluateTimeline,
+  getTikTokStatus,
+  beginTikTokAuth,
 } from "@/lib/engine";
 import { ONBOARDED_COOKIE, ONBOARDED_MAX_AGE } from "@/lib/onboarding";
 import type {
@@ -55,6 +57,7 @@ import type {
   ClipGrant,
   ClipGrantRequest,
   OriginalityReport,
+  TikTokStatus,
   TimelineRequest,
   Brief,
   Diagnostics,
@@ -663,6 +666,28 @@ export async function buildEpisode(input: {
     } as Parameters<typeof createJob>[0]);
     revalidatePath("/repurpose");
     return { ok: true, data: created as { job_id: string } };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+
+/** Whether TikTok is configured and connected. Two separate answers. */
+export async function tiktokStatus(): Promise<ActionResult<TikTokStatus>> {
+  const data = await getTikTokStatus();
+  if (!data) return { ok: false, error: "the engine did not answer" };
+  return { ok: true, data };
+}
+
+/**
+ * Start the TikTok consent round trip.
+ *
+ * Returns the URL for the browser to navigate to. A Server Action following the
+ * redirect would authorise the server rather than the person at the keyboard.
+ */
+export async function startTikTokConnection(): Promise<ActionResult<{ url: string }>> {
+  try {
+    return { ok: true, data: await beginTikTokAuth() };
   } catch (error) {
     return { ok: false, error: message(error) };
   }

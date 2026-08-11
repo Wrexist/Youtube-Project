@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, Button } from "@/components/ui";
-import { saveCredentials, connectYouTube } from "@/app/actions";
-import type { SetupStatus, CredentialStatus } from "@studio/contracts";
+import { saveCredentials, connectYouTube, startTikTokConnection, tiktokStatus } from "@/app/actions";
+import type { SetupStatus, CredentialStatus, TikTokStatus } from "@studio/contracts";
 
 /**
  * The interactive half of Setup.
@@ -37,6 +37,11 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
   // an API error on a blank page. See `ConnectError` for why `access_denied` gets
   // a paragraph of its own.
   const connectError = params.get("connect_error");
+  // TikTok's callback lands here too, with its own outcome. Separate parameters
+  // from Google's: two connections that report through one pair of names would
+  // show a TikTok failure as a YouTube one.
+  const tiktokConnected = params.get("tiktok") === "connected";
+  const tiktokError = params.get("tiktok_error");
   // Which side produced it. Google's callback carries no such parameter, so its
   // absence means Google; the engine sets it explicitly when its own half fails.
   const connectErrorFromEngine = params.get("connect_error_source") === "engine";
@@ -115,6 +120,23 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
 
       {connectError && <ConnectError code={connectError} fromEngine={connectErrorFromEngine} />}
 
+      {tiktokConnected && (
+        <p
+          role="status"
+          className="mb-6 text-[13px] text-[var(--color-ok)]"
+        >
+          TikTok connected. The Repurpose tab can sweep your own posts now.
+        </p>
+      )}
+      {tiktokError && (
+        <div
+          role="alert"
+          className="mb-6 rounded-[var(--radius-card)] border border-[var(--color-bad)]/40 bg-[var(--color-surface)] p-4"
+        >
+          <p className="text-[13px] text-[var(--color-bad)]">{tiktokError}</p>
+        </div>
+      )}
+
       {Object.entries(groups).map(([group, credentials]) => (
         <section key={group} className="mb-8">
           <h2 className="pb-1 text-[13px] font-semibold text-[var(--color-muted)]">
@@ -145,6 +167,8 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
               />
             </>
           )}
+
+          {group === "Repurpose" && <TikTokConnection />}
         </section>
       ))}
 
@@ -200,6 +224,8 @@ const GROUP_NOTE: Record<string, string> = {
     "Each one makes the output better. None of them is needed to start.",
   Publishing:
     "Only needed to upload to YouTube. Everything else works without it — you download the file instead.",
+  Repurpose:
+    "Only needed to sweep your own TikToks. The tab works without them for clips you add by hand.",
 };
 
 /**
@@ -607,6 +633,75 @@ function YouTubeConnection({
           disabled={!setup.can_connect || pending}
         >
           {setup.can_publish ? "Reconnect" : "Connect YouTube"}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+
+/**
+ * The TikTok connection, for Lane A of the Repurpose tab.
+ *
+ * Reads its own status rather than taking it from `setup`: `/v1/setup` describes
+ * credentials, and whether somebody has *signed in* is a different question with
+ * a different answer — an install can have both keys and no account.
+ *
+ * The three states are kept distinct on purpose. "Not configured", "configured
+ * but nobody signed in" and "connected" have three different next actions, and
+ * collapsing them is how "the sweep shows nothing" becomes unanswerable.
+ */
+function TikTokConnection() {
+  const [status, setStatus] = useState<TikTokStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    tiktokStatus().then((result) => {
+      if (!cancelled && result.ok) setStatus(result.data ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const connected = Boolean(status?.account?.connected);
+  const configured = Boolean(status?.configured);
+
+  function connect() {
+    setBusy(true);
+    setError(null);
+    startTikTokConnection().then((result) => {
+      if (!result.ok || !result.data?.url) {
+        setBusy(false);
+        setError(result.error ?? "Could not start the TikTok connection.");
+        return;
+      }
+      // A full navigation, not a fetch — the consent page has to be loaded by
+      // the browser, for the same reason the YouTube flow does it this way.
+      window.location.href = result.data.url;
+    });
+  }
+
+  return (
+    <Card className="mt-2.5 p-4">
+      <p className="text-[14px] font-semibold">TikTok account</p>
+      <p className="mt-1.5 max-w-[70ch] text-[12px] leading-relaxed text-[var(--color-muted)]">
+        {connected
+          ? `Connected as ${status?.account?.handle || "your account"}. Studio can list your own posts and nothing else — TikTok's API does not offer other creators' videos.`
+          : configured
+            ? "Opens TikTok's consent page. Studio asks to read your own posts, and stores only a refresh token, encrypted."
+            : "Save the client key and secret above first — the consent page cannot be built without them."}
+      </p>
+      {error && <p className="mt-2 text-[12px] text-[var(--color-bad)]">{error}</p>}
+      <div className="mt-3">
+        <Button
+          variant={connected ? "ghost" : "primary"}
+          onClick={connect}
+          disabled={!configured || busy}
+        >
+          {connected ? "Reconnect" : "Connect TikTok"}
         </Button>
       </div>
     </Card>

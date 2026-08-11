@@ -1086,8 +1086,62 @@ export interface paths {
          *     Returns the URL rather than redirecting, for the reason `beginYouTubeAuth`
          *     already documents: a server following the redirect would authorise the server
          *     rather than the person sitting in front of it.
+         *
+         *     `state` is remembered and checked on the way back. Without that the callback
+         *     accepts a code from anywhere, which is the standard OAuth CSRF: an attacker
+         *     walks a victim through a link that connects the *attacker's* TikTok to the
+         *     victim's install, and every clip swept afterwards is the attacker's.
          */
         get: operations["begin_tiktok_auth_v1_repurpose_auth_tiktok_get"];
+        put?: never;
+        post?: never;
+        /** Disconnect Tiktok */
+        delete: operations["disconnect_tiktok_v1_repurpose_auth_tiktok_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/auth/tiktok/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tiktok Callback
+         * @description Where TikTok sends the browser back.
+         *
+         *     Always redirects to the Setup screen rather than returning JSON: the thing at
+         *     the other end of this is a browser tab a person is looking at, and a page of
+         *     JSON is not an answer to "did that work". The outcome rides in the query
+         *     string so the screen can say which.
+         */
+        get: operations["tiktok_callback_v1_repurpose_auth_tiktok_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/auth/tiktok/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tiktok Status
+         * @description Whether an account is connected, without touching a credential.
+         *
+         *     `load_tiktok_account` deliberately does not return the refresh token — a
+         *     status endpoint has no business handling one.
+         */
+        get: operations["tiktok_status_v1_repurpose_auth_tiktok_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1204,8 +1258,10 @@ export interface paths {
          *     `providers/tiktok.py`. Lane B material does not arrive this way at all: a
          *     campaign supplies its own source and its own rules.
          *
-         *     Returns `configured: false` rather than erroring when TikTok credentials are
-         *     absent, so the screen can say what is missing instead of showing a failure.
+         *     Three distinct not-working states, reported distinctly because they have three
+         *     different fixes: credentials unset, nobody signed in, and a connection that has
+         *     expired. Collapsing them into an empty list is how "it shows nothing" becomes
+         *     unanswerable.
          */
         post: operations["discover_v1_repurpose_discover_post"];
         delete?: never;
@@ -1692,16 +1748,13 @@ export interface components {
          * DiscoverRequest
          * @description Sweep Lane A for clips worth building from.
          *
-         *     `access_token` is passed in rather than read from a store because TikTok
-         *     connection is not yet persisted — see the note on the endpoint. When it is,
-         *     this field goes and the token comes from the channel row, like YouTube's.
+         *     No `access_token` field, deliberately. It used to take one in the body, which
+         *     made the caller responsible for a credential that expires every 24 hours —
+         *     so the obvious client caches it and the sweep starts failing the next day for
+         *     a reason invisible from the outside. The token now comes from the stored
+         *     account and is refreshed on the way out.
          */
         DiscoverRequest: {
-            /**
-             * Access Token
-             * @default
-             */
-            access_token: string;
             /**
              * Channel Key
              * @default main
@@ -1709,7 +1762,7 @@ export interface components {
             channel_key: string;
             /**
              * Limit
-             * @default 20
+             * @default 40
              */
             limit: number;
         };
@@ -1721,6 +1774,11 @@ export interface components {
             clips: components["schemas"]["ClipOut"][];
             /** Configured */
             configured: boolean;
+            /**
+             * Connected
+             * @default false
+             */
+            connected: boolean;
         };
         /** EditRequest */
         EditRequest: {
@@ -2476,6 +2534,44 @@ export interface components {
             cost_per_generation: number;
             /** Variants */
             variants: components["schemas"]["Variant"][];
+        };
+        /**
+         * TikTokAccountOut
+         * @description A connected account, as the Setup screen reads it.
+         *
+         *     Carries no credential. The refresh token is never returned by any endpoint —
+         *     a status read has no business handling one.
+         */
+        TikTokAccountOut: {
+            /** Connected */
+            connected: boolean;
+            /** Expires At */
+            expires_at: string | null;
+            /** Handle */
+            handle: string;
+            /** Key */
+            key: string;
+            /** Open Id */
+            open_id: string;
+            /** Refresh Expires At */
+            refresh_expires_at: string | null;
+            /** Scope */
+            scope: string;
+        };
+        /**
+         * TikTokStatusOut
+         * @description Configured and connected are separate answers.
+         *
+         *     An install can have both keys and nobody signed in, and the fix differs: one
+         *     is a `.env` edit, the other is a button. Declared rather than returned as a
+         *     bare `dict` for the reason `ReportOut` records — `-> dict` generates
+         *     `Record<string, never>` in TypeScript, which pushes the screen into
+         *     hand-writing the shape CLAUDE.md forbids.
+         */
+        TikTokStatusOut: {
+            account: components["schemas"]["TikTokAccountOut"] | null;
+            /** Configured */
+            configured: boolean;
         };
         /** TimelineIn */
         TimelineIn: {
@@ -4096,8 +4192,8 @@ export interface operations {
     };
     begin_tiktok_auth_v1_repurpose_auth_tiktok_get: {
         parameters: {
-            query: {
-                redirect_uri: string;
+            query?: {
+                redirect_uri?: string;
             };
             header?: never;
             path?: never;
@@ -4123,6 +4219,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disconnect_tiktok_v1_repurpose_auth_tiktok_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    tiktok_callback_v1_repurpose_auth_tiktok_callback_get: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+                error?: string;
+                error_description?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tiktok_status_v1_repurpose_auth_tiktok_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TikTokStatusOut"];
                 };
             };
         };

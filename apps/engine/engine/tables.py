@@ -182,6 +182,43 @@ class BacklogIdea(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TikTokAccount(Base):
+    """A connected TikTok account, for Lane A.
+
+    Its own table rather than a row in `channels`: that one is shaped around a
+    YouTube channel — `channel_id`, playlists, a quota ledger keyed on it — and
+    widening it with a `platform` column would make every YouTube query filter on
+    something that is only ever one value.
+
+    The refresh token is encrypted, like YouTube's, and for the same reason: it is
+    durable access to an account, and there is no column here for a plaintext one
+    so it cannot be written by accident.
+
+    `open_id` is TikTok's stable per-app user id. Kept because the handle can
+    change and the id cannot, so it is what tells "the same account reconnected"
+    apart from "a second account was added".
+    """
+
+    __tablename__ = "tiktok_accounts"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    open_id: Mapped[str] = mapped_column(String(128), default="")
+    handle: Mapped[str] = mapped_column(String(64), default="")
+    refresh_token_encrypted: Mapped[str] = mapped_column(Text)
+    access_token: Mapped[str] = mapped_column(Text, default="")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: When the *refresh* token dies. Past this only a human re-authorising helps,
+    #: and knowing it lets the screen warn before rather than after.
+    refresh_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    scope: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
 class ClipSource(Base):
     """A short-form clip we found. **Metadata only — never the media.**
 

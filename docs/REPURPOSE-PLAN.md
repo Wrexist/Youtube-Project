@@ -484,7 +484,17 @@ Lane A only and a test asserts it exposes no search or download surface.
 `POST /v1/repurpose/discover` sweeps and stores. Trend pull is behind
 `STUDIO_TIKTOK_TRENDS_URL` and scores zero when unset rather than guessing.
 
-**R2 — Lane A acquisition — ✅ built.**
+**R2 — Lane A acquisition — ✅ built, and hardened.**
+
+The provider was rebuilt for reliability after an audit found four ways it would
+stop working without anything looking wrong: TikTok answers **200 with an error
+body** so a status check passes; access tokens last **24 hours** so an
+integration with no refresh dies on day two; `video.list` is **paginated** so a
+sweep saw the newest 20 posts only; and an expired token returned `[]`, which is
+indistinguishable from an empty account. All four are now handled, with tokens
+stored encrypted (migration `f1a72e9c3d48`) and refreshed transparently, OAuth
+state checked against CSRF, and retries that honour `Retry-After`.
+
 [`repurpose/acquire.py`](../apps/engine/engine/repurpose/acquire.py): grant check
 before the network *and* before the row, streamed download with a size ceiling,
 hash, probe, and a real watermark detector tested against synthetic frame stacks.

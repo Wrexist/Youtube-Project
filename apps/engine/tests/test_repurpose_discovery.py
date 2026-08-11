@@ -65,19 +65,37 @@ async def test_own_videos_without_a_token_returns_nothing():
     assert await tiktok.own_videos("") == []
 
 
-async def test_own_videos_survives_an_unreachable_tiktok(monkeypatch):
-    """A failed sweep is "no clips today", not a broken screen."""
+async def test_a_total_outage_raises_rather_than_looking_like_an_empty_account(monkeypatch):
+    """This used to return `[]`, and that was the bug.
 
-    class Boom:
-        async def __aenter__(self):
-            raise ConnectionError("no network")
+    An unreachable TikTok and an account with no videos produced identical
+    results, so the screen could only say "no clips" for both — and the one that
+    needs action is indistinguishable from the one that does not. A sweep that
+    collected *nothing* now raises; one that collected something keeps it.
+    """
+    import httpx
+    import pytest
 
-        async def __aexit__(self, *_):
-            return False
+    from engine.providers.tiktok import TikTokUnavailable
 
-    monkeypatch.setattr(tiktok.httpx, "AsyncClient", lambda **_: Boom())
+    real_client = httpx.AsyncClient
 
-    assert await tiktok.own_videos("token") == []
+    def boom(_request):
+        raise httpx.ConnectError("no route to host")
+
+    monkeypatch.setattr(
+        tiktok.httpx,
+        "AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(boom), **kw),
+    )
+
+    async def instant(_seconds):
+        return None
+
+    monkeypatch.setattr(tiktok.asyncio, "sleep", instant)
+
+    with pytest.raises(TikTokUnavailable):
+        await tiktok.own_videos("token")
 
 
 def test_a_row_missing_every_optional_field_still_parses():

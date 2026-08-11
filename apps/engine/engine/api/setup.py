@@ -163,6 +163,41 @@ CREDENTIALS: tuple[Credential, ...] = (
         effort="issued with the client ID",
         group="Publishing",
     ),
+    # ── repurpose ────────────────────────────────────────────────────────────
+    #
+    # Its own group rather than "Recommended": these unlock one tab, and an
+    # operator who never repurposes should be able to see at a glance that the
+    # blanks are deliberate.
+    Credential(
+        env="TIKTOK_CLIENT_KEY",
+        label="TikTok client key",
+        unlocks="Connecting your own TikTok account, so the Repurpose tab can see your posts.",
+        without_it="The Repurpose tab still works for clips you add by hand; it just cannot sweep.",
+        url="https://developers.tiktok.com/",
+        effort="days — TikTok reviews the app before it works",
+        group="Repurpose",
+    ),
+    Credential(
+        env="TIKTOK_CLIENT_SECRET",
+        label="TikTok client secret",
+        unlocks="The other half of the TikTok app.",
+        without_it="Same as above — both halves are needed together.",
+        url="https://developers.tiktok.com/",
+        effort="issued with the client key",
+        group="Repurpose",
+    ),
+    Credential(
+        env="TIKTOK_TRENDS_URL",
+        label="TikTok trend feed (optional)",
+        unlocks="Freshness scoring against what is currently moving on TikTok.",
+        without_it=(
+            "Freshness scores zero rather than being invented — clips are still "
+            "ranked on topic fit, demand and reach."
+        ),
+        url="https://ads.tiktok.com/business/creativecenter/pc/en",
+        effort="only if you have a feed to point at; Creative Center has no public API",
+        group="Repurpose",
+    ),
 )
 
 _BY_ENV = {c.env: c for c in CREDENTIALS}

@@ -11,9 +11,12 @@ gate reads it back to decide whether the finished video may publish.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import secrets
+from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from engine import repository
@@ -122,6 +125,36 @@ class TimelineIn(BaseModel):
     template_repeats: int = 0
     structure_repeats: int = 0
     compared_against: int = 0
+
+
+class TikTokAccountOut(BaseModel):
+    """A connected account, as the Setup screen reads it.
+
+    Carries no credential. The refresh token is never returned by any endpoint —
+    a status read has no business handling one.
+    """
+
+    key: str
+    open_id: str
+    handle: str
+    expires_at: str | None
+    refresh_expires_at: str | None
+    scope: str
+    connected: bool
+
+
+class TikTokStatusOut(BaseModel):
+    """Configured and connected are separate answers.
+
+    An install can have both keys and nobody signed in, and the fix differs: one
+    is a `.env` edit, the other is a button. Declared rather than returned as a
+    bare `dict` for the reason `ReportOut` records — `-> dict` generates
+    `Record<string, never>` in TypeScript, which pushes the screen into
+    hand-writing the shape CLAUDE.md forbids.
+    """
+
+    configured: bool
+    account: TikTokAccountOut | None
 
 
 class SignalOut(BaseModel):
@@ -246,14 +279,17 @@ async def select(source_id: str) -> None:
 class DiscoverRequest(BaseModel):
     """Sweep Lane A for clips worth building from.
 
-    `access_token` is passed in rather than read from a store because TikTok
-    connection is not yet persisted — see the note on the endpoint. When it is,
-    this field goes and the token comes from the channel row, like YouTube's.
+    No `access_token` field, deliberately. It used to take one in the body, which
+    made the caller responsible for a credential that expires every 24 hours —
+    so the obvious client caches it and the sweep starts failing the next day for
+    a reason invisible from the outside. The token now comes from the stored
+    account and is refreshed on the way out.
     """
 
     channel_key: str = "main"
-    access_token: str = ""
-    limit: int = Field(default=20, ge=1, le=20)
+    #: Up to 200; the provider pages in 20s. Higher than TikTok's own page size on
+    #: purpose — the point of pagination is that a sweep is not capped at one page.
+    limit: int = Field(default=40, ge=1, le=200)
 
 
 class Discovered(BaseModel):
@@ -262,6 +298,10 @@ class Discovered(BaseModel):
     #: which is reported rather than quietly scoring every clip identically.
     based_on: list[str]
     configured: bool
+    #: Whether an account is connected. False with `configured` true means the
+    #: credentials are set but nobody has signed in — a different fix from either
+    #: "not configured" or "no clips", and the screen says which.
+    connected: bool = False
 
 
 @router.post("/discover")
@@ -274,23 +314,39 @@ async def discover(body: DiscoverRequest) -> Discovered:
     `providers/tiktok.py`. Lane B material does not arrive this way at all: a
     campaign supplies its own source and its own rules.
 
-    Returns `configured: false` rather than erroring when TikTok credentials are
-    absent, so the screen can say what is missing instead of showing a failure.
+    Three distinct not-working states, reported distinctly because they have three
+    different fixes: credentials unset, nobody signed in, and a connection that has
+    expired. Collapsing them into an empty list is how "it shows nothing" becomes
+    unanswerable.
     """
     from engine.repurpose import discover as discovery
 
     topics = _channel_topics()
 
-    if not tiktok.configured() or not body.access_token:
-        return Discovered(clips=[], based_on=topics, configured=tiktok.configured())
+    if not tiktok.configured():
+        return Discovered(clips=[], based_on=topics, configured=False, connected=False)
+
+    try:
+        access_token = await repository.tiktok_access_token()
+    except tiktok.TikTokAuthExpired:
+        # Not an error response: the screen renders this as "connect your account",
+        # and a 4xx would make an ordinary un-connected install look broken.
+        return Discovered(clips=[], based_on=topics, configured=True, connected=False)
 
     try:
         await discovery.discover_own(
-            body.access_token,
+            access_token,
             channel_key=body.channel_key,
             channel_topics=topics,
             limit=body.limit,
         )
+    except tiktok.TikTokAuthExpired as exc:
+        # The token was live a moment ago and TikTok refused it anyway — a revoked
+        # grant, usually. Surfaced as a 409 with the way out, matching how a dead
+        # YouTube refresh token is handled.
+        raise HTTPException(
+            409, {"detail": str(exc), "reconnect_at": "/v1/repurpose/auth/tiktok"}
+        ) from exc
     except tiktok.TikTokUnavailable as exc:
         raise HTTPException(502, str(exc)) from exc
 
@@ -300,26 +356,122 @@ async def discover(body: DiscoverRequest) -> Discovered:
         row.pop("grant", None)
         grant = await repository.latest_grant(row["id"])
         out.append(ClipOut(**row, grant=_grant_out(grant)))
-    return Discovered(clips=out, based_on=topics, configured=True)
+    return Discovered(clips=out, based_on=topics, configured=True, connected=True)
 
 
 @router.get("/auth/tiktok")
-async def begin_tiktok_auth(redirect_uri: str) -> dict:
+async def begin_tiktok_auth(redirect_uri: str = "") -> dict:
     """Where the browser goes to connect a TikTok account for Lane A.
 
     Returns the URL rather than redirecting, for the reason `beginYouTubeAuth`
     already documents: a server following the redirect would authorise the server
     rather than the person sitting in front of it.
-    """
-    import uuid
 
+    `state` is remembered and checked on the way back. Without that the callback
+    accepts a code from anywhere, which is the standard OAuth CSRF: an attacker
+    walks a victim through a link that connects the *attacker's* TikTok to the
+    victim's install, and every clip swept afterwards is the attacker's.
+    """
     if not tiktok.configured():
         raise HTTPException(
             409,
             "TikTok is not configured. Set TIKTOK_CLIENT_KEY and "
             "TIKTOK_CLIENT_SECRET in .env, then restart the engine.",
         )
-    return {"url": tiktok.authorize_url(redirect_uri, uuid.uuid4().hex)}
+
+    redirect_uri = redirect_uri or _default_redirect()
+    state = secrets.token_urlsafe(24)
+    _PENDING_STATES[state] = (datetime.now(UTC), redirect_uri)
+    _expire_states()
+    return {"url": tiktok.authorize_url(redirect_uri, state)}
+
+
+@router.get("/auth/tiktok/callback")
+async def tiktok_callback(
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+) -> RedirectResponse:
+    """Where TikTok sends the browser back.
+
+    Always redirects to the Setup screen rather than returning JSON: the thing at
+    the other end of this is a browser tab a person is looking at, and a page of
+    JSON is not an answer to "did that work". The outcome rides in the query
+    string so the screen can say which.
+    """
+    if error:
+        return _back(f"tiktok_error={quote(error_description or error)}")
+
+    pending = _PENDING_STATES.pop(state, None)
+    _expire_states()
+    if pending is None:
+        # Unknown or already-used state. Refused rather than accepted, because a
+        # code arriving without one is exactly the CSRF the state exists to stop.
+        return _back("tiktok_error=" + quote("that sign-in link has expired — try again"))
+
+    _, redirect_uri = pending
+    if not code:
+        return _back("tiktok_error=" + quote("TikTok returned no authorisation code"))
+
+    try:
+        tokens = await tiktok.exchange_code(code, redirect_uri)
+        handle = await tiktok.creator_handle(tokens.access_token)
+        await repository.save_tiktok_account(tokens, handle=handle)
+    except tiktok.TikTokUnavailable as exc:
+        return _back("tiktok_error=" + quote(str(exc)))
+
+    return _back("tiktok=connected")
+
+
+@router.get("/auth/tiktok/status")
+async def tiktok_status() -> TikTokStatusOut:
+    """Whether an account is connected, without touching a credential.
+
+    `load_tiktok_account` deliberately does not return the refresh token — a
+    status endpoint has no business handling one.
+    """
+    account = await repository.load_tiktok_account()
+    return TikTokStatusOut(
+        configured=tiktok.configured(),
+        account=TikTokAccountOut(**account) if account else None,
+    )
+
+
+@router.delete("/auth/tiktok", status_code=204)
+async def disconnect_tiktok() -> None:
+    if not await repository.disconnect_tiktok():
+        raise HTTPException(404, "no TikTok account is connected")
+
+
+#: In-flight OAuth states, with the redirect URI each was issued for.
+#:
+#: In-process rather than a table: they live for one round trip measured in
+#: seconds, an engine restart mid-sign-in is a retry rather than a data loss, and
+#: a table would need its own sweeper. Bounded by `_expire_states` so a stream of
+#: abandoned sign-ins cannot grow it without limit.
+_PENDING_STATES: dict[str, tuple[datetime, str]] = {}
+_STATE_TTL = timedelta(minutes=10)
+
+
+def _expire_states() -> None:
+    cutoff = datetime.now(UTC) - _STATE_TTL
+    for key in [k for k, (issued, _) in _PENDING_STATES.items() if issued < cutoff]:
+        _PENDING_STATES.pop(key, None)
+
+
+def _default_redirect() -> str:
+    from engine.settings import get_settings
+
+    settings = get_settings()
+    base = str(settings.google_redirect_uri).split("/v1/")[0] or "http://localhost:8080"
+    return f"{base}/v1/repurpose/auth/tiktok/callback"
+
+
+def _back(query: str) -> RedirectResponse:
+    from engine.settings import get_settings
+
+    return RedirectResponse(f"{get_settings().web_url}/setup?{query}", status_code=303)
 
 
 def _channel_topics(count: int = 12) -> list[str]:

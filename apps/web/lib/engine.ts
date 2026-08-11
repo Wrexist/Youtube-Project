@@ -31,6 +31,7 @@ import type {
   Monetisation,
   OriginalityReport,
   Shorts,
+  TikTokStatus,
   TimelineRequest,
   JobCreated,
   JobRequest,
@@ -459,3 +460,17 @@ export const selectClip = (sourceId: string) =>
  */
 export const evaluateTimeline = (body: TimelineRequest) =>
   post<OriginalityReport>("/v1/repurpose/evaluate", body);
+
+/** Whether TikTok is configured, and whether anyone has signed in. */
+export const getTikTokStatus = () =>
+  get<TikTokStatus>("/v1/repurpose/auth/tiktok/status");
+
+/**
+ * Begin the TikTok round trip.
+ *
+ * Through `send` rather than `get`, even though it is a GET: `get` swallows every
+ * failure into `null`, and the whole value of this call when it fails is the
+ * 409's message naming the variable to set. Same reasoning as `beginYouTubeAuth`.
+ */
+export const beginTikTokAuth = () =>
+  send<{ url: string }>("GET", "/v1/repurpose/auth/tiktok");

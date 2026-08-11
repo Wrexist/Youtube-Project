@@ -102,6 +102,9 @@ export type RightsProblem = components["schemas"]["ProblemOut"];
 /** The originality report — both verdicts, never blended into one score. */
 export type OriginalityReport = Ok<paths["/v1/repurpose/evaluate"]["post"]>;
 export type TimelineRequest = components["schemas"]["TimelineIn"];
+/** Whether TikTok is configured, and whether an account has signed in. Two
+ *  separate questions with two different fixes — see `api/repurpose.py`. */
+export type TikTokStatus = Ok<paths["/v1/repurpose/auth/tiktok/status"]["get"]>;
 
 /** The standing list of researched ideas, and one of its entries. */
 export type Backlog = Ok<paths["/v1/ideas/backlog"]["get"]>;

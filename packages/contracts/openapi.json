@@ -652,21 +652,16 @@
         "type": "object"
       },
       "DiscoverRequest": {
-        "description": "Sweep Lane A for clips worth building from.\n\n`access_token` is passed in rather than read from a store because TikTok\nconnection is not yet persisted \u2014 see the note on the endpoint. When it is,\nthis field goes and the token comes from the channel row, like YouTube's.",
+        "description": "Sweep Lane A for clips worth building from.\n\nNo `access_token` field, deliberately. It used to take one in the body, which\nmade the caller responsible for a credential that expires every 24 hours \u2014\nso the obvious client caches it and the sweep starts failing the next day for\na reason invisible from the outside. The token now comes from the stored\naccount and is refreshed on the way out.",
         "properties": {
-          "access_token": {
-            "default": "",
-            "title": "Access Token",
-            "type": "string"
-          },
           "channel_key": {
             "default": "main",
             "title": "Channel Key",
             "type": "string"
           },
           "limit": {
-            "default": 20,
-            "maximum": 20.0,
+            "default": 40,
+            "maximum": 200.0,
             "minimum": 1.0,
             "title": "Limit",
             "type": "integer"
@@ -693,6 +688,11 @@
           },
           "configured": {
             "title": "Configured",
+            "type": "boolean"
+          },
+          "connected": {
+            "default": false,
+            "title": "Connected",
             "type": "boolean"
           }
         },
@@ -2420,6 +2420,89 @@
           "cost_per_generation"
         ],
         "title": "Thumbnails",
+        "type": "object"
+      },
+      "TikTokAccountOut": {
+        "description": "A connected account, as the Setup screen reads it.\n\nCarries no credential. The refresh token is never returned by any endpoint \u2014\na status read has no business handling one.",
+        "properties": {
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "open_id": {
+            "title": "Open Id",
+            "type": "string"
+          },
+          "refresh_expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Expires At"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "open_id",
+          "handle",
+          "expires_at",
+          "refresh_expires_at",
+          "scope",
+          "connected"
+        ],
+        "title": "TikTokAccountOut",
+        "type": "object"
+      },
+      "TikTokStatusOut": {
+        "description": "Configured and connected are separate answers.\n\nAn install can have both keys and nobody signed in, and the fix differs: one\nis a `.env` edit, the other is a button. Declared rather than returned as a\nbare `dict` for the reason `ReportOut` records \u2014 `-> dict` generates\n`Record<string, never>` in TypeScript, which pushes the screen into\nhand-writing the shape CLAUDE.md forbids.",
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TikTokAccountOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured",
+          "account"
+        ],
+        "title": "TikTokStatusOut",
         "type": "object"
       },
       "TimelineIn": {
@@ -4642,15 +4725,28 @@
       }
     },
     "/v1/repurpose/auth/tiktok": {
+      "delete": {
+        "operationId": "disconnect_tiktok_v1_repurpose_auth_tiktok_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Disconnect Tiktok",
+        "tags": [
+          "repurpose"
+        ]
+      },
       "get": {
-        "description": "Where the browser goes to connect a TikTok account for Lane A.\n\nReturns the URL rather than redirecting, for the reason `beginYouTubeAuth`\nalready documents: a server following the redirect would authorise the server\nrather than the person sitting in front of it.",
+        "description": "Where the browser goes to connect a TikTok account for Lane A.\n\nReturns the URL rather than redirecting, for the reason `beginYouTubeAuth`\nalready documents: a server following the redirect would authorise the server\nrather than the person sitting in front of it.\n\n`state` is remembered and checked on the way back. Without that the callback\naccepts a code from anywhere, which is the standard OAuth CSRF: an attacker\nwalks a victim through a link that connects the *attacker's* TikTok to the\nvictim's install, and every clip swept afterwards is the attacker's.",
         "operationId": "begin_tiktok_auth_v1_repurpose_auth_tiktok_get",
         "parameters": [
           {
             "in": "query",
             "name": "redirect_uri",
-            "required": true,
+            "required": false,
             "schema": {
+              "default": "",
               "title": "Redirect Uri",
               "type": "string"
             }
@@ -4681,6 +4777,100 @@
           }
         },
         "summary": "Begin Tiktok Auth",
+        "tags": [
+          "repurpose"
+        ]
+      }
+    },
+    "/v1/repurpose/auth/tiktok/callback": {
+      "get": {
+        "description": "Where TikTok sends the browser back.\n\nAlways redirects to the Setup screen rather than returning JSON: the thing at\nthe other end of this is a browser tab a person is looking at, and a page of\nJSON is not an answer to \"did that work\". The outcome rides in the query\nstring so the screen can say which.",
+        "operationId": "tiktok_callback_v1_repurpose_auth_tiktok_callback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "State",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Error",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_description",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Error Description",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tiktok Callback",
+        "tags": [
+          "repurpose"
+        ]
+      }
+    },
+    "/v1/repurpose/auth/tiktok/status": {
+      "get": {
+        "description": "Whether an account is connected, without touching a credential.\n\n`load_tiktok_account` deliberately does not return the refresh token \u2014 a\nstatus endpoint has no business handling one.",
+        "operationId": "tiktok_status_v1_repurpose_auth_tiktok_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TikTokStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Tiktok Status",
         "tags": [
           "repurpose"
         ]
@@ -4878,7 +5068,7 @@
     },
     "/v1/repurpose/discover": {
       "post": {
-        "description": "Lane A: sweep the operator's own TikToks, score them for this channel.\n\n**Only their own.** TikTok's Display API returns the authenticated user's\ncontent and nothing else, and the Research API is closed to non-academics, so\nthere is no endpoint here that sweeps other creators \u2014 see\n`providers/tiktok.py`. Lane B material does not arrive this way at all: a\ncampaign supplies its own source and its own rules.\n\nReturns `configured: false` rather than erroring when TikTok credentials are\nabsent, so the screen can say what is missing instead of showing a failure.",
+        "description": "Lane A: sweep the operator's own TikToks, score them for this channel.\n\n**Only their own.** TikTok's Display API returns the authenticated user's\ncontent and nothing else, and the Research API is closed to non-academics, so\nthere is no endpoint here that sweeps other creators \u2014 see\n`providers/tiktok.py`. Lane B material does not arrive this way at all: a\ncampaign supplies its own source and its own rules.\n\nThree distinct not-working states, reported distinctly because they have three\ndifferent fixes: credentials unset, nobody signed in, and a connection that has\nexpired. Collapsing them into an empty list is how \"it shows nothing\" becomes\nunanswerable.",
         "operationId": "discover_v1_repurpose_discover_post",
         "requestBody": {
           "content": {
