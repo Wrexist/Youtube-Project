@@ -149,6 +149,21 @@ body {
 }
 .pulse { animation: pulse-ring 1.8s infinite; }
 
+/* The command palette. Radix sets `data-state` on the overlay and content itself;
+   these just give open/close something to animate. Covered by the
+   prefers-reduced-motion override below like every other animation on the page —
+   nothing palette-specific was needed for that part. */
+@keyframes palette-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes palette-content-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.palette-overlay[data-state="open"] { animation: palette-overlay-in 120ms var(--ease-in-out); }
+.palette-content[data-state="open"] { animation: palette-content-in 120ms var(--ease-in-out); }
+
 /* Motion communicates state change; when the user opts out, state still changes. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

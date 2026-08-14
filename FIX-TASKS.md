@@ -357,6 +357,27 @@ low-value one listed first is dropped.
 
 **Done when:** ⌘K opens from any screen and every action works by keyboard alone.
 
+**Status: done (2026-08-14).** `apps/web/components/command-palette.tsx`, wired into
+`app/layout.tsx` so it mounts on every screen except `/welcome` (matching the rail's
+own exclusion). Radix `Dialog`, opens on ⌘K/Ctrl+K from anywhere, fully keyboard
+operable (type to filter, arrow keys to move the highlight, Enter to run, Escape to
+close), animates in/out and honours `prefers-reduced-motion` via the existing global
+override in `globals.css`. Screens list is shared with `rail.tsx` via the new
+`lib/nav-items.ts` so the two cannot drift. Videos are fetched live from `GET
+/v1/jobs` on open (not on mount) with the same demo-data fallback every other screen
+uses when the engine is unreachable. Theme toggle now has a real implementation
+(`lib/theme.ts`), also wired into a pre-hydration inline script in `layout.tsx` to
+avoid a flash of the wrong theme on load.
+
+One deliberate deviation from the brief: no "run a series" command. Series
+(`docs/UI-DESIGN.md`) has no backing endpoint — it is demo-only (KNOWN-ISSUES.md
+§5.5) — and this codebase's own stated rule (`queue/page.tsx`) is that a control
+doing nothing is worse than no control. "Open Series" (a screen, already listed) is
+the honest version of that command until a series actually exists to run.
+
+17 tests in `command-palette.test.tsx`. `npm run lint`, `typecheck`, `test`, and
+`build` all pass clean for the web app as of this change.
+
 ## E2. Thumbnail A/B swapping
 
 > Phase 8's attribution is already built for this and nothing uses it. `ThumbnailStage`
