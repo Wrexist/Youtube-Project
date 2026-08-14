@@ -261,21 +261,45 @@ worse failure than a missing package.
 Nested same-quotes in an f-string. Ran fine on the 3.13 venv, would have crashed on
 the 3.11 the project claims to support.
 
-### 4.9 `test_repurpose_workflow.py` + `test_repurpose_endpoint.py` against real Postgres
-CLAUDE.md is right that a green SQLite run is not a green CI run — running these two
-files together against `asyncpg` (not SQLite) produces `3 failed, 16 errors`, most as
-`asyncpg.exceptions._base.InternalClientError: got result for unknown protocol state 3`
-and `Exception terminating connection` from the SQLAlchemy pool. **Pre-existing**, not
-introduced by FIX-TASKS E3 — reproduced identically with E3's changes stashed out via
-`git stash`, on the exact commit this note was added against. Every other file in the
-suite (1309 tests) passes clean against the same Postgres instance; it is specific to
-these two files' interaction, which points at connection-pool/event-loop state leaking
-between them rather than either file being wrong on its own (`test_repurpose_endpoint.py`
-alone was not separately isolated to confirm — recorded as found, not yet root-caused).
-Not fixed here: diagnosing an asyncpg protocol desync between two unrelated test files
-is its own investigation, and blocking E3 on it would hold a working feature hostage to
-a pre-existing gap in a different one. Needs someone with a Postgres instance handy to
-bisect which fixture leaks first.
+### 4.9 SQLite ignored every foreign key, so dev and CI disagreed about the schema
+SQLite ships with foreign key checks **off**, and nothing turned them on. Every
+`ForeignKey` in `tables.py` was therefore a real constraint on the Postgres CI runs
+and pure decoration on the SQLite that every developer and every fresh clone uses.
+
+It surfaced the expensive way. A test wrote a `repurpose_projects.job_id` pointing
+at a job that did not exist — production always writes the job row before
+dispatching the workflow, so the state was one production never reaches — and it
+passed locally for the length of a feature branch. The first CI run against
+Postgres rejected it, the failed transaction poisoned the connection, and sixteen
+unrelated tests in a different file errored during fixture setup. Three failures
+and sixteen errors, none of them in the file with the bug.
+
+`db._enforce_foreign_keys` now sets `PRAGMA foreign_keys=ON` per connection —
+per connection because that is the only scope SQLite offers, and a connection that
+misses it silently stops enforcing. The full suite passes with it on, which is the
+evidence that this was the only violation rather than the first of many.
+
+### 4.10 The repurpose tests mixed `TestClient` with the `database` fixture
+`test_spend.py` has documented the rule since it was written: `TestClient` runs the
+app on a blocking portal with **its own event loop**, so a test that also writes rows
+on pytest's loop ends up with one asyncpg pool shared across two — which aiosqlite
+tolerates and asyncpg refuses. The suite is deliberately split, `database`-fixture
+tests on one side and `TestClient` tests on the other.
+
+`test_repurpose_endpoint.py` and two tests in `test_repurpose_workflow.py` did both.
+Every one of them passed locally on SQLite and all eighteen failed on CI with
+"attached to a different loop" — an error naming neither the file nor the cause.
+They now call the endpoint functions directly, like `test_spend.py` and
+`test_backlog.py` already did.
+
+Two things made this expensive to find, and both are worth remembering. The failures
+appeared in files whose own logic was fine, so the message pointed nowhere useful.
+And the branch had no CI history at all — the pull request was opened after the work
+was done, so the first run was also the first time any of it met Postgres.
+
+**Run the suite against Postgres before pushing** if you have touched persistence or
+added an endpoint test. `CLAUDE.md` has the command. It takes seven minutes and it
+is the only way to see what CI sees.
 
 ---
 

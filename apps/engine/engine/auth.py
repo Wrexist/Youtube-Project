@@ -68,7 +68,7 @@ def _matches(supplied: str) -> bool:
 
 
 async def require_token(
-    # noqa'd rather than restructured: ruff's B008 hardcodes an exemption list for
+    # Suppressed rather than restructured: ruff's B008 hardcodes an exemption list for
     # fastapi.Depends/Query/Header/Path/Body/Cookie/Form/File and has not caught up
     # to fastapi.Security, which is otherwise exactly the same pattern — a default
     # evaluated once at route registration, not per request.

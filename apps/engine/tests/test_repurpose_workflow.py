@@ -228,6 +228,7 @@ async def test_the_report_is_stored_against_the_project(database, monkeypatch):
     reconstructed once the thresholds move."""
     source_id = await _seed()
     _stub_media(monkeypatch, duration=30.0)
+    await _persist_job("job1")
     await repository.save_project("proj1", channel_key="main")
 
     await _up_to("originality").run(
@@ -243,6 +244,26 @@ async def test_the_report_is_stored_against_the_project(database, monkeypatch):
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
+
+
+async def _persist_job(job_id: str) -> None:
+    """A job row, so a project may point at it.
+
+    `repurpose_projects.job_id` is a real foreign key. Calling a stage directly
+    skips `create_job`, which in production always writes this row *before*
+    dispatching the workflow — so without it the test asks for a state production
+    never reaches. It went unnoticed because SQLite ignored the constraint;
+    `db._enforce_foreign_keys` is why it does not any more.
+    """
+    await repository.save_job(
+        {
+            "id": job_id,
+            "workflow": repurpose.REPURPOSE_WORKFLOW,
+            "status": "running",
+            "inputs": {},
+            "states": {},
+        }
+    )
 
 
 def _up_to(stage_name: str):
@@ -376,26 +397,38 @@ async def _tripwire(*_a, **_k):
 # ── reachable from the API ──────────────────────────────────────────────────
 
 
-async def test_a_repurpose_job_can_be_started_through_the_jobs_endpoint(database):
+async def test_a_repurpose_job_can_be_started_through_the_jobs_endpoint(database, monkeypatch):
     """Registered but unreachable is the state `PUBLISH_WORKFLOW` was in for
-    months — see the note in workflows/video.py."""
-    from fastapi.testclient import TestClient
+    months — see the note in workflows/video.py.
 
-    from engine.main import app
+    Called directly rather than through `TestClient` for the reason `test_spend.py`
+    sets out: the client runs the app on its own event loop while this test writes
+    rows on pytest's, and asyncpg refuses to share a pool across two. `_dispatch` is
+    stubbed for the reason `test_publish_endpoint.py` sets out — it fires the real
+    workflow as a detached task, and this test is about the route accepting the
+    request, not about rendering anything.
+    """
+    from engine import main as main_mod
+
+    async def no_dispatch(job_id: str, start_from: str | None = None) -> None:
+        return None
+
+    monkeypatch.setattr(main_mod, "_dispatch", no_dispatch)
 
     source_id = await _seed()
 
-    with TestClient(app) as client:
-        response = client.post(
-            "/v1/jobs",
-            json={
-                "topic": "three clips about the same mistake",
-                "workflow": "repurpose",
-                "repurpose": {"source_ids": [source_id], "audio_bed_replaced": True},
-            },
+    created = await main_mod.create_job(
+        main_mod.JobRequest(
+            topic="three clips about the same mistake",
+            workflow="repurpose",
+            repurpose={"source_ids": [source_id], "audio_bed_replaced": True},
         )
+    )
 
-    assert response.status_code == 202
+    assert created["job_id"]
+    # The 202 the client would see is declared on the route, not returned by the
+    # function, so it is asserted where it actually lives.
+    assert main_mod.app.openapi()["paths"]["/v1/jobs"]["post"]["responses"].get("202")
 
 
 def test_repurpose_inputs_are_flattened_onto_the_job():
@@ -452,13 +485,13 @@ def test_the_finished_file_reaches_the_publish_stages_under_the_name_they_read()
 async def test_a_repurpose_job_is_accepted_by_the_publish_gate(database, monkeypatch):
     """It used to be refused outright: the gate hard-checked for the "video"
     workflow, so a repurposed video could never publish however good it was."""
-    from fastapi.testclient import TestClient
+    from fastapi import HTTPException
 
-    from engine.main import app
+    from engine import main as main_mod
 
-    with TestClient(app) as client:
-        response = client.post("/v1/jobs/nonexistent/publish", json={})
+    with pytest.raises(HTTPException) as raised:
+        await main_mod.publish_job("nonexistent", main_mod.PublishRequest())
 
     # 404 for the missing job — *not* a 409 about the wrong workflow, which is
     # what this used to be for every repurpose job.
-    assert response.status_code == 404
+    assert raised.value.status_code == 404

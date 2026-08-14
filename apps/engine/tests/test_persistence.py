@@ -726,3 +726,36 @@ async def test_a_missing_alembic_ini_does_not_break_startup(fresh_sqlite, monkey
     monkeypatch.setattr(db, "_stamp_head", lambda conn: None)
     assert await db.ensure_schema() == f"created schema ({_table_count()} tables)"
     assert await _version_rows(fresh_sqlite) == []
+
+
+async def test_sqlite_enforces_the_foreign_keys_postgres_does(database):
+    """Dev and CI must agree about what the schema *is*.
+
+    SQLite ships with foreign key checks off, so every `ForeignKey` in
+    `tables.py` was decoration locally and a real constraint on the Postgres CI
+    runs. A write pointing at a job that did not exist therefore passed for the
+    length of a feature branch and failed the first time CI saw it.
+
+    Asserted through a real write rather than by reading the pragma back: the
+    pragma is per connection, so checking it on one connection proves nothing
+    about the one the next session gets.
+
+    **SQLite only, and not merely because Postgres would pass trivially.** A
+    deliberately failed transaction leaves asyncpg's pooled connection bound to a
+    dead loop, and every later test that borrows it dies with "attached to a
+    different loop" — sixteen of them, in a file that had nothing to do with this.
+    That cascade is precisely what made the original bug so expensive to read, so
+    reproducing it on purpose to assert something Postgres guarantees by
+    construction would be paying the cost twice for no information.
+    """
+    if not database.startswith("sqlite"):
+        pytest.skip("asserts SQLite's pragma; Postgres enforces foreign keys natively")
+
+    from sqlalchemy.exc import IntegrityError
+
+    from engine.db import session
+    from engine.tables import RepurposeProject
+
+    with pytest.raises(IntegrityError):
+        async with session() as db_session:
+            db_session.add(RepurposeProject(id="orphan", job_id="no-such-job"))
