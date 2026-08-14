@@ -474,8 +474,10 @@ Then **A2 → B2** (prove the pipeline works at all) → **B1** (make the UI rea
 `B3` can happen any time after A2 and is worth doing early if you would rather not pay
 per video while debugging.
 
-**As of 2026-08-14:** B1, C1, C2, C3, D1, D2, D3 and D4 are all done — see the
-status note under each. What's left below is A1/A2 (human-only: real credentials),
-B2/B3 (a real end-to-end run against live providers, which nobody has done — see
-KNOWN-ISSUES.md §1/§2), and Phase E (command palette, thumbnail A/B swapping, trend
-monitoring — genuinely not started).
+**As of 2026-08-14:** B1, C1, C2, C3, D1, D2, D3, D4 and all of Phase E (E1, E2, E3)
+are done — see the status note under each. What's left is A1/A2 (human-only: real
+credentials) and B2/B3 (a real end-to-end run against live providers, which nobody
+has done — see KNOWN-ISSUES.md §1/§2). Everything else this file used to list as
+outstanding is either fixed or, where it genuinely could not be (the Postgres-only
+`test_repurpose_workflow.py`/`test_repurpose_endpoint.py` interaction), recorded in
+KNOWN-ISSUES.md §4.9 rather than left silently undocumented.
