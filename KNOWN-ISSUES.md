@@ -21,6 +21,17 @@ which **no released CPython has**. `scipy` was not declared anywhere, so a clean
 `pip install -e ".[dev]"` produced 17 failures in `test_insights.py` and CI was red.
 `scipy` is now a real dependency and the dead fallback is gone. See 4.6.
 
+> **2026-08-14:** Engine authentication (§6, was the largest open gap) is done —
+> see the entry below. `.env.example` was missing `TIKTOK_CLIENT_KEY` /
+> `TIKTOK_CLIENT_SECRET` / `TIKTOK_TRENDS_URL` entirely, despite
+> `docs/TIKTOK-SETUP.md` telling operators to add them there — fixed, matching the
+> pattern every other credential in that file already follows. While checking
+> FIX-TASKS.md's Phase D against the actual code: D1 (subtitle punctuation), D3
+> (semantic duplicate detection) and D4 (value-aware keyword/tag trimming) were
+> already implemented and tested (`test_semantic_dedup.py`, `test_trimming.py`) —
+> FIX-TASKS.md just hadn't been told. Marked done there. D2 (thumbnail image
+> provider) was already recorded done in §5.3.
+
 ---
 
 ## 1. Blocking — nothing works end to end without these
@@ -497,15 +508,30 @@ From Git Bash the same line needs `MSYS_NO_PATHCONV=1` in front of it and
   ledger that survives a restart. AUDIT.md §5.1.
 - ~~**No arq workers.**~~ Done — `engine/worker.py`, events over Redis pub/sub.
   The in-process path is kept as a supported single-process mode. AUDIT.md §5.2.
-- **No auth.** The engine is unauthenticated. Do not expose it.
+- ~~**No auth / no engine authentication.**~~ Done — `STUDIO_API_TOKEN`, checked by
+  `engine/auth.py` on every route except `/health` and the two OAuth callbacks
+  (Google's and TikTok's servers redirect a browser straight into those; neither
+  can be made to carry a header, and their own `state` parameter is the CSRF
+  defence an OAuth callback actually has). Empty by default — every install before
+  this field existed, and every test in this suite, keeps working with the gate
+  off. Set it (and `NEXT_PUBLIC_STUDIO_API_TOKEN` to the same value) to turn it on.
+
+  One honest compromise from FIX-TASKS.md's original phrasing ("never exposed to
+  the client"): two route families — `/v1/files/...` (rendered thumbnails and
+  videos, read via `<img>`/`<video>`/`<a href>`) and `/v1/jobs/{id}/events` (the
+  SSE progress stream, read via `EventSource`) — are reached by the browser in ways
+  that cannot attach a header at all. Routing every render and every progress
+  frame through a hand-rolled streaming proxy in the web app, just to keep one
+  value out of a URL that only this machine's own browser ever sees, was judged
+  not worth it for a tool CLAUDE.md already says not to expose. Those two route
+  families additionally accept the token as `?token=`, which is weaker (it can
+  land in a server log or browser history) — documented in `engine/auth.py`
+  rather than silently accepted. Every write and every credential-bearing route —
+  `PUT /v1/setup/keys` included — takes the header only, which only server-side
+  code can supply.
 - **No ⌘K command palette**, though the design spec leans on it to keep screens
   sparse.
 - **No thumbnail A/B swapping**, which Phase 8's attribution is otherwise ready for.
-- **No engine authentication.** Still true and still the largest gap: anything that
-  can reach `127.0.0.1:8080` can read and write credentials through
-  `PUT /v1/setup/keys`. CORS names `http://localhost:3000`, so any *other* dev
-  server a developer happens to run on that port is a trusted origin. Do not expose
-  the engine.
 - **No trend monitoring.** The idea backlog accepts a `trending_terms` argument that
   nothing currently supplies, so `freshness` is zero on every real idea and its
   decay curve has nothing to decay. The scoring is ready for a supplier; there

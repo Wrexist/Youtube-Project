@@ -190,7 +190,7 @@ def test_env_example_documents_only_real_settings():
         alias = getattr(field, "validation_alias", None)
         expected.add(alias if isinstance(alias, str) else f"STUDIO_{name.upper()}")
 
-    web_only = {"NEXT_PUBLIC_ENGINE_URL"}
+    web_only = {"NEXT_PUBLIC_ENGINE_URL", "NEXT_PUBLIC_STUDIO_API_TOKEN"}
     assert documented - web_only <= expected, (
         f"documented but not a setting: {sorted(documented - web_only - expected)}"
     )

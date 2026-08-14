@@ -922,3 +922,137 @@ def test_acquired_third_party_clips_are_never_served():
 def test_a_clip_url_is_refused_even_when_the_file_is_there(client, sandbox):
     _write(sandbox, "clips/someone-elses.mp4")
     assert client.get("/v1/files/clips/someone-elses.mp4").status_code == 404
+
+
+# ── the bearer token gate (KNOWN-ISSUES.md §6, "No engine authentication") ───
+#
+# Empty by default, same as every install before this existed — `sandbox` never
+# sets STUDIO_API_TOKEN, so `client` above already covers "the gate is a no-op
+# when unconfigured" implicitly: every test using it sends no Authorization header
+# and every one of them passes. What follows is what changes once an operator
+# actually sets the token.
+
+
+@pytest.fixture
+def token_client(sandbox, monkeypatch):
+    """The same app, with STUDIO_API_TOKEN set to a known value."""
+    from engine import main
+    from engine.storage import ObjectStore
+
+    monkeypatch.setenv("STUDIO_API_TOKEN", "test-token-do-not-use")
+    get_settings.cache_clear()
+    monkeypatch.setattr(main, "store", ObjectStore())
+    with TestClient(main.app) as running:
+        yield running
+    get_settings.cache_clear()
+
+
+def test_nothing_is_gated_while_the_token_is_unset(client):
+    """The default — every install before this field existed, and every other
+    test in this suite — must keep working with no Authorization header at all."""
+    assert client.get("/v1/quota").status_code == 200
+    assert client.get("/v1/jobs").status_code == 200
+
+
+def test_a_gated_route_refuses_a_request_with_no_token(token_client):
+    response = token_client.get("/v1/quota")
+    assert response.status_code == 401
+
+
+def test_a_gated_route_refuses_the_wrong_token(token_client):
+    response = token_client.get("/v1/quota", headers={"authorization": "Bearer not-the-token"})
+    assert response.status_code == 401
+
+
+def test_a_gated_route_accepts_the_configured_token(token_client):
+    response = token_client.get(
+        "/v1/quota", headers={"authorization": "Bearer test-token-do-not-use"}
+    )
+    assert response.status_code == 200
+
+
+def test_a_malformed_header_is_refused_not_500(token_client):
+    """No `Bearer ` prefix — a client sending the raw token, say — must 401, not
+    crash trying to slice a prefix that is not there."""
+    response = token_client.get("/v1/quota", headers={"authorization": "test-token-do-not-use"})
+    assert response.status_code == 401
+
+
+def test_health_never_requires_a_token(token_client):
+    """The one route with no `Depends` at all — a load balancer or `scripts/doctor.py`
+    must be able to ask "is this up" without a credential."""
+    assert token_client.get("/health").status_code == 200
+
+
+def test_a_route_defined_directly_on_app_is_gated_too(token_client):
+    """Not every route lives behind `include_router` — `POST /v1/jobs` is declared
+    straight on `app`, and it would be easy to gate every router and miss it."""
+    response = token_client.post("/v1/jobs", json={"topic": "x", "workflow": "video"})
+    assert response.status_code == 401
+
+
+class TestFlexibleGate:
+    """`/v1/files/...` and `/v1/jobs/{id}/events`: reached by `<img>`, `<video>`,
+    `<a href>` and `EventSource`, none of which can attach a header. These take the
+    token as `?token=` too — see `engine/auth.require_token_flexible`."""
+
+    def test_a_file_route_refuses_with_neither_header_nor_query_token(self, token_client, sandbox):
+        _write(sandbox, "thumbnails/job-0.jpg", b"\xff\xd8\xff-jpeg")
+        assert token_client.get("/v1/files/thumbnails/job-0.jpg").status_code == 401
+
+    def test_a_file_route_accepts_a_query_token(self, token_client, sandbox):
+        _write(sandbox, "thumbnails/job-0.jpg", b"\xff\xd8\xff-jpeg")
+        response = token_client.get("/v1/files/thumbnails/job-0.jpg?token=test-token-do-not-use")
+        assert response.status_code == 200
+
+    def test_a_file_route_still_accepts_a_header(self, token_client, sandbox):
+        _write(sandbox, "thumbnails/job-0.jpg", b"\xff\xd8\xff-jpeg")
+        response = token_client.get(
+            "/v1/files/thumbnails/job-0.jpg",
+            headers={"authorization": "Bearer test-token-do-not-use"},
+        )
+        assert response.status_code == 200
+
+    def test_a_wrong_query_token_is_refused(self, token_client, sandbox):
+        _write(sandbox, "thumbnails/job-0.jpg", b"\xff\xd8\xff-jpeg")
+        response = token_client.get("/v1/files/thumbnails/job-0.jpg?token=wrong")
+        assert response.status_code == 401
+
+
+# ── the OAuth callbacks are reachable with no token at all ───────────────────
+#
+# Google's and TikTok's servers redirect a browser straight into these; neither
+# can be made to carry a header or a query token we control. They stay open on
+# purpose (see the module-level comment above each router's `_gated` list) — the
+# `state` parameter is their actual CSRF defence. These tests fail if either
+# route is ever accidentally wrapped in the gate: a 401 here would mean nobody
+# could ever finish connecting a channel or a TikTok account again.
+
+
+def test_the_google_callback_is_reachable_with_a_token_configured(callback, monkeypatch):
+    client, _ = callback
+    monkeypatch.setenv("STUDIO_API_TOKEN", "test-token-do-not-use")
+    get_settings.cache_clear()
+    response = client.get(
+        "/v1/auth/google/callback",
+        params={"code": "4/attacker-code", "state": "never-issued"},
+        follow_redirects=False,
+    )
+    # 400 (an unrecognised state), never 401 (the callback itself gated out).
+    assert response.status_code == 400
+
+
+def test_the_tiktok_callback_is_reachable_with_a_token_configured(sandbox, monkeypatch):
+    from engine import main
+
+    monkeypatch.setenv("STUDIO_API_TOKEN", "test-token-do-not-use")
+    get_settings.cache_clear()
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/v1/repurpose/auth/tiktok/callback",
+            params={"code": "x", "state": "never-issued"},
+            follow_redirects=False,
+        )
+    # A redirect back to the Setup screen with an error, never a 401.
+    assert response.status_code in (302, 303, 307)
+    assert response.status_code != 401

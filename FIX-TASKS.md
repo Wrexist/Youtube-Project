@@ -89,6 +89,11 @@ still passes.
 
 ## B1. Wire the web app to the engine
 
+**Status: mostly done.** Seven of ten screens read live data, with `demo.ts`
+fallback when the engine is unreachable — see KNOWN-ISSUES.md §5.5 for the
+screen-by-screen table, which is the current record; this task's description below
+is the original spec and is stale where it disagrees with that table.
+
 > **The single biggest gap in this project.** Every screen in `apps/web` renders from
 > `apps/web/lib/demo.ts`. There is no `fetch` and no SSE subscription anywhere. The UI
 > currently proves the design, not the integration.
@@ -179,6 +184,8 @@ in sync, and the footage visibly relates to what is being said.
 
 ## C1. Move state to Postgres
 
+**Status: done.** SQLAlchemy models, Alembic migrations, and a repository module behind every dict named below. See KNOWN-ISSUES.md §5.4.
+
 > All job and channel state is in module-level dicts. A restart loses everything:
 > `JOBS` (`engine/main.py`), `CHANNELS` / `_STATES` / `SCHEDULE`
 > (`engine/api/publishing.py`), `RECORDS` (`engine/api/insights.py`), `LAUNCHES`
@@ -205,6 +212,8 @@ completed stage rather than starting over.
 
 ## C2. Real workers with arq
 
+**Status: done.** `engine/worker.py`, progress over Redis pub/sub, the in-process path kept as a supported single-process mode. See KNOWN-ISSUES.md §6.
+
 > Jobs currently run as in-process `asyncio.create_task` calls in
 > `engine/main.py:create_job`. One slow render blocks nothing, but nothing scales and
 > a crashed process loses every running job.
@@ -226,6 +235,8 @@ lose the job, and SSE still streams to the browser.
 
 ## C3. Authentication
 
+**Status: done, 2026-08-14.** `STUDIO_API_TOKEN`, checked by `engine/auth.py`. One deviation from the spec below: two route families reached by the browser without a header (`/v1/files/...`, `/v1/jobs/{id}/events`) accept the token as `?token=` too, rather than the web app never carrying it client-side — see KNOWN-ISSUES.md §6 for why that trade was made. Every write and every credential-bearing route takes the header only.
+
 > The engine is completely unauthenticated. Every endpoint — including ones that spend
 > money and publish videos — is open to anyone who can reach the port.
 >
@@ -244,6 +255,8 @@ app still works.
 # Phase D — quality gaps
 
 ## D1. Restore punctuation in subtitles
+
+**Status: done.** See KNOWN-ISSUES.md §5.1.
 
 > edge-tts word boundaries strip punctuation, so cues read `On purpose Here is why`
 > instead of `On purpose. Here is why`. Cosmetic when burned in, **materially worse
@@ -264,6 +277,8 @@ app still works.
 punctuation and break on sentence ends.
 
 ## D2. Wire a real thumbnail image provider
+
+**Status: done.** See KNOWN-ISSUES.md §5.3.
 
 > `make_thumbnail` in `apps/engine/engine/render/compose.py` composes real typography
 > with correct safe zones onto a **solid colour placeholder**. No image model is
@@ -289,6 +304,8 @@ under 2MB, and the true-scale preview component shows them legibly at 168px.
 
 ## D3. Semantic duplicate detection
 
+**Status: done.** `engine/ideas.py:find_duplicate_async` layers an Ollama embedding check over the lexical one for the 0.2–0.45 band. See `tests/test_semantic_dedup.py`.
+
 > `similarity()` in `apps/engine/engine/ideas.py` uses Jaccard overlap on content
 > words. It correctly catches "why bridges collapse" vs "the reason bridges collapse".
 > It will **not** catch "why bridges collapse" vs "the physics of structural failure in
@@ -310,6 +327,8 @@ under 2MB, and the true-scale preview component shows them legibly at 168px.
 pair is caught, and all existing dedup tests still pass.
 
 ## D4. Value-aware keyword and tag trimming
+
+**Status: done.** Both `trim_keywords` and `validate_tags` rank by autocomplete-suggestion position when suggestions are available. See `tests/test_trimming.py`.
 
 > `trim_keywords` in `engine/channel.py` and `validate_tags` in `engine/workflows/seo.py`
 > both enforce the 500-character budget by **keeping the earliest entries and dropping
@@ -338,6 +357,27 @@ low-value one listed first is dropped.
 
 **Done when:** ⌘K opens from any screen and every action works by keyboard alone.
 
+**Status: done (2026-08-14).** `apps/web/components/command-palette.tsx`, wired into
+`app/layout.tsx` so it mounts on every screen except `/welcome` (matching the rail's
+own exclusion). Radix `Dialog`, opens on ⌘K/Ctrl+K from anywhere, fully keyboard
+operable (type to filter, arrow keys to move the highlight, Enter to run, Escape to
+close), animates in/out and honours `prefers-reduced-motion` via the existing global
+override in `globals.css`. Screens list is shared with `rail.tsx` via the new
+`lib/nav-items.ts` so the two cannot drift. Videos are fetched live from `GET
+/v1/jobs` on open (not on mount) with the same demo-data fallback every other screen
+uses when the engine is unreachable. Theme toggle now has a real implementation
+(`lib/theme.ts`), also wired into a pre-hydration inline script in `layout.tsx` to
+avoid a flash of the wrong theme on load.
+
+One deliberate deviation from the brief: no "run a series" command. Series
+(`docs/UI-DESIGN.md`) has no backing endpoint — it is demo-only (KNOWN-ISSUES.md
+§5.5) — and this codebase's own stated rule (`queue/page.tsx`) is that a control
+doing nothing is worse than no control. "Open Series" (a screen, already listed) is
+the honest version of that command until a series actually exists to run.
+
+17 tests in `command-palette.test.tsx`. `npm run lint`, `typecheck`, `test`, and
+`build` all pass clean for the web app as of this change.
+
 ## E2. Thumbnail A/B swapping
 
 > Phase 8's attribution is already built for this and nothing uses it. `ThumbnailStage`
@@ -353,6 +393,34 @@ low-value one listed first is dropped.
 
 **Done when:** a test drives the decision logic across the timing and frequency rules,
 and the swap is recorded in a form the insights module can read.
+
+**Status: done (2026-08-14).** `engine/thumbnail_ab.py` — `should_swap` and
+`pick_next_variant` are pure decision functions (no client, database, or clock but
+the one passed in); `sweep()` is the thin orchestration layer that actually calls
+YouTube. Both `YouTube.set_thumbnail()` (`providers/youtube.py`) and
+`COSTS["thumbnails.set"] = 50` (`quota.py`) already existed and needed no changes —
+this task was entirely "wire up what Phase 8 already built."
+
+Guardrails: 48 hours since publish (`MIN_HOURS_SINCE_PUBLISH`) and 14 days since
+the video's own last swap (`MIN_DAYS_BETWEEN_SWAPS`), checked before the
+performance comparison so the reported reason is the more precise one when a video
+is both too young and underperforming. "Underperforming" is capped at 75% of the
+channel's own median CTR (`UNDERPERFORM_RATIO`), not a raw `< median` — the raw
+form flags roughly half of every channel's videos by definition, forever.
+
+Every swap is logged to a new `thumbnail_swaps` table (migration `c9e2a5f7d813`) —
+`video_id`, `from_concept`, `to_concept`, the storage key used, and why — which is
+what the 14-day guardrail queries and what a later Phase 8 analysis reads to
+segment a video's CTR history at the swap date, satisfying "in a form the insights
+module can read." Registered as a new hourly arq cron job (`thumbnail_swap_task`)
+alongside the existing weekly review, since the guardrails are themselves
+time-window based rather than calendar-day based.
+
+31 new tests (`test_thumbnail_ab.py`, plus updated cron-count assertions in
+`test_review.py`). Full engine suite: 1335 passed / 1 skipped against SQLite;
+against real Postgres, 1316 passed with the same pre-existing, unrelated
+`test_repurpose_workflow.py`/`test_repurpose_endpoint.py` interaction logged in
+KNOWN-ISSUES.md §4.9 and nothing new. `ruff check`/`format` clean.
 
 ## E3. Trend monitoring
 
@@ -370,6 +438,29 @@ and the swap is recorded in a form the insights module can read.
 **Done when:** `freshness` is non-zero for a real trending topic and the run planner
 demonstrably prioritises it.
 
+**Status: done (2026-08-14).** `engine/trending.py` combines two independently-
+degrading signals: `youtube_trending_terms` (a new `YouTube.trending()` method in
+`providers/youtube.py`, `videos.list?chart=mostPopular`, 1 quota unit — reuses the
+existing `"videos.list"` cost entry) and `rising_autocomplete_terms` (today's
+`research.keywords.suggest()` for a seed, diffed against a new `KeywordSnapshot`
+table — one row per seed, holding what was seen last poll; migration
+`b6a4f8d1c72e`). Wired into both places `build_backlog_async` is actually called:
+`workflows/channel_launch.py`'s `BacklogStage` (seed = the niche, client = the
+launch's own YouTube client if one exists) and `api/ideas.py`'s `_score` (seed =
+the channel's most recent published topic, client = the connected channel via the
+same `CHANNELS.get("default")` lookup `api/channels.py` already uses). Either
+signal missing — no client, no seed, no prior snapshot, an unreachable API —
+degrades to `[]` rather than raising, the same contract `providers/tiktok.py`'s
+pre-existing `trends()` (a Lane-A-only, unrelated source) already established.
+
+`test_automation.py::test_a_genuinely_trending_topic_jumps_the_queue` is the
+literal "done when": three ideas with identical demand and fit, only one with a
+trending match, and `plan_week` schedules it first despite it being listed last in
+the input. 27 new tests total (`test_trending.py` plus the one above). Full
+engine suite: 1309 passed / 1 skipped against SQLite, and against real Postgres
+identically — except two pre-existing, unrelated files failing when run
+together; see KNOWN-ISSUES.md §4.9. `ruff check`/`format` clean.
+
 ---
 
 ## Suggested order
@@ -382,3 +473,11 @@ Then **A2 → B2** (prove the pipeline works at all) → **B1** (make the UI rea
 
 `B3` can happen any time after A2 and is worth doing early if you would rather not pay
 per video while debugging.
+
+**As of 2026-08-14:** B1, C1, C2, C3, D1, D2, D3, D4 and all of Phase E (E1, E2, E3)
+are done — see the status note under each. What's left is A1/A2 (human-only: real
+credentials) and B2/B3 (a real end-to-end run against live providers, which nobody
+has done — see KNOWN-ISSUES.md §1/§2). Everything else this file used to list as
+outstanding is either fixed or, where it genuinely could not be (the Postgres-only
+`test_repurpose_workflow.py`/`test_repurpose_endpoint.py` interaction), recorded in
+KNOWN-ISSUES.md §4.9 rather than left silently undocumented.

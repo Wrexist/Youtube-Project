@@ -182,6 +182,58 @@ class BacklogIdea(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class KeywordSnapshot(Base):
+    """The autocomplete terms seen for a seed, the last time trend monitoring polled it.
+
+    `engine.trending.rising_autocomplete_terms` is what "a query is newly moving"
+    means in this codebase: today's `research.keywords.suggest()` output for a seed,
+    diffed against whatever this table held for that seed last time. One row per
+    seed, overwritten on each poll — history is not kept because only "what did we
+    see last time" is ever read; a row-per-poll table would grow forever for a
+    source meant to run on every backlog build.
+
+    `seed` is unique for the same reason `BacklogIdea.topic` is: two pollers racing
+    on the same niche should update one row, not create a duplicate the next diff
+    never looks at.
+    """
+
+    __tablename__ = "keyword_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    seed: Mapped[str] = mapped_column(String(300), unique=True, index=True)
+    #: A JSON array of strings, not a JSON object — the whole point is "the exact
+    #: list seen last time", and wrapping it would only add a key nothing reads.
+    terms: Mapped[list] = mapped_column(JSON, default=list)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ThumbnailSwap(Base):
+    """One thumbnail A/B swap (FIX-TASKS E2), for the timing guardrails and for
+    Phase 8 attribution to segment a video's CTR history at the swap date.
+
+    Rows, not JSON on `PerformanceRecord` — mirroring `QuotaEntry`'s reasoning
+    (see the module docstring): "was there a swap on this video in the last 14
+    days" is a query the decision logic runs on every sweep, not a document that
+    gets read whole. `video_id` is indexed but deliberately not unique — a video
+    can be swapped more than once over its lifetime, and the whole point is
+    keeping each one.
+    """
+
+    __tablename__ = "thumbnail_swaps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(String(64), index=True)
+    from_concept: Mapped[str] = mapped_column(String(64), default="")
+    to_concept: Mapped[str] = mapped_column(String(64), default="")
+    #: The storage key of the image that was set, so the swap is reproducible /
+    #: auditable without re-deriving which variant "to_concept" referred to.
+    variant_key: Mapped[str] = mapped_column(Text, default="")
+    #: Why the decision logic swapped it, in the same words `thumbnail_ab.should_swap`
+    #: put on the idea card — e.g. "ctr 2.10% is well below the 5.40% channel median".
+    reason: Mapped[str] = mapped_column(Text, default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
 class TikTokAccount(Base):
     """A connected TikTok account, for Lane A.
 

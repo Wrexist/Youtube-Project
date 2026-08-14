@@ -8,12 +8,13 @@ from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from loguru import logger
 from pydantic import AwareDatetime, BaseModel, Field
 
 from engine import repository
+from engine.auth import require_token
 from engine.providers import youtube
 from engine.quota import ledger, quota_day
 from engine.scheduling import (
@@ -28,6 +29,11 @@ from engine.settings import get_settings
 from engine.workflows.base import WorkflowError
 
 router = APIRouter(prefix="/v1", tags=["publishing"])
+#: Every route here is gated except `/auth/google/callback` — Google's server
+#: redirects a browser straight into that one, carrying no header we asked for and
+#: no token we could check. See `main.py`'s comment above `app.include_router` for
+#: the full reasoning; `finish_auth` below restates it at the point that matters.
+_gated = [Depends(require_token)]
 
 # In-process mirrors of the `channels` and `schedule` tables, hydrated by the
 # lifespan handler and written through on every mutation. Reads stay synchronous
@@ -205,7 +211,7 @@ class ApplyRequest(BaseModel):
 # ── OAuth ───────────────────────────────────────────────────────────────────
 
 
-@router.get("/auth/google")
+@router.get("/auth/google", dependencies=_gated)
 async def begin_auth() -> dict:
     # Without credentials this used to hand back a URL with an empty client_id, and
     # the operator met Google's "invalid client" page with nothing pointing at the
@@ -231,7 +237,7 @@ async def begin_auth() -> dict:
     return {"url": youtube.authorize_url(state)}
 
 
-@router.get("/auth/google/callback")
+@router.get("/auth/google/callback")  # no [Depends] — see the module comment above
 async def finish_auth(
     code: str | None = Query(None),
     state: str | None = Query(None),
@@ -311,7 +317,7 @@ async def finish_auth(
     return RedirectResponse(f"{get_settings().web_url.rstrip('/')}/setup?connected=1")
 
 
-@router.get("/channels")
+@router.get("/channels", dependencies=_gated)
 async def list_channels() -> dict:
     # Note the absence of tokens in this payload. That is deliberate and permanent.
     return {
@@ -325,7 +331,7 @@ async def list_channels() -> dict:
 # ── quota ───────────────────────────────────────────────────────────────────
 
 
-@router.get("/quota")
+@router.get("/quota", dependencies=_gated)
 async def quota() -> QuotaResponse:
     # The worker uploads, so it is the process that spends. Without this the screen
     # shows whatever this process happened to book since it started.
@@ -344,7 +350,7 @@ async def quota() -> QuotaResponse:
 # ── calendar ────────────────────────────────────────────────────────────────
 
 
-@router.get("/calendar")
+@router.get("/calendar", dependencies=_gated)
 async def calendar() -> CalendarResponse:
     await ledger.refresh()
     return CalendarResponse(
@@ -353,7 +359,7 @@ async def calendar() -> CalendarResponse:
     )
 
 
-@router.get("/calendar/slots")
+@router.get("/calendar/slots", dependencies=_gated)
 async def slots(
     # Bounded, and synchronously so. `candidate_slots` builds every slot in the
     # horizon before ranking: `days=5000` produced 120,000 of them in 0.75s on
@@ -375,7 +381,7 @@ async def slots(
     }
 
 
-@router.post("/calendar/schedule")
+@router.post("/calendar/schedule", dependencies=_gated)
 async def schedule_one(body: ScheduleRequest) -> dict:
     """A manual drag. Validated, and warned about even when permitted."""
     ok, message = validate_move(
@@ -397,14 +403,14 @@ async def schedule_one(body: ScheduleRequest) -> dict:
     return {"video_id": body.video_id, "at": body.at.isoformat(), "warning": message}
 
 
-@router.delete("/calendar/schedule/{video_id}")
+@router.delete("/calendar/schedule/{video_id}", dependencies=_gated)
 async def unschedule(video_id: str) -> dict:
     SCHEDULE.pop(video_id, None)
     await repository.delete_slot(video_id)
     return {"video_id": video_id, "scheduled": False}
 
 
-@router.post("/calendar/auto")
+@router.post("/calendar/auto", dependencies=_gated)
 async def auto(body: AutoScheduleRequest) -> dict:
     """Fill the calendar automatically.
 
@@ -450,7 +456,7 @@ async def auto(body: AutoScheduleRequest) -> dict:
     }
 
 
-@router.post("/calendar/auto/apply")
+@router.post("/calendar/auto/apply", dependencies=_gated)
 async def apply_plan(body: ApplyRequest) -> dict:
     """Book a whole plan, or as much of it as the rules allow.
 

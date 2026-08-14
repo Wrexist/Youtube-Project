@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -34,6 +34,7 @@ from engine.api.repurpose import router as repurpose_router
 from engine.api.setup import router as setup_router
 from engine.api.style import router as style_router
 from engine.api.thumbnails import router as thumbnails_router
+from engine.auth import require_token, require_token_flexible
 from engine.insights import VideoRecord, analyze, beats_to_payload
 from engine.providers import youtube
 from engine.quota import QuotaExceeded, ledger
@@ -89,16 +90,27 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Studio Engine", version="0.1.0", lifespan=lifespan)
-app.include_router(brief_router)
-app.include_router(ideas_router)
+#: Every router below carries a stored credential, spends money, or writes state —
+#: exactly what `STUDIO_API_TOKEN` exists to gate. See `engine/auth.py`.
+#:
+#: `publishing_router` and `repurpose_router` are gated route-by-route inside their
+#: own modules instead of here: each carries one OAuth callback — Google's and
+#: TikTok's — that the *provider's* server redirects a browser straight into. That
+#: request carries no header this engine put there and no token that this engine
+#: could check even if it wanted to; the callback's own `state` parameter is the
+#: CSRF defence an OAuth callback actually has. Gating the whole router would have
+#: locked out the one request an operator cannot make any other way.
+_gated = [Depends(require_token)]
+app.include_router(brief_router, dependencies=_gated)
+app.include_router(ideas_router, dependencies=_gated)
 app.include_router(publishing_router)
-app.include_router(insights_router)
-app.include_router(channels_router)
-app.include_router(models_router)
-app.include_router(setup_router)
+app.include_router(insights_router, dependencies=_gated)
+app.include_router(channels_router, dependencies=_gated)
+app.include_router(models_router, dependencies=_gated)
+app.include_router(setup_router, dependencies=_gated)
 app.include_router(repurpose_router)
-app.include_router(style_router)
-app.include_router(thumbnails_router)
+app.include_router(style_router, dependencies=_gated)
+app.include_router(thumbnails_router, dependencies=_gated)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -246,7 +258,7 @@ async def health() -> dict:
     }
 
 
-@app.get("/v1/workflows/{name}")
+@app.get("/v1/workflows/{name}", dependencies=[Depends(require_token)])
 async def describe_workflow(name: str) -> dict:
     """The stage graph, so the UI can render the pipeline before anything runs."""
     try:
@@ -268,7 +280,7 @@ async def describe_workflow(name: str) -> dict:
     }
 
 
-@app.post("/v1/jobs", status_code=202)
+@app.post("/v1/jobs", status_code=202, dependencies=[Depends(require_token)])
 async def create_job(body: JobRequest) -> dict:
     if body.workflow not in video.STARTABLE:
         # Refused here rather than after the render: "publish" needs a live YouTube
@@ -918,7 +930,7 @@ class JobSummary(BaseModel):
     thumbnail_keys: list[str] = Field(default_factory=list)
 
 
-@app.get("/v1/jobs")
+@app.get("/v1/jobs", dependencies=[Depends(require_token)])
 async def list_jobs(
     status: str | None = None,
     # Declared, not just clamped. The clamp below still guards the slice, but a
@@ -994,7 +1006,7 @@ async def list_jobs(
     return out[: max(1, min(limit, 500))]
 
 
-@app.get("/v1/jobs/{job_id}")
+@app.get("/v1/jobs/{job_id}", dependencies=[Depends(require_token)])
 async def get_job(job_id: str) -> dict:
     job = _require(job_id)
     if _needs_resync(job):
@@ -1012,7 +1024,7 @@ async def get_job(job_id: str) -> dict:
     }
 
 
-@app.get("/v1/jobs/{job_id}/events")
+@app.get("/v1/jobs/{job_id}/events", dependencies=[Depends(require_token_flexible)])
 async def stream_job(job_id: str) -> EventSourceResponse:
     """Live progress.
 
@@ -1075,7 +1087,7 @@ async def stream_job(job_id: str) -> EventSourceResponse:
     return EventSourceResponse(generator())
 
 
-@app.post("/v1/jobs/{job_id}/publish", status_code=202)
+@app.post("/v1/jobs/{job_id}/publish", status_code=202, dependencies=[Depends(require_token)])
 async def publish_job(job_id: str, body: PublishRequest, force: bool = False) -> dict:
     """Publish a finished video. **This is the approval gate.**
 
@@ -1382,7 +1394,7 @@ async def _refuse_while_a_worker_owns_it(job: dict) -> None:
         )
 
 
-@app.post("/v1/jobs/{job_id}/edit")
+@app.post("/v1/jobs/{job_id}/edit", dependencies=[Depends(require_token)])
 async def edit_stage(job_id: str, body: EditRequest) -> dict:
     """Accept a user edit and re-run from that point.
 
@@ -1415,7 +1427,7 @@ class RerunRequest(BaseModel):
     stage: str
 
 
-@app.post("/v1/jobs/{job_id}/rerun")
+@app.post("/v1/jobs/{job_id}/rerun", dependencies=[Depends(require_token)])
 async def rerun_stage(job_id: str, body: RerunRequest) -> dict:
     """Re-run one stage and everything downstream of it.
 
@@ -1456,7 +1468,7 @@ async def rerun_stage(job_id: str, body: RerunRequest) -> dict:
     return {"invalidated": invalidated, "status": "running"}
 
 
-@app.post("/v1/jobs/{job_id}/cancel")
+@app.post("/v1/jobs/{job_id}/cancel", dependencies=[Depends(require_token)])
 async def cancel_job(job_id: str) -> dict:
     """Stop a job and tell everyone watching.
 
@@ -1617,7 +1629,7 @@ _SERVABLE = {
 _SERVABLE_ROOTS = ("thumbnails/", "renders/", "captions/", "voiceover/", "repurpose/")
 
 
-@app.get("/v1/files/{key:path}")
+@app.get("/v1/files/{key:path}", dependencies=[Depends(require_token_flexible)])
 async def get_file(key: str):
     """Serve a generated artifact.
 

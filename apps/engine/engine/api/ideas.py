@@ -30,9 +30,12 @@ from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel
 
+from engine import trending
+from engine.api.publishing import CHANNELS
 from engine.ideas import build_backlog_async
 from engine.providers import llm
 from engine.providers.llm import ProviderUnavailable
+from engine.providers.youtube import YouTube
 from engine.research import keywords
 
 router = APIRouter(prefix="/v1/ideas", tags=["ideas"])
@@ -221,10 +224,20 @@ async def _score(candidates: list[str], *, published: list[str]) -> list[dict]:
         if isinstance(result, list):
             pooled.extend(result)
 
+    # FIX-TASKS E3. `published[0]` (the channel's most recent topic) stands in for
+    # a niche seed here — this endpoint scores ad-hoc candidates for whatever
+    # channel is already running, not a channel being founded, so there is no
+    # separate "niche" input the way `channel_launch.py`'s BacklogStage has one.
+    trending_terms = await trending.gather_trending_terms(
+        youtube_client=_default_youtube_client(),
+        seed=published[0] if published else "",
+    )
+
     ideas = await build_backlog_async(
         candidates,
         published_topics=published,
         suggestions=pooled,
+        trending_terms=trending_terms,
     )
 
     out: list[dict] = []
@@ -245,6 +258,19 @@ async def _score(candidates: list[str], *, published: list[str]) -> list[dict]:
             }
         )
     return out
+
+
+def _default_youtube_client() -> YouTube | None:
+    """The connected channel's client, or `None` with nothing connected yet.
+
+    Mirrors `api/channels.py`'s `CHANNELS.get("default")` lookup. The only use
+    here is the free `videos.list chart=mostPopular` trending poll in `_score` —
+    with no channel connected that just means the YouTube-trending half of
+    `trending_terms` stays empty, the same honest-empty contract every other
+    optional signal in this module already has.
+    """
+    creds = CHANNELS.get("default")
+    return YouTube(creds) if creds else None
 
 
 def _why(idea) -> str:

@@ -15,16 +15,23 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from engine import repository
+from engine.auth import require_token
 from engine.providers import tiktok
 from engine.repurpose.gate import Corpus, Timeline, TimelineSegment, evaluate
 from engine.repurpose.rights import Grant, Lane
 
 router = APIRouter(prefix="/v1/repurpose", tags=["repurpose"])
+#: Every route here is gated except `/auth/tiktok/callback` — TikTok's server
+#: redirects a browser straight into that one, carrying no header we asked for and
+#: no token we could check. See `main.py`'s comment above `app.include_router` for
+#: the full reasoning; `tiktok_callback` below restates it at the point that
+#: matters.
+_gated = [Depends(require_token)]
 
 
 class GrantIn(BaseModel):
@@ -205,7 +212,7 @@ def _grant_out(grant: Grant | None, *, platform: str = "youtube") -> GrantOut | 
     )
 
 
-@router.get("/clips")
+@router.get("/clips", dependencies=_gated)
 async def clips(
     channel_key: str = "",
     status: str = "discovered",
@@ -228,7 +235,7 @@ async def clips(
     return Clips(clips=out)
 
 
-@router.post("/clips/{source_id}/grant")
+@router.post("/clips/{source_id}/grant", dependencies=_gated)
 async def record_grant(source_id: str, body: GrantIn) -> GrantOut:
     """Record how a clip may be used.
 
@@ -259,7 +266,7 @@ async def record_grant(source_id: str, body: GrantIn) -> GrantOut:
     return out
 
 
-@router.post("/clips/{source_id}/dismiss", status_code=204)
+@router.post("/clips/{source_id}/dismiss", status_code=204, dependencies=_gated)
 async def dismiss(source_id: str) -> None:
     """Refuse a clip, durably.
 
@@ -270,7 +277,7 @@ async def dismiss(source_id: str) -> None:
         raise HTTPException(404, f"no clip {source_id}")
 
 
-@router.post("/clips/{source_id}/select", status_code=204)
+@router.post("/clips/{source_id}/select", status_code=204, dependencies=_gated)
 async def select(source_id: str) -> None:
     if not await repository.set_clip_status(source_id, "selected"):
         raise HTTPException(404, f"no clip {source_id}")
@@ -304,7 +311,7 @@ class Discovered(BaseModel):
     connected: bool = False
 
 
-@router.post("/discover")
+@router.post("/discover", dependencies=_gated)
 async def discover(body: DiscoverRequest) -> Discovered:
     """Lane A: sweep the operator's own TikToks, score them for this channel.
 
@@ -359,7 +366,7 @@ async def discover(body: DiscoverRequest) -> Discovered:
     return Discovered(clips=out, based_on=topics, configured=True, connected=True)
 
 
-@router.get("/auth/tiktok")
+@router.get("/auth/tiktok", dependencies=_gated)
 async def begin_tiktok_auth(redirect_uri: str = "") -> dict:
     """Where the browser goes to connect a TikTok account for Lane A.
 
@@ -386,7 +393,7 @@ async def begin_tiktok_auth(redirect_uri: str = "") -> dict:
     return {"url": tiktok.authorize_url(redirect_uri, state)}
 
 
-@router.get("/auth/tiktok/callback")
+@router.get("/auth/tiktok/callback")  # no [Depends] — see the module comment above
 async def tiktok_callback(
     code: str = "",
     state: str = "",
@@ -424,7 +431,7 @@ async def tiktok_callback(
     return _back("tiktok=connected")
 
 
-@router.get("/auth/tiktok/status")
+@router.get("/auth/tiktok/status", dependencies=_gated)
 async def tiktok_status() -> TikTokStatusOut:
     """Whether an account is connected, without touching a credential.
 
@@ -438,7 +445,7 @@ async def tiktok_status() -> TikTokStatusOut:
     )
 
 
-@router.delete("/auth/tiktok", status_code=204)
+@router.delete("/auth/tiktok", status_code=204, dependencies=_gated)
 async def disconnect_tiktok() -> None:
     if not await repository.disconnect_tiktok():
         raise HTTPException(404, "no TikTok account is connected")
@@ -493,7 +500,7 @@ def _channel_topics(count: int = 12) -> list[str]:
     return seen
 
 
-@router.post("/evaluate")
+@router.post("/evaluate", dependencies=_gated)
 async def evaluate_timeline(body: TimelineIn) -> ReportOut:
     """Score a proposed edit against both gates, before building it.
 

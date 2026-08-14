@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # it is in this repository, so anything encrypted under it is public.
     secret_key: str = DEV_SECRET_KEY
 
+    # Empty by default, matching every install that predates this field — the
+    # engine boots unauthenticated exactly as it always has, `pytest` never has to
+    # know this exists, and turning it on is opt-in. Set it and every route except
+    # `/health` starts refusing requests that do not carry it — see `engine/auth.py`
+    # for what "carry it" means for the handful of routes a browser reaches
+    # directly rather than through a header. Nothing else validates its shape: a
+    # weak value here is the operator's choice the same way a weak `.env` password
+    # anywhere else is, and this module does not moralise about it.
+    api_token: str = ""
+
     # Storage. `ObjectStore` is local-only today — there is no S3 implementation,
     # so "s3" is deliberately not accepted rather than silently writing to local
     # disk and losing everything when the container recycles. The interface in

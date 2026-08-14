@@ -361,6 +361,31 @@ async def weekly_review_task(ctx: dict[str, Any]) -> ReviewPayload:  # noqa: ARG
     return (await review.run()).as_dict()
 
 
+async def thumbnail_swap_task(ctx: dict[str, Any]) -> list[dict[str, Any]]:  # noqa: ARG001
+    """FIX-TASKS E2: swap a published video's thumbnail once it is clearly behind
+    the channel's own median CTR, subject to the 48-hour/14-day guardrails in
+    `engine.thumbnail_ab`.
+
+    Hourly rather than weekly (see `cron_jobs` below) — the guardrails are
+    themselves time-window based, not calendar-day based, so there is no natural
+    "once a week" moment for this the way there is for a digest a person reads.
+    An hourly sweep just means a video crosses the 48-hour mark within an hour of
+    it actually happening, not that it does anything 24x as often per video: the
+    14-day-since-last-swap guardrail is what actually bounds how often any one
+    video can be touched.
+
+    Returns the sweep results (one entry per published video considered) as
+    plain dicts, the same "lands in arq's result store" reason `weekly_review_task`
+    does.
+    """
+    from dataclasses import asdict
+
+    from engine import thumbnail_ab
+
+    results = await thumbnail_ab.sweep()
+    return [asdict(r) for r in results]
+
+
 class WorkerSettings:
     """`python -m arq engine.worker.WorkerSettings`.
 
@@ -391,7 +416,22 @@ class WorkerSettings:
             minute=0,
             second=0,
             run_at_startup=False,
-        )
+        ),
+        # Hourly, not weekly — FIX-TASKS E2's guardrails are time-window based
+        # (48h since publish, 14 days since the last swap on that video), not
+        # calendar-day based, so there is no single "right" day for this the way
+        # Monday morning is for a digest a person reads. `minute`/`second` pinned
+        # to 0 for the same reason `weekly_review_task`'s are: an unset field
+        # means *every* value to arq, and this would otherwise fire every minute.
+        # `run_at_startup=False` for the same reason too — a worker restart is
+        # not 48 hours passing.
+        cron(
+            thumbnail_swap_task,
+            hour=None,
+            minute=0,
+            second=0,
+            run_at_startup=False,
+        ),
     ]
     on_startup = startup
     redis_settings: RedisSettings = build_redis_settings()
