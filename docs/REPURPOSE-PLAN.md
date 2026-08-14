@@ -560,6 +560,8 @@ Until that lands, `providers/tiktok.py` and `repurpose/acquire.py` are reviewed
 code rather than proven code — the same status `PLAN.md` §7 records for the
 YouTube publish path, and for the same reason. It is out of our hands and it has
 the longest lead time, so it is worth filing before anything else.
+[`TIKTOK-SETUP.md`](TIKTOK-SETUP.md) is the operator's walkthrough for filing it,
+putting the keys in, and running the first sweep.
 
 Everything else is judgement calls that want real usage first:
 
