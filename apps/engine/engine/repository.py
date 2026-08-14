@@ -57,6 +57,7 @@ from engine.tables import (
     RepurposeProject,
     ReviewSnapshot,
     ScheduleSlot,
+    ThumbnailSwap,
     TikTokAccount,
 )
 from engine.workflows.base import StageState, StageStatus
@@ -613,6 +614,80 @@ async def save_keyword_snapshot(seed: str, terms: list[str]) -> None:
             row.captured_at = datetime.now(UTC)
         else:
             db.add(KeywordSnapshot(seed=seed, terms=terms))
+
+
+async def job_id_for_video(video_id: str) -> str | None:
+    """The job that produced `video_id`, so a later feature can re-read its stage
+    output — `thumbnail_ab.sweep` uses this to find the render's thumbnail
+    variants. `PerformanceRecord.job_id` is a real column precisely so this does
+    not need to round-trip through `payload`, which never carried it."""
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = await db.get(PerformanceRecord, video_id)
+        return row.job_id if row else None
+
+
+async def record_thumbnail_swap(
+    *,
+    video_id: str,
+    from_concept: str,
+    to_concept: str,
+    variant_key: str,
+    reason: str,
+    at: datetime | None = None,
+) -> None:
+    """Log one thumbnail A/B swap. Every swap is kept — see `ThumbnailSwap`."""
+    if not _persistence_enabled():
+        return
+    async with session() as db:
+        db.add(
+            ThumbnailSwap(
+                video_id=video_id,
+                from_concept=from_concept,
+                to_concept=to_concept,
+                variant_key=variant_key,
+                reason=reason,
+                at=at or datetime.now(UTC),
+            )
+        )
+
+
+async def last_thumbnail_swap(video_id: str) -> ThumbnailSwap | None:
+    """The most recent swap on this video, or `None` if it has never been
+    swapped — what `thumbnail_ab.should_swap`'s 14-day guardrail checks against."""
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        return (
+            await db.execute(
+                select(ThumbnailSwap)
+                .where(ThumbnailSwap.video_id == video_id)
+                .order_by(ThumbnailSwap.at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+
+async def thumbnail_swaps_for(video_id: str) -> list[ThumbnailSwap]:
+    """Every swap on this video, oldest first — the full history `thumbnail_ab.
+    pick_next_variant` uses to avoid re-trying a concept already tried, and what
+    Phase 8 attribution reads to segment CTR at each swap date."""
+    if not _persistence_enabled():
+        return []
+    async with session() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(ThumbnailSwap)
+                    .where(ThumbnailSwap.video_id == video_id)
+                    .order_by(ThumbnailSwap.at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return list(rows)
 
 
 async def resolve_backlog_idea(

@@ -367,9 +367,11 @@ class TestSchedule:
     def test_the_review_is_registered_as_a_weekly_cron_job(self):
         from engine.worker import WorkerSettings
 
-        assert len(WorkerSettings.cron_jobs) == 1
-        job = WorkerSettings.cron_jobs[0]
-        assert job.name.endswith("weekly_review_task")
+        # Not `len(...) == 1` any more — FIX-TASKS E2 registered a second cron
+        # job (thumbnail A/B sweeps) alongside this one. Found by name rather
+        # than by position, so neither test cares which was registered first.
+        names = [job.name for job in WorkerSettings.cron_jobs]
+        assert any(name.endswith("weekly_review_task") for name in names)
 
     def test_it_fires_once_a_week_rather_than_all_day_monday(self):
         """arq reads an unset field as *every* value, so `cron(fn, weekday="mon")`
@@ -390,7 +392,7 @@ class TestSchedule:
 def _cron_job():
     from engine.worker import WorkerSettings
 
-    return WorkerSettings.cron_jobs[0]
+    return next(job for job in WorkerSettings.cron_jobs if job.name.endswith("weekly_review_task"))
 
 
 class TestItCanBeReadBack:

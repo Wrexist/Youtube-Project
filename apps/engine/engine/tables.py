@@ -207,6 +207,33 @@ class KeywordSnapshot(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class ThumbnailSwap(Base):
+    """One thumbnail A/B swap (FIX-TASKS E2), for the timing guardrails and for
+    Phase 8 attribution to segment a video's CTR history at the swap date.
+
+    Rows, not JSON on `PerformanceRecord` — mirroring `QuotaEntry`'s reasoning
+    (see the module docstring): "was there a swap on this video in the last 14
+    days" is a query the decision logic runs on every sweep, not a document that
+    gets read whole. `video_id` is indexed but deliberately not unique — a video
+    can be swapped more than once over its lifetime, and the whole point is
+    keeping each one.
+    """
+
+    __tablename__ = "thumbnail_swaps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(String(64), index=True)
+    from_concept: Mapped[str] = mapped_column(String(64), default="")
+    to_concept: Mapped[str] = mapped_column(String(64), default="")
+    #: The storage key of the image that was set, so the swap is reproducible /
+    #: auditable without re-deriving which variant "to_concept" referred to.
+    variant_key: Mapped[str] = mapped_column(Text, default="")
+    #: Why the decision logic swapped it, in the same words `thumbnail_ab.should_swap`
+    #: put on the idea card — e.g. "ctr 2.10% is well below the 5.40% channel median".
+    reason: Mapped[str] = mapped_column(Text, default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
 class TikTokAccount(Base):
     """A connected TikTok account, for Lane A.
 

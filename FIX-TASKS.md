@@ -394,6 +394,34 @@ the honest version of that command until a series actually exists to run.
 **Done when:** a test drives the decision logic across the timing and frequency rules,
 and the swap is recorded in a form the insights module can read.
 
+**Status: done (2026-08-14).** `engine/thumbnail_ab.py` — `should_swap` and
+`pick_next_variant` are pure decision functions (no client, database, or clock but
+the one passed in); `sweep()` is the thin orchestration layer that actually calls
+YouTube. Both `YouTube.set_thumbnail()` (`providers/youtube.py`) and
+`COSTS["thumbnails.set"] = 50` (`quota.py`) already existed and needed no changes —
+this task was entirely "wire up what Phase 8 already built."
+
+Guardrails: 48 hours since publish (`MIN_HOURS_SINCE_PUBLISH`) and 14 days since
+the video's own last swap (`MIN_DAYS_BETWEEN_SWAPS`), checked before the
+performance comparison so the reported reason is the more precise one when a video
+is both too young and underperforming. "Underperforming" is capped at 75% of the
+channel's own median CTR (`UNDERPERFORM_RATIO`), not a raw `< median` — the raw
+form flags roughly half of every channel's videos by definition, forever.
+
+Every swap is logged to a new `thumbnail_swaps` table (migration `c9e2a5f7d813`) —
+`video_id`, `from_concept`, `to_concept`, the storage key used, and why — which is
+what the 14-day guardrail queries and what a later Phase 8 analysis reads to
+segment a video's CTR history at the swap date, satisfying "in a form the insights
+module can read." Registered as a new hourly arq cron job (`thumbnail_swap_task`)
+alongside the existing weekly review, since the guardrails are themselves
+time-window based rather than calendar-day based.
+
+31 new tests (`test_thumbnail_ab.py`, plus updated cron-count assertions in
+`test_review.py`). Full engine suite: 1335 passed / 1 skipped against SQLite;
+against real Postgres, 1316 passed with the same pre-existing, unrelated
+`test_repurpose_workflow.py`/`test_repurpose_endpoint.py` interaction logged in
+KNOWN-ISSUES.md §4.9 and nothing new. `ruff check`/`format` clean.
+
 ## E3. Trend monitoring
 
 > `build_backlog` in `engine/ideas.py` accepts a `trending_terms` argument that
