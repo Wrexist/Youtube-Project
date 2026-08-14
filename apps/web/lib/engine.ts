@@ -74,6 +74,41 @@ const BASE =
       "http://localhost:8080")
     : (process.env.NEXT_PUBLIC_ENGINE_URL ?? "http://localhost:8080");
 
+/**
+ * `STUDIO_API_TOKEN`, mirroring `BASE`'s split between server and browser.
+ *
+ * Empty by default, matching the engine: an install that has not set
+ * `STUDIO_API_TOKEN` gates nothing, so this stays empty and every call below adds
+ * no header at all — unchanged behaviour for every install that predates this.
+ *
+ * Once it *is* set, the two variables are deliberately asymmetric. `STUDIO_API_TOKEN`
+ * (server-only, never bundled) is what Server Components and Server Actions send —
+ * every screen `docs/REPURPOSE-PLAN.md`'s "Convert … to Server Components" already
+ * moved server-side gets its protection for free. `NEXT_PUBLIC_STUDIO_API_TOKEN`
+ * exists only for the handful of things a browser must reach directly and cannot
+ * attach a header to at all — `EventSource`, `<img>`/`<video>`/`<a href>` — which
+ * `eventsUrl`/`fileUrl` below carry as `?token=`. It intentionally does end up in
+ * the client bundle; see `engine/auth.py`'s docstring for why that is an accepted
+ * trade for a tool CLAUDE.md already says not to expose, not an oversight. Set both
+ * to the same value — `scripts/setup.sh` does.
+ */
+const API_TOKEN =
+  typeof window === "undefined"
+    ? (process.env.STUDIO_API_TOKEN ?? process.env.NEXT_PUBLIC_STUDIO_API_TOKEN ?? "")
+    : (process.env.NEXT_PUBLIC_STUDIO_API_TOKEN ?? "");
+
+/** `Authorization: Bearer …` when a token is configured, or no extra headers at all. */
+function authHeaders(): Record<string, string> {
+  return API_TOKEN ? { authorization: `Bearer ${API_TOKEN}` } : {};
+}
+
+/** Append `?token=` (or `&token=`) to a URL the browser reaches without a header —
+ *  `EventSource`, `<img>`, `<video>`, `<a href>`. No-op with no token configured. */
+function withToken(url: string): string {
+  if (!API_TOKEN) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(API_TOKEN)}`;
+}
+
 /** How long a Server Component waits before falling back to demo data. */
 const TIMEOUT_MS = 2500;
 
@@ -112,7 +147,7 @@ export async function get<T>(path: string): Promise<T | null> {
     const response = await fetch(`${BASE}${path}`, {
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: { accept: "application/json" },
+      headers: { accept: "application/json", ...authHeaders() },
     });
     if (!response.ok) {
       // Still `null`, because every caller's fallback is the same. But a 500 from a
@@ -150,7 +185,11 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
       method,
       cache: "no-store",
       signal: AbortSignal.timeout(MUTATION_TIMEOUT_MS),
-      headers: { "content-type": "application/json", accept: "application/json" },
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        ...authHeaders(),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (cause) {
@@ -262,7 +301,7 @@ export const publishJob = (id: string, body: Partial<PublishRequest> = {}) =>
  * Must go through `BASE`: a bare `/v1/files/...` resolves against the web app's own
  * origin (:3000), where nothing serves it. The engine owns these files.
  */
-export const fileUrl = (key: string) => `${BASE}/v1/files/${key}`;
+export const fileUrl = (key: string) => withToken(`${BASE}/v1/files/${key}`);
 
 /** Route one task to one model. PUT, not POST — it replaces, it does not append. */
 export const setRoute = (task: string, model: string) =>
@@ -320,7 +359,7 @@ export const applySchedulePlan = (assignments: { video_id: string; at: string }[
   post<{ applied: number }>("/v1/calendar/auto/apply", { assignments });
 
 /** Where a browser subscribes for live progress. */
-export const eventsUrl = (id: string) => `${BASE}/v1/jobs/${id}/events`;
+export const eventsUrl = (id: string) => withToken(`${BASE}/v1/jobs/${id}/events`);
 
 // ── setup ───────────────────────────────────────────────────────────────────
 //

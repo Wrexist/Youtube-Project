@@ -13,7 +13,8 @@ allowed to become files.
 **Untrusted throughout.** Captions, hashtags and handles are written by strangers
 and end up in an LLM prompt that decides what gets published under the operator's
 name. Everything user-authored goes through `untrusted.fence()` before it reaches
-a prompt — see `_channel_context`.
+a prompt — see `repurpose/narrate.py:write_thesis` and `write_commentary`, the
+actual interpolation sites.
 """
 
 from __future__ import annotations

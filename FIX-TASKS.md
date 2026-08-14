@@ -89,6 +89,11 @@ still passes.
 
 ## B1. Wire the web app to the engine
 
+**Status: mostly done.** Seven of ten screens read live data, with `demo.ts`
+fallback when the engine is unreachable — see KNOWN-ISSUES.md §5.5 for the
+screen-by-screen table, which is the current record; this task's description below
+is the original spec and is stale where it disagrees with that table.
+
 > **The single biggest gap in this project.** Every screen in `apps/web` renders from
 > `apps/web/lib/demo.ts`. There is no `fetch` and no SSE subscription anywhere. The UI
 > currently proves the design, not the integration.
@@ -179,6 +184,8 @@ in sync, and the footage visibly relates to what is being said.
 
 ## C1. Move state to Postgres
 
+**Status: done.** SQLAlchemy models, Alembic migrations, and a repository module behind every dict named below. See KNOWN-ISSUES.md §5.4.
+
 > All job and channel state is in module-level dicts. A restart loses everything:
 > `JOBS` (`engine/main.py`), `CHANNELS` / `_STATES` / `SCHEDULE`
 > (`engine/api/publishing.py`), `RECORDS` (`engine/api/insights.py`), `LAUNCHES`
@@ -205,6 +212,8 @@ completed stage rather than starting over.
 
 ## C2. Real workers with arq
 
+**Status: done.** `engine/worker.py`, progress over Redis pub/sub, the in-process path kept as a supported single-process mode. See KNOWN-ISSUES.md §6.
+
 > Jobs currently run as in-process `asyncio.create_task` calls in
 > `engine/main.py:create_job`. One slow render blocks nothing, but nothing scales and
 > a crashed process loses every running job.
@@ -226,6 +235,8 @@ lose the job, and SSE still streams to the browser.
 
 ## C3. Authentication
 
+**Status: done, 2026-08-14.** `STUDIO_API_TOKEN`, checked by `engine/auth.py`. One deviation from the spec below: two route families reached by the browser without a header (`/v1/files/...`, `/v1/jobs/{id}/events`) accept the token as `?token=` too, rather than the web app never carrying it client-side — see KNOWN-ISSUES.md §6 for why that trade was made. Every write and every credential-bearing route takes the header only.
+
 > The engine is completely unauthenticated. Every endpoint — including ones that spend
 > money and publish videos — is open to anyone who can reach the port.
 >
@@ -244,6 +255,8 @@ app still works.
 # Phase D — quality gaps
 
 ## D1. Restore punctuation in subtitles
+
+**Status: done.** See KNOWN-ISSUES.md §5.1.
 
 > edge-tts word boundaries strip punctuation, so cues read `On purpose Here is why`
 > instead of `On purpose. Here is why`. Cosmetic when burned in, **materially worse
@@ -264,6 +277,8 @@ app still works.
 punctuation and break on sentence ends.
 
 ## D2. Wire a real thumbnail image provider
+
+**Status: done.** See KNOWN-ISSUES.md §5.3.
 
 > `make_thumbnail` in `apps/engine/engine/render/compose.py` composes real typography
 > with correct safe zones onto a **solid colour placeholder**. No image model is
@@ -289,6 +304,8 @@ under 2MB, and the true-scale preview component shows them legibly at 168px.
 
 ## D3. Semantic duplicate detection
 
+**Status: done.** `engine/ideas.py:find_duplicate_async` layers an Ollama embedding check over the lexical one for the 0.2–0.45 band. See `tests/test_semantic_dedup.py`.
+
 > `similarity()` in `apps/engine/engine/ideas.py` uses Jaccard overlap on content
 > words. It correctly catches "why bridges collapse" vs "the reason bridges collapse".
 > It will **not** catch "why bridges collapse" vs "the physics of structural failure in
@@ -310,6 +327,8 @@ under 2MB, and the true-scale preview component shows them legibly at 168px.
 pair is caught, and all existing dedup tests still pass.
 
 ## D4. Value-aware keyword and tag trimming
+
+**Status: done.** Both `trim_keywords` and `validate_tags` rank by autocomplete-suggestion position when suggestions are available. See `tests/test_trimming.py`.
 
 > `trim_keywords` in `engine/channel.py` and `validate_tags` in `engine/workflows/seo.py`
 > both enforce the 500-character budget by **keeping the earliest entries and dropping
@@ -382,3 +401,9 @@ Then **A2 → B2** (prove the pipeline works at all) → **B1** (make the UI rea
 
 `B3` can happen any time after A2 and is worth doing early if you would rather not pay
 per video while debugging.
+
+**As of 2026-08-14:** B1, C1, C2, C3, D1, D2, D3 and D4 are all done — see the
+status note under each. What's left below is A1/A2 (human-only: real credentials),
+B2/B3 (a real end-to-end run against live providers, which nobody has done — see
+KNOWN-ISSUES.md §1/§2), and Phase E (command palette, thumbnail A/B swapping, trend
+monitoring — genuinely not started).
