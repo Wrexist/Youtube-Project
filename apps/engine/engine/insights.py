@@ -87,6 +87,23 @@ class VideoRecord:
     #: rather than quietly returning nothing.
     beats: list[BeatPayload] = field(default_factory=list)
 
+    # Repurpose provenance. Empty for a video built from scratch, which is what
+    # keeps it out of the comparison: `analyze` drops groups below the minimum
+    # size, and a dimension where every original video shares the value "" would
+    # otherwise pit "no clips" against every clip strategy at once.
+    #
+    # These are the questions volume is supposed to answer — ten clips a day is
+    # 300 data points a month, and without somewhere to put them it is 300 videos
+    # and no knowledge. See docs/REPURPOSE-RESEARCH.md §4.
+    #: Which rights lane the clips came through: own, campaign, licensed…
+    clip_lane: str = ""
+    #: Whose clips. The single most actionable dimension in campaign clipping —
+    #: "@thisstreamer's clips average 8.1% CTR against 4.2% for everyone else"
+    #: is a decision about where to spend tomorrow.
+    clip_source: str = ""
+    #: Whether the edit opened on a teased moment or played in order.
+    hook_teased: str = ""
+
     def dimension(self, name: str) -> str:
         return str(getattr(self, name, "") or "")
 
@@ -167,6 +184,13 @@ def analyze(
         "hook_device",
         "thumbnail_concept",
         "script_model",
+        # Repurpose. Blank on every from-scratch video, and `analyze` drops
+        # under-sized groups, so these simply do not fire until there are enough
+        # repurposed videos to compare — which is the correct behaviour rather
+        # than a special case.
+        "clip_lane",
+        "clip_source",
+        "hook_teased",
     ),
     metrics: tuple[Metric, ...] = ("ctr", "avd_percent", "avd_seconds"),
 ) -> InsightReport:

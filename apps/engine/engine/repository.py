@@ -24,6 +24,8 @@ startup so a job that was mid-render when the process died comes back as
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from dataclasses import asdict, fields
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -36,16 +38,25 @@ from sqlalchemy.exc import IntegrityError
 from engine.db import session
 from engine.insights import VideoRecord
 
+# Safe at module level: `repurpose.rights` imports only the standard library, so
+# there is no cycle back through here.
+from engine.repurpose.rights import Grant, Lane
+
 if TYPE_CHECKING:  # `review` imports this module at call time; keep the cycle unrun.
     from engine.review import Snapshot
 from engine.tables import (
     BacklogIdea,
     Channel,
     ChannelLaunch,
+    ClipAsset,
+    ClipGrant,
+    ClipSource,
     Job,
     PerformanceRecord,
+    RepurposeProject,
     ReviewSnapshot,
     ScheduleSlot,
+    TikTokAccount,
 )
 from engine.workflows.base import StageState, StageStatus
 
@@ -1036,3 +1047,562 @@ async def load_launches() -> dict[str, dict]:
     return {
         r.id: {"id": r.id, "status": r.status, "niche": r.niche, **(r.payload or {})} for r in rows
     }
+
+
+# ── repurpose: clips, grants, assets ────────────────────────────────────────
+#
+# The split enforced here is the one from `engine/repurpose/rights.py`: metadata
+# about a public post is free to keep, media is not. `record_asset` refuses to
+# write without a live grant, so the invariant is a property of the persistence
+# layer rather than a rule the acquire stage is trusted to remember.
+
+
+def _grant_from_row(row: ClipGrant) -> Grant:
+    """A stored grant as the rights module sees it."""
+    return Grant(
+        lane=Lane(row.lane),
+        grantor=row.grantor,
+        evidence_kind=row.evidence_kind,
+        evidence_ref=row.evidence_ref,
+        granted_at=row.granted_at,
+        expires_at=row.expires_at,
+        revoked_at=row.revoked_at,
+        platforms=frozenset(row.platforms or ()),
+        rules=row.rules,
+    )
+
+
+async def upsert_clip_sources(sources: list[dict], *, channel_key: str = "") -> int:
+    """Record discovered clips. Returns how many were new.
+
+    **Measurements refresh; decisions do not.** A known clip has its `stats` and
+    `fit_score` brought up to date, and nothing else. That split is the whole rule:
+
+      * Refreshing everything resets `status`, resurrecting every clip the operator
+        already dismissed — the mistake `add_backlog_ideas` avoids for the same
+        reason. A dismissal is a decision and re-running discovery is not new
+        information about it.
+      * Refreshing nothing freezes each clip's view count at the moment it was
+        first seen, and `fit.score_clip` weights reach. The clip that took off
+        *after* discovery first noticed it is the single best repurposing
+        candidate there is, and a sweep that can never re-rank it would leave it
+        buried under whatever was popular a month ago, for ever.
+
+    Per-row inside a savepoint: the pre-query is a read, so two sweeps running at
+    once can both pass it and collide on `(platform, external_id)`. Losing one clip
+    is fine; a 500 on the whole sweep is not.
+    """
+    if not _persistence_enabled() or not sources:
+        return 0
+
+    unique: dict[tuple[str, str], dict] = {}
+    for source in sources:
+        platform = str(source.get("platform") or "tiktok")
+        external = str(source.get("external_id") or "").strip()
+        if external:
+            unique.setdefault((platform, external), source)
+
+    added = 0
+    async with session() as db:
+        known = {
+            (row.platform, row.external_id): row
+            for row in (
+                await db.execute(
+                    select(ClipSource).where(ClipSource.external_id.in_([e for _, e in unique]))
+                )
+            )
+            .scalars()
+            .all()
+        }
+        for (platform, external), source in unique.items():
+            row = known.get((platform, external))
+            if row is not None:
+                _refresh_clip_measurements(row, source)
+                continue
+            try:
+                async with db.begin_nested():
+                    db.add(
+                        ClipSource(
+                            id=uuid.uuid4().hex[:12],
+                            platform=platform,
+                            external_id=external,
+                            url=str(source.get("url") or ""),
+                            creator_handle=str(source.get("creator_handle") or ""),
+                            caption=str(source.get("caption") or ""),
+                            hashtags=list(source.get("hashtags") or []),
+                            sound_id=str(source.get("sound_id") or ""),
+                            stats=dict(source.get("stats") or {}),
+                            region=str(source.get("region") or ""),
+                            duration_s=float(source.get("duration_s") or 0.0),
+                            fit_score=float(source.get("fit_score") or 0.0),
+                            fit_reasons=list(source.get("fit_reasons") or []),
+                            channel_key=channel_key,
+                        )
+                    )
+                added += 1
+            except IntegrityError:
+                logger.debug("clip {}:{} was discovered concurrently", platform, external)
+    return added
+
+
+def _refresh_clip_measurements(row: ClipSource, source: dict) -> None:
+    """Bring a known clip's numbers up to date, and touch nothing else.
+
+    Explicitly field-by-field rather than a loop over `source`: the danger here is
+    writing a field that carries a decision, and an allowlist of three is the only
+    version of this that stays safe when someone adds a column later.
+
+    `fit_score` is only written when the sweep actually computed one — a discovery
+    pass that could not reach the keyword provider scores zero, and letting that
+    overwrite a real score would push good clips off the front of the grid.
+    """
+    stats = source.get("stats")
+    if isinstance(stats, dict) and stats:
+        row.stats = dict(stats)
+
+    score = float(source.get("fit_score") or 0.0)
+    if score > 0:
+        row.fit_score = score
+        row.fit_reasons = list(source.get("fit_reasons") or [])
+
+
+async def clip_sources(
+    *, channel_key: str = "", status: str = "discovered", limit: int = 50
+) -> list[dict]:
+    """Discovered clips for a channel, best fit first, each with its grant if any.
+
+    The grant travels with the clip because the card cannot be drawn without it:
+    the rights chip is the one thing that decides whether the clip is usable, and
+    a second round trip per card to find out would make the grid useless.
+    """
+    if not _persistence_enabled():
+        return []
+    async with session() as db:
+        query = select(ClipSource).where(ClipSource.status == status)
+        if channel_key:
+            query = query.where(ClipSource.channel_key == channel_key)
+        rows = (
+            (await db.execute(query.order_by(ClipSource.fit_score.desc()).limit(limit)))
+            .scalars()
+            .all()
+        )
+        grants = {
+            g.source_id: g
+            for g in (
+                await db.execute(
+                    select(ClipGrant)
+                    .where(ClipGrant.source_id.in_([r.id for r in rows]))
+                    .order_by(ClipGrant.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        }
+        assets = {
+            a.source_id
+            for a in (
+                await db.execute(
+                    select(ClipAsset).where(ClipAsset.source_id.in_([r.id for r in rows]))
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+    out = []
+    for row in rows:
+        grant_row = grants.get(row.id)
+        grant = _grant_from_row(grant_row) if grant_row else None
+        out.append(
+            {
+                "id": row.id,
+                "platform": row.platform,
+                "external_id": row.external_id,
+                "url": row.url,
+                "creator_handle": row.creator_handle,
+                "caption": row.caption,
+                "hashtags": row.hashtags or [],
+                "stats": row.stats or {},
+                "duration_s": row.duration_s,
+                "fit_score": row.fit_score,
+                "fit_reasons": row.fit_reasons or [],
+                "status": row.status,
+                "grant": grant.as_dict() if grant else None,
+                "cleared": bool(grant and grant.cleared()),
+                "acquired": row.id in assets,
+            }
+        )
+    return out
+
+
+async def set_clip_status(source_id: str, status: str) -> bool:
+    """Select or dismiss a clip. Rows are kept, never deleted — a dismissal is a
+    fact worth remembering, and the next sweep would otherwise re-propose it."""
+    if not _persistence_enabled():
+        return False
+    async with session() as db:
+        row = await db.get(ClipSource, source_id)
+        if row is None:
+            return False
+        row.status = status
+    return True
+
+
+async def record_grant(source_id: str, grant: Grant) -> int | None:
+    """Store authority to use a clip. Returns the grant id.
+
+    Appends rather than replaces. A superseded grant is history — it is what
+    answers "were we allowed to publish that, at the time we published it", and
+    an update would erase exactly that.
+    """
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        if await db.get(ClipSource, source_id) is None:
+            raise KeyError(f"no clip source {source_id!r}")
+        row = ClipGrant(
+            source_id=source_id,
+            lane=grant.lane.value,
+            grantor=grant.grantor,
+            evidence_kind=grant.evidence_kind,
+            evidence_ref=grant.evidence_ref,
+            granted_at=grant.granted_at or datetime.now(UTC),
+            expires_at=grant.expires_at,
+            revoked_at=grant.revoked_at,
+            platforms=sorted(grant.platforms),
+            rules=grant.rules,
+        )
+        db.add(row)
+        await db.flush()
+        return row.id
+
+
+async def latest_grant(source_id: str) -> Grant | None:
+    """The current grant for a clip, or None if it has never had one."""
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = (
+            (
+                await db.execute(
+                    select(ClipGrant)
+                    .where(ClipGrant.source_id == source_id)
+                    .order_by(ClipGrant.created_at.desc(), ClipGrant.id.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+    return _grant_from_row(row) if row else None
+
+
+async def grants_for(source_ids: list[str]) -> dict[str, Grant]:
+    """Current grants for several clips at once — what the gate needs."""
+    if not _persistence_enabled() or not source_ids:
+        return {}
+    async with session() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(ClipGrant)
+                    .where(ClipGrant.source_id.in_(source_ids))
+                    .order_by(ClipGrant.created_at, ClipGrant.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    # Later rows win: the query is ascending, so the last write for each source is
+    # the one left standing.
+    return {row.source_id: _grant_from_row(row) for row in rows}
+
+
+async def record_asset(source_id: str, asset: dict) -> int:
+    """Store media for a cleared clip.
+
+    **Refuses without a live grant.** This is the enforcement point for the rule in
+    `repurpose/rights.py` — putting it here rather than only in the acquire stage
+    means a future caller that forgets cannot quietly create the situation the
+    whole rights model exists to prevent: a directory of other people's video with
+    no record of why any of it is there.
+    """
+    grant = await latest_grant(source_id)
+    if grant is None:
+        raise PermissionError(
+            f"clip {source_id!r} has no grant — media cannot be stored for it. "
+            "Record how this clip may be used first."
+        )
+    if not grant.permits_acquisition():
+        raise PermissionError(
+            f"the {grant.lane.value} grant on clip {source_id!r} is no longer live "
+            "(expired or revoked), so its media must not be fetched or kept."
+        )
+
+    async with session() as db:
+        row = ClipAsset(
+            source_id=source_id,
+            storage_key=str(asset.get("storage_key") or ""),
+            sha256=str(asset.get("sha256") or ""),
+            duration_s=float(asset.get("duration_s") or 0.0),
+            width=int(asset.get("width") or 0),
+            height=int(asset.get("height") or 0),
+            has_watermark=bool(asset.get("has_watermark")),
+            watermark_regions=list(asset.get("watermark_regions") or []),
+        )
+        db.add(row)
+        await db.flush()
+        return row.id
+
+
+async def save_project(
+    project_id: str,
+    *,
+    channel_key: str = "",
+    thesis: str = "",
+    segments: list | None = None,
+    job_id: str | None = None,
+    report: dict | None = None,
+) -> None:
+    """Create or update an episode.
+
+    `report` is stored verbatim rather than recomputed. It carries the threshold
+    version that judged the video, and "what did we check, and when" is the
+    question a channel review asks — one that cannot be answered after the fact if
+    the thresholds have since moved.
+    """
+    if not _persistence_enabled():
+        return
+    async with session() as db:
+        row = await db.get(RepurposeProject, project_id)
+        if row is None:
+            row = RepurposeProject(id=project_id)
+            db.add(row)
+        row.channel_key = channel_key or row.channel_key
+        row.thesis = thesis or row.thesis
+        if segments is not None:
+            row.segments = segments
+        if job_id is not None:
+            row.job_id = job_id
+        if report is not None:
+            row.report = report
+
+
+async def load_project(project_id: str) -> dict | None:
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = await db.get(RepurposeProject, project_id)
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "channel_key": row.channel_key,
+            "thesis": row.thesis,
+            "segments": row.segments or [],
+            "job_id": row.job_id,
+            "report": row.report,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+
+# ── TikTok accounts (Lane A) ────────────────────────────────────────────────
+#
+# The refresh token is encrypted at rest, like YouTube's. `access_token` is not:
+# it lives 24 hours, it is replaced on every refresh, and encrypting a value that
+# short-lived buys nothing while making the "is it still valid" check a decrypt.
+
+
+async def save_tiktok_account(
+    tokens,
+    *,
+    key: str = "default",
+    handle: str = "",
+) -> None:
+    """Store or replace the connection for an account.
+
+    Upsert on `key` rather than insert: reconnecting is the normal way to recover
+    from an expired refresh token, and a second row would leave `load_tiktok_tokens`
+    picking between two credentials with no way to know which is live.
+    """
+    if not _persistence_enabled():
+        return
+
+    from engine.crypto import encrypt
+
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None:
+            row = TikTokAccount(key=key, refresh_token_encrypted="")
+            db.add(row)
+        row.open_id = tokens.open_id or row.open_id
+        row.handle = handle or row.handle
+        if tokens.refresh_token:
+            row.refresh_token_encrypted = encrypt(tokens.refresh_token)
+        row.access_token = tokens.access_token
+        row.expires_at = tokens.expires_at
+        row.refresh_expires_at = tokens.refresh_expires_at
+        row.scope = tokens.scope or row.scope
+
+
+async def load_tiktok_account(key: str = "default") -> dict | None:
+    """The stored connection, without decrypting anything.
+
+    Deliberately does not return the refresh token: this is what the Setup screen
+    reads to say whether an account is connected, and a status endpoint has no
+    business handling a credential. `tiktok_access_token` is the one path that
+    decrypts, and it is called by the sweep.
+    """
+    if not _persistence_enabled():
+        return None
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None:
+            return None
+        return {
+            "key": row.key,
+            "open_id": row.open_id,
+            "handle": row.handle,
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "refresh_expires_at": (
+                row.refresh_expires_at.isoformat() if row.refresh_expires_at else None
+            ),
+            "scope": row.scope,
+            "connected": bool(row.refresh_token_encrypted),
+        }
+
+
+async def tiktok_access_token(key: str = "default") -> str:
+    """A *live* access token, refreshing it first if it is close to expiring.
+
+    This is the function every read path should call. Callers must not cache what
+    it returns beyond the request they need it for: the whole point is that the
+    token in the database is 24 hours from useless at all times, and a cached one
+    is a sweep that fails tomorrow for a reason nobody can see today.
+
+    **Refreshes are serialised.** TikTok rotates the refresh token on refresh, so
+    two callers refreshing at once — which is the ordinary shape of this system,
+    with the worker sweeping on a schedule while someone presses Discover — both
+    spend the same stored token, and the second spends one TikTok has already
+    retired. The loser then writes its failure over the winner's good token and
+    the connection is dead until a human reconnects. The lock plus the re-read
+    inside it means the second caller finds the fresh token and makes no call at
+    all.
+
+    Raises `TikTokAuthExpired` when only a human can fix it — no stored account, a
+    refresh token past its own expiry, or a refresh TikTok refused.
+    """
+    from engine.providers import tiktok
+
+    if not _persistence_enabled():
+        raise tiktok.TikTokAuthExpired("persistence is off, so no TikTok account is stored")
+
+    live = await _stored_tiktok_token(key)
+    if live is not None:
+        return live
+
+    async with _tiktok_refresh_lock():
+        # Re-read: whoever held the lock has very likely just refreshed, and this
+        # is the check that turns a stampede into one call rather than N.
+        live = await _stored_tiktok_token(key)
+        if live is not None:
+            return live
+
+        refresh_token = await _tiktok_refresh_token(key)
+        tokens = await tiktok.refresh(refresh_token)
+        await save_tiktok_account(tokens, key=key)
+        return tokens.access_token
+
+
+async def _stored_tiktok_token(key: str) -> str | None:
+    """The stored access token if it is comfortably live, else None.
+
+    None means "needs refreshing", not "broken" — the two cases that are broken
+    raise instead, because no amount of refreshing fixes a missing account.
+    """
+    from engine.providers import tiktok
+
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None or not row.refresh_token_encrypted:
+            raise tiktok.TikTokAuthExpired("no TikTok account connected")
+
+        # SQLite drops the timezone (see `repurpose/rights._aware` for the same
+        # trap and why it only bites outside CI).
+        expires_at = _aware_utc(row.expires_at)
+        refresh_expires_at = _aware_utc(row.refresh_expires_at)
+        now = datetime.now(UTC)
+
+        # Checked here rather than left to TikTok: a refresh token past its own
+        # expiry cannot be refreshed, so calling anyway spends a round trip to be
+        # told what the row already said. Refresh tokens last about a year, so
+        # this fires on an install nobody has swept in a long time.
+        if refresh_expires_at is not None and now >= refresh_expires_at:
+            raise tiktok.TikTokAuthExpired(
+                "the TikTok connection has expired — reconnect the account"
+            )
+
+        if row.access_token and expires_at and now < expires_at - _REFRESH_MARGIN:
+            return row.access_token
+        return None
+
+
+async def _tiktok_refresh_token(key: str) -> str:
+    from engine.crypto import DecryptionFailed, decrypt
+    from engine.providers import tiktok
+
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None or not row.refresh_token_encrypted:
+            raise tiktok.TikTokAuthExpired("no TikTok account connected")
+        try:
+            return decrypt(row.refresh_token_encrypted)
+        except DecryptionFailed as exc:
+            # The secret key changed. The stored token is unrecoverable and the
+            # only fix is reconnecting, so say that rather than reporting a
+            # decrypt error nobody can act on.
+            raise tiktok.TikTokAuthExpired(
+                "the stored TikTok token cannot be decrypted — reconnect the account"
+            ) from exc
+
+
+def _aware_utc(value: datetime | None) -> datetime | None:
+    return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+
+_refresh_lock: asyncio.Lock | None = None
+_refresh_lock_loop: Any = None
+
+
+def _tiktok_refresh_lock() -> asyncio.Lock:
+    """The refresh lock for the running loop.
+
+    Rebound when the loop changes rather than created at import, for the reason
+    `quota.Ledger._serialised` sets out at length: an `asyncio.Lock` binds to the
+    first loop that awaits it, and the test suite and the CLI both call in through
+    separate `asyncio.run`s. Serialising within one loop is what is needed; two
+    loops racing over one database row is not a shape this system has.
+    """
+    global _refresh_lock, _refresh_lock_loop
+
+    loop = asyncio.get_running_loop()
+    if _refresh_lock is None or _refresh_lock_loop is not loop:
+        _refresh_lock, _refresh_lock_loop = asyncio.Lock(), loop
+    return _refresh_lock
+
+
+#: Mirrors `tiktok.REFRESH_MARGIN`. Imported lazily there, restated here so this
+#: module does not import the provider at module scope.
+_REFRESH_MARGIN = timedelta(minutes=5)
+
+
+async def disconnect_tiktok(key: str = "default") -> bool:
+    """Forget an account. True if there was one."""
+    if not _persistence_enabled():
+        return False
+    async with session() as db:
+        row = await db.get(TikTokAccount, key)
+        if row is None:
+            return False
+        await db.delete(row)
+    return True

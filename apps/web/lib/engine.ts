@@ -23,10 +23,17 @@ import type {
   Calendar,
   CalendarSlots,
   Channels,
+  Clips,
+  ClipGrantRequest,
+  ClipGrant,
   Diagnostics,
   Insights,
   Monetisation,
+  OriginalityReport,
   Shorts,
+  Discovered,
+  TikTokStatus,
+  TimelineRequest,
   JobCreated,
   JobRequest,
   JobStatus,
@@ -415,3 +422,70 @@ export const saveKeys = (values: Record<string, string>) =>
  * into a button that does not work.
  */
 export const beginYouTubeAuth = () => send<{ url: string }>("GET", "/v1/auth/google");
+
+// ── repurpose ───────────────────────────────────────────────────────────────
+//
+// Two gates, two calls. `getClips` answers "may we use this" per clip;
+// `evaluateTimeline` answers "is the edit original enough". They are separate
+// because permission and transformation do not substitute for each other, and a
+// screen that merged them would hide the common state of "cleared to use, not yet
+// transformative enough" — which has a completely different fix from its opposite.
+
+export const getClips = (channelKey = "", status = "discovered") =>
+  get<Clips>(
+    `/v1/repurpose/clips?channel_key=${encodeURIComponent(channelKey)}&status=${status}`,
+  );
+
+/**
+ * Record how a clip may be used. Throws with the reasons when the grant is not
+ * usable as submitted — a missing grantor, a licence with no evidence.
+ *
+ * The refusal is the point: catching it here means the operator finds out while
+ * they still have the DM open, rather than forty minutes into a render.
+ */
+export const recordGrant = (sourceId: string, body: ClipGrantRequest) =>
+  post<ClipGrant>(`/v1/repurpose/clips/${encodeURIComponent(sourceId)}/grant`, body);
+
+export const dismissClip = (sourceId: string) =>
+  post<void>(`/v1/repurpose/clips/${encodeURIComponent(sourceId)}/dismiss`);
+
+export const selectClip = (sourceId: string) =>
+  post<void>(`/v1/repurpose/clips/${encodeURIComponent(sourceId)}/select`);
+
+/**
+ * Score a proposed edit before building it.
+ *
+ * Cheap and side-effect free, so the operator can see "62% authored, longest lift
+ * 11s" while they are still assembling. Finding out after a paid render that the
+ * edit was never going to pass is the failure this exists to prevent.
+ */
+export const evaluateTimeline = (body: TimelineRequest) =>
+  post<OriginalityReport>("/v1/repurpose/evaluate", body);
+
+/**
+ * Sweep the connected TikTok account and re-score what comes back.
+ *
+ * Through `send` rather than `get` for the same reason as `beginTikTokAuth`: the
+ * engine distinguishes a revoked connection (409, with the way to reconnect) from
+ * TikTok being down (502), and `get`'s null-on-failure would flatten both into the
+ * empty grid this whole path exists to stop being ambiguous.
+ */
+export const sweepClips = (channelKey = "main", limit = 40) =>
+  send<Discovered>("POST", "/v1/repurpose/discover", {
+    channel_key: channelKey,
+    limit,
+  });
+
+/** Whether TikTok is configured, and whether anyone has signed in. */
+export const getTikTokStatus = () =>
+  get<TikTokStatus>("/v1/repurpose/auth/tiktok/status");
+
+/**
+ * Begin the TikTok round trip.
+ *
+ * Through `send` rather than `get`, even though it is a GET: `get` swallows every
+ * failure into `null`, and the whole value of this call when it fails is the
+ * 409's message naming the variable to set. Same reasoning as `beginYouTubeAuth`.
+ */
+export const beginTikTokAuth = () =>
+  send<{ url: string }>("GET", "/v1/repurpose/auth/tiktok");

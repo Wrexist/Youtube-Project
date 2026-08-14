@@ -904,3 +904,21 @@ class TestCredentialEnvNames:
             "CLAUDE_API_KEY",
         }
         assert _alias_spellings(None) == set()
+
+
+def test_acquired_third_party_clips_are_never_served():
+    """`clips/` holds other people's footage, and must not be downloadable.
+
+    `materials/`'s argument with more force: a licence to use a clip *inside our
+    edit* is not a licence to redistribute the original from an unauthenticated
+    endpoint. Serving it would also turn the rights ledger into decoration —
+    anything cleared for one video would be publicly fetchable from then on.
+    """
+    from engine.main import _SERVABLE_ROOTS
+
+    assert "clips/" not in _SERVABLE_ROOTS
+
+
+def test_a_clip_url_is_refused_even_when_the_file_is_there(client, sandbox):
+    _write(sandbox, "clips/someone-elses.mp4")
+    assert client.get("/v1/files/clips/someone-elses.mp4").status_code == 404

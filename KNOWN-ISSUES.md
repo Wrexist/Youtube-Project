@@ -250,6 +250,46 @@ worse failure than a missing package.
 Nested same-quotes in an f-string. Ran fine on the 3.13 venv, would have crashed on
 the 3.11 the project claims to support.
 
+### 4.9 SQLite ignored every foreign key, so dev and CI disagreed about the schema
+SQLite ships with foreign key checks **off**, and nothing turned them on. Every
+`ForeignKey` in `tables.py` was therefore a real constraint on the Postgres CI runs
+and pure decoration on the SQLite that every developer and every fresh clone uses.
+
+It surfaced the expensive way. A test wrote a `repurpose_projects.job_id` pointing
+at a job that did not exist — production always writes the job row before
+dispatching the workflow, so the state was one production never reaches — and it
+passed locally for the length of a feature branch. The first CI run against
+Postgres rejected it, the failed transaction poisoned the connection, and sixteen
+unrelated tests in a different file errored during fixture setup. Three failures
+and sixteen errors, none of them in the file with the bug.
+
+`db._enforce_foreign_keys` now sets `PRAGMA foreign_keys=ON` per connection —
+per connection because that is the only scope SQLite offers, and a connection that
+misses it silently stops enforcing. The full suite passes with it on, which is the
+evidence that this was the only violation rather than the first of many.
+
+### 4.10 The repurpose tests mixed `TestClient` with the `database` fixture
+`test_spend.py` has documented the rule since it was written: `TestClient` runs the
+app on a blocking portal with **its own event loop**, so a test that also writes rows
+on pytest's loop ends up with one asyncpg pool shared across two — which aiosqlite
+tolerates and asyncpg refuses. The suite is deliberately split, `database`-fixture
+tests on one side and `TestClient` tests on the other.
+
+`test_repurpose_endpoint.py` and two tests in `test_repurpose_workflow.py` did both.
+Every one of them passed locally on SQLite and all eighteen failed on CI with
+"attached to a different loop" — an error naming neither the file nor the cause.
+They now call the endpoint functions directly, like `test_spend.py` and
+`test_backlog.py` already did.
+
+Two things made this expensive to find, and both are worth remembering. The failures
+appeared in files whose own logic was fine, so the message pointed nowhere useful.
+And the branch had no CI history at all — the pull request was opened after the work
+was done, so the first run was also the first time any of it met Postgres.
+
+**Run the suite against Postgres before pushing** if you have touched persistence or
+added an endpoint test. `CLAUDE.md` has the command. It takes seven minutes and it
+is the only way to see what CI sees.
+
 ---
 
 ## 5. Known-imperfect, working as intended for now
@@ -327,6 +367,7 @@ right. Per screen, as of today:
 | Calendar | mixed even when live: quota and bookings come from the engine, the draggable video tray is always `PENDING_VIDEOS` |
 | Analytics | partly live: the monetisation card reads `GET /v1/analytics/monetisation` and hides itself when the engine is unreachable or no channel is connected. Everything below it is still demo — the per-video, retention and Short-cut panels remain unwired. The Short-cut fixture in `demo.ts` is at least the genuine output of `engine/shorts.py` run over the demo retention curve, not an invented one |
 | Series, New channel | demo only, **no network call at all** — there is no series table, and the channel-launch endpoint has no caller |
+| Repurpose | **live end to end.** "Find clips" runs a sweep, and clips, grants and the episode builder all read and write the engine; "Build episode" starts the `repurpose` workflow and links to the running job. Until the sweep button existed the screen said "nothing has been swept in yet" above no control that swept anything, which left the whole TikTok path unreachable from the UI while every part of it worked. Two honest limits remain: the pre-check shows a *real* rights verdict but only a projection of originality, because narration, cuts and audio are decided while it builds — the card says so; and the standalone originality card lower down is still the `demo.ts` fixture, labelled "example report", since it describes no particular episode. Falls back to `demo.ts` wholesale when the engine is unreachable, with every write disabled and carrying its reason. TikTok itself is **connectable but unproven**: OAuth, token refresh, pagination and error handling are all implemented and unit-tested against mocked responses, and none of it has been run against TikTok — the app needs review before credentials exist. §1.1's argument, for a second API |
 
 Series and New channel used to ship five buttons wired to nothing, including both
 screens' single primary action: pressing the one prominent control did nothing at

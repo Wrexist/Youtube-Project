@@ -44,10 +44,22 @@ import {
   resetRoutes,
   setAllRoutes,
   setRoute,
+  recordGrant,
+  dismissClip,
+  selectClip,
+  evaluateTimeline,
+  sweepClips,
+  getTikTokStatus,
+  beginTikTokAuth,
 } from "@/lib/engine";
 import { ONBOARDED_COOKIE, ONBOARDED_MAX_AGE } from "@/lib/onboarding";
 import type {
   BacklogIdea,
+  ClipGrant,
+  ClipGrantRequest,
+  OriginalityReport,
+  TikTokStatus,
+  TimelineRequest,
   Brief,
   Diagnostics,
   JobRequest,
@@ -550,4 +562,164 @@ export async function runDiagnostics(network = true): Promise<ActionResult<Diagn
  */
 export async function engineReady(): Promise<ActionResult<{ live: boolean }>> {
   return { ok: true, data: { live: await isLive() } };
+}
+
+
+// ── repurpose ───────────────────────────────────────────────────────────────
+//
+// Two gates stand between a clip and a published video and they fail
+// independently, so these actions never merge them. `saveGrant` answers "may we
+// use this footage" and nothing else — recording one does not make the finished
+// video monetisable, and the panel says so.
+
+/**
+ * Record how a clip may be used.
+ *
+ * Refusals come back as `blockers`, not as a flat message, because the engine
+ * returns one problem per thing wrong with the grant — a missing grantor and a
+ * missing evidence link are two fixes, and collapsing them into a sentence sends
+ * the operator round the loop twice.
+ */
+export async function saveGrant(
+  sourceId: string,
+  grant: ClipGrantRequest,
+): Promise<ActionResult<ClipGrant>> {
+  try {
+    const data = await recordGrant(sourceId, grant);
+    revalidatePath("/repurpose");
+    return { ok: true, data };
+  } catch (error) {
+    const detail = (error as EngineError)?.detail as
+      | { problems?: { code: string; message: string }[] }
+      | undefined;
+    const problems = detail?.problems;
+    return {
+      ok: false,
+      error: problems?.length ? "This grant is not usable as recorded." : message(error),
+      blockers: problems,
+    };
+  }
+}
+
+/** Refuse a clip, durably. Discovery re-runs on the same data and would otherwise
+ *  re-propose it tomorrow. */
+export async function rejectClip(sourceId: string): Promise<ActionResult> {
+  try {
+    await dismissClip(sourceId);
+    revalidatePath("/repurpose");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+/** Mark a clip as chosen for the next episode. */
+export async function chooseClip(sourceId: string): Promise<ActionResult> {
+  try {
+    await selectClip(sourceId);
+    revalidatePath("/repurpose");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+
+/**
+ * Score a proposed episode before building it.
+ *
+ * The rights half of the answer is *real* — those grants exist now. The
+ * transformation half is a projection: narration, cuts and the audio bed are
+ * decided by the workflow, so the finished edit is what gets judged. The screen
+ * says which half is which rather than presenting one number, for the same reason
+ * the report itself carries two verdicts.
+ */
+export async function previewEpisode(
+  timeline: TimelineRequest,
+): Promise<ActionResult<OriginalityReport>> {
+  try {
+    return { ok: true, data: await evaluateTimeline(timeline) };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+/** Start the repurpose workflow for the selected clips. */
+export async function buildEpisode(input: {
+  topic: string;
+  sourceIds: string[];
+  aspect: "9:16" | "16:9";
+  segmentSeconds: number;
+}): Promise<ActionResult<{ job_id: string }>> {
+  try {
+    const created = await createJob({
+      topic: input.topic,
+      format: input.aspect === "9:16" ? "short" : "long",
+      aspect: input.aspect,
+      workflow: "repurpose",
+      repurpose: {
+        source_ids: input.sourceIds,
+        segment_seconds: input.segmentSeconds,
+        // The description is written by the SEO stage after the gate runs, so
+        // this is a commitment the workflow keeps rather than a fact it checks.
+        attribution_in_description: true,
+      },
+    } as Parameters<typeof createJob>[0]);
+    revalidatePath("/repurpose");
+    return { ok: true, data: created as { job_id: string } };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+
+/**
+ * Sweep TikTok for clips that fit this channel.
+ *
+ * Returns the count rather than the clips: the grid is rendered by a Server
+ * Component reading `getClips`, so `revalidatePath` is what actually puts new
+ * cards on screen and handing them back too would give the page two sources for
+ * the same list.
+ *
+ * `configured` and `connected` do come back, because "found nothing" has three
+ * different causes with three different fixes and the button has to say which.
+ */
+export async function findClips(
+  channelKey = "main",
+): Promise<ActionResult<{ found: number; configured: boolean; connected: boolean }>> {
+  try {
+    const result = await sweepClips(channelKey);
+    revalidatePath("/repurpose");
+    return {
+      ok: true,
+      data: {
+        found: result.clips.length,
+        configured: result.configured,
+        connected: result.connected,
+      },
+    };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+/** Whether TikTok is configured and connected. Two separate answers. */
+export async function tiktokStatus(): Promise<ActionResult<TikTokStatus>> {
+  const data = await getTikTokStatus();
+  if (!data) return { ok: false, error: "the engine did not answer" };
+  return { ok: true, data };
+}
+
+/**
+ * Start the TikTok consent round trip.
+ *
+ * Returns the URL for the browser to navigate to. A Server Action following the
+ * redirect would authorise the server rather than the person at the keyboard.
+ */
+export async function startTikTokConnection(): Promise<ActionResult<{ url: string }>> {
+  try {
+    return { ok: true, data: await beginTikTokAuth() };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
 }

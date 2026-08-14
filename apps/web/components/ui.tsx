@@ -90,11 +90,25 @@ export function Delta({ value, suffix = "%" }: { value: number; suffix?: string 
   );
 }
 
-export function Empty({ title, hint }: { title: string; hint: string }) {
+/** An empty state, optionally offering the action that would fill it.
+ *
+ * `children` exists because a screen that tells you it has nothing and gives you
+ * no way to get something is a dead end — which is exactly what Repurpose was:
+ * "nothing has been swept in yet" above no button that sweeps. */
+export function Empty({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint: string;
+  children?: ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center justify-center rounded-[var(--radius-card)] border border-dashed border-[var(--color-line)] py-20 text-center">
       <p className="text-[15px] font-semibold">{title}</p>
       <p className="mt-1.5 max-w-sm text-[13px] text-[var(--color-faint)]">{hint}</p>
+      {children && <div className="mt-5">{children}</div>}
     </div>
   );
 }

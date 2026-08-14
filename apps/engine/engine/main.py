@@ -30,6 +30,7 @@ from engine.api.insights import RECORDS
 from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
+from engine.api.repurpose import router as repurpose_router
 from engine.api.setup import router as setup_router
 from engine.api.style import router as style_router
 from engine.api.thumbnails import router as thumbnails_router
@@ -95,6 +96,7 @@ app.include_router(insights_router)
 app.include_router(channels_router)
 app.include_router(models_router)
 app.include_router(setup_router)
+app.include_router(repurpose_router)
 app.include_router(style_router)
 app.include_router(thumbnails_router)
 app.add_middleware(
@@ -154,6 +156,40 @@ async def _channel_disconnected(
     )
 
 
+class RepurposeInputs(BaseModel):
+    """What the `repurpose` workflow needs beyond a topic.
+
+    Nested rather than flattened onto `JobRequest`: these eleven fields are
+    meaningless to the Create screen, and hanging them off the request every
+    generation reads would make the common case harder to see than the rare one.
+
+    `source_ids` is the only required field, and it is required by
+    `RightsStage` rather than here — a validator that rejected an empty list would
+    produce a 422 saying "field required" where the workflow produces "no clips
+    selected — pick at least one on the Repurpose screen".
+    """
+
+    source_ids: list[str] = Field(default_factory=list)
+    #: Where each clip's media can be fetched. Lane A only; every other lane
+    #: supplies media by its own route. Keyed by source id.
+    media_urls: dict[str, str] = Field(default_factory=dict)
+    project_id: str = ""
+    platform: str = "youtube"
+    segment_seconds: float = 20.0
+    #: Set by the assemble step once it has replaced the source bed. Non-negotiable
+    #: for anything with source footage — TikTok's music licences do not extend to
+    #: YouTube — so the gate blocks when it is false.
+    audio_bed_replaced: bool = False
+    attribution_on_screen: bool = False
+    attribution_in_description: bool = False
+    annotated: bool = False
+    cut_count: int = 0
+    #: Stretches of our own footage in the finished timeline, as durations. What
+    #: makes an edit more than the clips it quotes.
+    original_segments: list[dict] = Field(default_factory=list)
+    thesis: str = ""
+
+
 class JobRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=300)
     format: str = Field(default="short", pattern="^(short|long)$")
@@ -161,6 +197,10 @@ class JobRequest(BaseModel):
     workflow: str = "video"
     voice: str | None = None
     target_seconds: int | None = None
+    #: Present only for `workflow="repurpose"`. Flattened into the job's inputs by
+    #: `create_job`, because stages read `ctx.inputs[...]` flat and threading a
+    #: nested dict through every one of them would buy nothing.
+    repurpose: RepurposeInputs | None = None
 
 
 class EditRequest(BaseModel):
@@ -247,6 +287,13 @@ async def create_job(body: JobRequest) -> dict:
     job_id = uuid.uuid4().hex[:12]
     wake = asyncio.Event()
     inputs = body.model_dump()
+
+    # Flattened, because stages read `ctx.inputs[...]` flat and threading a nested
+    # dict through every one of them would buy nothing. Popped rather than left
+    # alongside, so there is one place a stage can read `source_ids` from and no
+    # question about which wins.
+    repurpose_inputs = inputs.pop("repurpose", None) or {}
+    inputs.update(repurpose_inputs)
     # Feed confirmed channel learnings into every new generation automatically.
     # The Create screen should not need a hidden toggle for the core promise of the
     # product: each researched, published and measured video improves the next one.
@@ -684,7 +731,7 @@ def _output_model(job: dict, *stages: str) -> str:
 
 
 def _published_record(job: dict) -> VideoRecord | None:
-    if job.get("workflow").name != "publish" or job.get("status") != "completed":
+    if not job.get("workflow").name.endswith("publish") or job.get("status") != "completed":
         return None
 
     video_id = _output_value(job, "upload")
@@ -729,7 +776,50 @@ def _published_record(job: dict) -> VideoRecord | None:
         # `getattr(..., [])` hid it. Carried as plain dicts so the record survives
         # the JSON column unchanged.
         beats=_published_beats(job),
+        # Repurpose provenance, carried through so the feedback loop can attribute
+        # a clip channel's performance to the decisions that made it: which rights
+        # lane, whose clips, and whether the edit teased its hook. All empty for a
+        # from-scratch video, which is what keeps them out of the comparison until
+        # there are enough repurposed videos to compare.
+        **_repurpose_provenance(job),
     )
+
+
+def _repurpose_provenance(job: dict) -> dict:
+    """The repurpose dimensions for a published video, or blanks.
+
+    `clip_source` is the *creator*, not the clip id — an id is unique per clip, so
+    grouping on it would put every video in a group of one and `analyze` would drop
+    all of them. The question worth answering is whose clips perform.
+
+    Several creators in one episode is recorded as a sorted join rather than
+    picking one. A compilation is not attributable to any single source, and
+    silently crediting the first would make the strongest signal in the table a
+    lie about which clips did the work.
+    """
+    states = job.get("states", {})
+
+    def value(name: str, default=None):
+        state = states.get(name)
+        return state.output.value if state is not None and state.output else default
+
+    cleared = value("rights")
+    if cleared is None:
+        return {}
+
+    grants = getattr(cleared, "grants", {}) or {}
+    lanes = sorted({g.lane.value for g in grants.values()})
+
+    cuts = value("segment")
+    hook = getattr(cuts, "hook", None) if cuts is not None else None
+
+    handles = sorted({h for h in (getattr(cleared, "handles", {}) or {}).values() if h})
+
+    return {
+        "clip_lane": "+".join(lanes),
+        "clip_source": "+".join(handles),
+        "hook_teased": "teased" if (hook or {}).get("teased") else "in-order",
+    }
 
 
 def _published_beats(job: dict) -> list[dict]:
@@ -1009,8 +1099,16 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
 
     if source["status"] != "completed":
         raise HTTPException(409, f"job is {source['status']}; only a completed job can publish")
-    if source["workflow"].name != "video":
-        raise HTTPException(409, f"job ran the '{source['workflow'].name}' workflow, not 'video'")
+    # Two workflows produce a publishable video, and each has its own publish
+    # extension: the publish stages depend on stages from the producing workflow by
+    # name, so they cannot be shared across graphs that do not have them.
+    publish_workflows = {"video": "publish", "repurpose": "repurpose-publish"}
+    if source["workflow"].name not in publish_workflows:
+        raise HTTPException(
+            409,
+            f"job ran the '{source['workflow'].name}' workflow; only "
+            f"{' or '.join(sorted(publish_workflows))} produce a publishable video",
+        )
 
     # Idempotent unless explicitly overridden. Nothing checked for an existing
     # publish job, and the source stays `completed` while the web Publish button
@@ -1072,7 +1170,7 @@ async def publish_job(job_id: str, body: PublishRequest, force: bool = False) ->
             f"an upload costs {ledger.cost_of('videos.insert')}",
         )
 
-    wf = video.get("publish")
+    wf = video.get(publish_workflows[source["workflow"].name])
     publish_id = uuid.uuid4().hex[:12]
     wake = asyncio.Event()
 
@@ -1206,6 +1304,11 @@ def _video_state(job_id: str, job: dict) -> automation.VideoState:
         render_ok=bool(value("render")),
         title=titles[0].text if titles else "",
         critique_severity=_severity_of(critique),
+        # None for a video built from no clips at all — the ordinary case, and not
+        # a failure. A wholly original video has nothing for that gate to judge,
+        # and inventing a passing report for it would be the wrong default in the
+        # one direction that matters.
+        originality=value("originality"),
     )
 
 
@@ -1232,7 +1335,7 @@ def _refuse_ungated_upload(job: dict, stage: str) -> None:
     thumbnail or caption is cheap, deterministic, and exactly what the Queue's
     per-step retry is for.
     """
-    if job["workflow"].name != "publish":
+    if not job["workflow"].name.endswith("publish"):
         return
     affected = [stage, *job["workflow"].dependents_of(stage)]
     if "upload" not in affected:
@@ -1502,7 +1605,16 @@ _SERVABLE = {
 #: Kept honest by `test_every_written_prefix_is_either_servable_or_deliberately_not`:
 #: guessing these ("subtitles/", "audio/") silently 404'd the real `captions/` and
 #: `voiceover/` output, which is a dead link rather than an error anyone would see.
-_SERVABLE_ROOTS = ("thumbnails/", "renders/", "captions/", "voiceover/")
+# `repurpose/` holds finished repurposed videos and their commentary tracks — our
+# output, and the Library needs to play them, exactly like `renders/`.
+#
+# `clips/` is deliberately absent and must stay that way. That is where acquired
+# third-party footage lands, and it is `materials/`'s argument with more force:
+# the licence to use a clip inside our edit is not a licence to redistribute the
+# original from an unauthenticated endpoint. It would also turn the rights ledger
+# into decoration — anything cleared for one video would be publicly downloadable
+# from that moment on.
+_SERVABLE_ROOTS = ("thumbnails/", "renders/", "captions/", "voiceover/", "repurpose/")
 
 
 @app.get("/v1/files/{key:path}")

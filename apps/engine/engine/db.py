@@ -123,7 +123,9 @@ def engine() -> AsyncEngine:
         # SQLite has no connection pool worth configuring and rejects the
         # Postgres-shaped arguments below outright.
         _ensure_parent_dir(url)
-        return create_async_engine(url, future=True)
+        sqlite = create_async_engine(url, future=True)
+        _enforce_foreign_keys(sqlite)
+        return sqlite
 
     return create_async_engine(
         url,
@@ -134,6 +136,33 @@ def engine() -> AsyncEngine:
         pool_pre_ping=True,  # a recycled container leaves dead sockets in the pool
         future=True,
     )
+
+
+def _enforce_foreign_keys(sqlite_engine: AsyncEngine) -> None:
+    """Turn on SQLite's foreign key checks, which are off by default.
+
+    Every `ForeignKey` in `tables.py` was decoration on SQLite and a real
+    constraint on Postgres — so dev and CI disagreed about what the schema *is*.
+    That is not a theoretical gap: a test wrote a `repurpose_projects.job_id`
+    pointing at a job that did not exist, passed locally against SQLite for the
+    length of a feature branch, and failed the moment CI ran it against Postgres.
+    The Postgres error then poisoned the connection and took sixteen unrelated
+    tests down with it, so one silent write surfaced as a suite that looked broken
+    everywhere except where the bug was.
+
+    Enabled per connection because SQLite scopes the pragma that way — there is no
+    database-level setting, and a connection that misses it silently stops
+    enforcing.
+    """
+    from sqlalchemy import event
+
+    @event.listens_for(sqlite_engine.sync_engine, "connect")
+    def _set_pragma(dbapi_connection, _record):  # pragma: no cover - driver callback
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
 
 
 def _ensure_parent_dir(url: str) -> None:

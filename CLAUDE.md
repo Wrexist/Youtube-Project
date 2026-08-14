@@ -71,10 +71,28 @@ npm start                                   # both halves, one command — what 
 docker compose up -d                        # postgres + redis
 npm run dev                                 # web on :3000 (one half only)
 apps/engine/.venv/bin/python -m uvicorn engine.main:app --reload --port 8080
-apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
+apps/engine/.venv/bin/python -m pytest apps/engine/tests -q   # SQLite — not what CI runs
 cd apps/engine && .venv/bin/python -m alembic upgrade head   # schema — see below
 apps/engine/.venv/bin/python -m arq engine.worker.WorkerSettings   # render worker + weekly review cron
 ```
+
+**A green SQLite run is not a green CI run.** CI runs the suite against **Postgres**,
+and the two disagree about things that matter: SQLite ignores foreign keys unless the
+pragma is set, and aiosqlite tolerates a connection pool shared across two event loops
+where asyncpg refuses. Both differences have shipped red CI on work that passed
+locally — see `KNOWN-ISSUES.md` §4.9 and §4.10. Before pushing anything that touches
+persistence or adds an endpoint test:
+
+```bash
+initdb -D /var/tmp/pgdata -A trust -U postgres          # once
+pg_ctl -D /var/tmp/pgdata -o '-p 55432 -h 127.0.0.1' start
+createdb -h 127.0.0.1 -p 55432 -U postgres studio_test
+STUDIO_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:55432/studio_test \
+  apps/engine/.venv/bin/python -m pytest apps/engine/tests -q
+```
+
+Postgres refuses to run as root, so `su postgres -c '...'` each command if you are.
+Seven minutes, and it is the only way to see what CI sees.
 
 **Migrate from `apps/engine`, not from the repo root.** `database_url` defaults to
 `sqlite+aiosqlite:///./storage/studio.db` — a *relative* path — and `npm start` runs

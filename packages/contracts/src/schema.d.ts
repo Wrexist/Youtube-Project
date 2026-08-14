@@ -1072,6 +1072,230 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/repurpose/auth/tiktok": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Begin Tiktok Auth
+         * @description Where the browser goes to connect a TikTok account for Lane A.
+         *
+         *     Returns the URL rather than redirecting, for the reason `beginYouTubeAuth`
+         *     already documents: a server following the redirect would authorise the server
+         *     rather than the person sitting in front of it.
+         *
+         *     `state` is remembered and checked on the way back. Without that the callback
+         *     accepts a code from anywhere, which is the standard OAuth CSRF: an attacker
+         *     walks a victim through a link that connects the *attacker's* TikTok to the
+         *     victim's install, and every clip swept afterwards is the attacker's.
+         */
+        get: operations["begin_tiktok_auth_v1_repurpose_auth_tiktok_get"];
+        put?: never;
+        post?: never;
+        /** Disconnect Tiktok */
+        delete: operations["disconnect_tiktok_v1_repurpose_auth_tiktok_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/auth/tiktok/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tiktok Callback
+         * @description Where TikTok sends the browser back.
+         *
+         *     Always redirects to the Setup screen rather than returning JSON: the thing at
+         *     the other end of this is a browser tab a person is looking at, and a page of
+         *     JSON is not an answer to "did that work". The outcome rides in the query
+         *     string so the screen can say which.
+         */
+        get: operations["tiktok_callback_v1_repurpose_auth_tiktok_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/auth/tiktok/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tiktok Status
+         * @description Whether an account is connected, without touching a credential.
+         *
+         *     `load_tiktok_account` deliberately does not return the refresh token — a
+         *     status endpoint has no business handling one.
+         */
+        get: operations["tiktok_status_v1_repurpose_auth_tiktok_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/clips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Clips
+         * @description Discovered clips for a channel, best fit first.
+         *
+         *     Each carries its grant, because the rights chip is what decides whether the
+         *     card is usable at all and a second round trip per card to find that out would
+         *     make the grid useless.
+         */
+        get: operations["clips_v1_repurpose_clips_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/clips/{source_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss
+         * @description Refuse a clip, durably.
+         *
+         *     Kept rather than deleted: discovery re-runs on the same trend data and would
+         *     cheerfully re-propose it tomorrow.
+         */
+        post: operations["dismiss_v1_repurpose_clips__source_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/clips/{source_id}/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Grant
+         * @description Record how a clip may be used.
+         *
+         *     Refuses to store a grant that is already invalid — a lane with no grantor, a
+         *     licence with no evidence. Catching it here rather than at build time means the
+         *     operator finds out while they still have the DM open, instead of forty minutes
+         *     into a render.
+         */
+        post: operations["record_grant_v1_repurpose_clips__source_id__grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/clips/{source_id}/select": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select */
+        post: operations["select_v1_repurpose_clips__source_id__select_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover
+         * @description Lane A: sweep the operator's own TikToks, score them for this channel.
+         *
+         *     **Only their own.** TikTok's Display API returns the authenticated user's
+         *     content and nothing else, and the Research API is closed to non-academics, so
+         *     there is no endpoint here that sweeps other creators — see
+         *     `providers/tiktok.py`. Lane B material does not arrive this way at all: a
+         *     campaign supplies its own source and its own rules.
+         *
+         *     Three distinct not-working states, reported distinctly because they have three
+         *     different fixes: credentials unset, nobody signed in, and a connection that has
+         *     expired. Collapsing them into an empty list is how "it shows nothing" becomes
+         *     unanswerable.
+         */
+        post: operations["discover_v1_repurpose_discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/repurpose/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evaluate Timeline
+         * @description Score a proposed edit against both gates, before building it.
+         *
+         *     Cheap and side-effect free on purpose. The same evaluation runs as a stage in
+         *     the workflow, but an operator assembling an episode should be able to see
+         *     "62% authored, longest lift 11s" *while* they drag segments around — finding
+         *     out after a render that the edit was never going to pass is the failure this
+         *     endpoint exists to prevent.
+         */
+        post: operations["evaluate_timeline_v1_repurpose_evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/setup": {
         parameters: {
             query?: never;
@@ -1427,6 +1651,45 @@ export interface components {
             /** Was */
             was: string | null;
         };
+        /** ClipOut */
+        ClipOut: {
+            /** Acquired */
+            acquired: boolean;
+            /** Caption */
+            caption: string;
+            /** Cleared */
+            cleared: boolean;
+            /** Creator Handle */
+            creator_handle: string;
+            /** Duration S */
+            duration_s: number;
+            /** External Id */
+            external_id: string;
+            /** Fit Reasons */
+            fit_reasons: string[];
+            /** Fit Score */
+            fit_score: number;
+            grant: components["schemas"]["GrantOut"] | null;
+            /** Hashtags */
+            hashtags: string[];
+            /** Id */
+            id: string;
+            /** Platform */
+            platform: string;
+            /** Stats */
+            stats: {
+                [key: string]: unknown;
+            };
+            /** Status */
+            status: string;
+            /** Url */
+            url: string;
+        };
+        /** Clips */
+        Clips: {
+            /** Clips */
+            clips: components["schemas"]["ClipOut"][];
+        };
         /**
          * CredentialStatus
          * @description One credential, as the setup screen sees it. Never carries the value.
@@ -1481,12 +1744,114 @@ export interface components {
             /** Warnings */
             warnings: number;
         };
+        /**
+         * DiscoverRequest
+         * @description Sweep Lane A for clips worth building from.
+         *
+         *     No `access_token` field, deliberately. It used to take one in the body, which
+         *     made the caller responsible for a credential that expires every 24 hours —
+         *     so the obvious client caches it and the sweep starts failing the next day for
+         *     a reason invisible from the outside. The token now comes from the stored
+         *     account and is refreshed on the way out.
+         */
+        DiscoverRequest: {
+            /**
+             * Channel Key
+             * @default main
+             */
+            channel_key: string;
+            /**
+             * Limit
+             * @default 40
+             */
+            limit: number;
+        };
+        /** Discovered */
+        Discovered: {
+            /** Based On */
+            based_on: string[];
+            /** Clips */
+            clips: components["schemas"]["ClipOut"][];
+            /** Configured */
+            configured: boolean;
+            /**
+             * Connected
+             * @default false
+             */
+            connected: boolean;
+        };
         /** EditRequest */
         EditRequest: {
             /** Stage */
             stage: string;
             /** Value */
             value: unknown;
+        };
+        /**
+         * GrantIn
+         * @description Authority to use a clip, as the rights panel submits it.
+         */
+        GrantIn: {
+            /**
+             * Evidence Kind
+             * @default
+             */
+            evidence_kind: string;
+            /**
+             * Evidence Ref
+             * @default
+             */
+            evidence_ref: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /**
+             * Grantor
+             * @default
+             */
+            grantor: string;
+            lane: components["schemas"]["Lane"];
+            /** Platforms */
+            platforms?: string[];
+            /**
+             * Rules
+             * @default
+             */
+            rules: string;
+        };
+        /**
+         * GrantOut
+         * @description A stored grant, with what is wrong with it already worked out.
+         *
+         *     The problems travel with the grant so the rights panel never has to decide for
+         *     itself what a lapsed licence means — that judgement lives in one place.
+         */
+        GrantOut: {
+            /** Cleared */
+            cleared: boolean;
+            /** Evidence Kind */
+            evidence_kind: string;
+            /** Evidence Ref */
+            evidence_ref: string;
+            /** Expires At */
+            expires_at: string | null;
+            /** Granted At */
+            granted_at: string | null;
+            /** Grantor */
+            grantor: string;
+            /** Id */
+            id: number | null;
+            /** Lane */
+            lane: string;
+            /** Needs Attribution */
+            needs_attribution: boolean;
+            /** Platforms */
+            platforms: string[];
+            /** Problems */
+            problems: components["schemas"]["ProblemOut"][];
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Rules */
+            rules: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1505,6 +1870,7 @@ export interface components {
              * @default short
              */
             format: string;
+            repurpose?: components["schemas"]["RepurposeInputs"] | null;
             /** Target Seconds */
             target_seconds?: number | null;
             /** Topic */
@@ -1568,6 +1934,15 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /**
+         * Lane
+         * @description How a clip came to be usable.
+         *
+         *     Ordered by how much friction stands between discovering a clip and building
+         *     with it, which is also — not coincidentally — the order to build them in.
+         * @enum {string}
+         */
+        Lane: "own" | "campaign" | "licensed" | "commentary" | "open_licence";
         /** LaunchRequest */
         LaunchRequest: {
             /**
@@ -1674,6 +2049,15 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** ProblemOut */
+        ProblemOut: {
+            /** Code */
+            code: string;
+            /** Fatal */
+            fatal: boolean;
+            /** Message */
+            message: string;
+        };
         /**
          * PublishRequest
          * @description Choices the operator makes at the approval gate.
@@ -1746,6 +2130,96 @@ export interface components {
             /** Instruction */
             instruction: string;
         };
+        /**
+         * ReportOut
+         * @description Both verdicts, never blended.
+         *
+         *     Declared rather than returned as a bare `dict`: the response model is what
+         *     `packages/contracts` generates from, and an endpoint typed `-> dict` produces a
+         *     TypeScript type of `Record<string, never>` — which is worse than no type,
+         *     because the screen then hand-writes the shape it expects and CLAUDE.md forbids
+         *     exactly that.
+         */
+        ReportOut: {
+            /** Headline */
+            headline: string;
+            /** Publishable */
+            publishable: boolean;
+            rights: components["schemas"]["RightsVerdictOut"];
+            /** Thresholds Version */
+            thresholds_version: number;
+            transformation: components["schemas"]["TransformationVerdictOut"];
+        };
+        /**
+         * RepurposeInputs
+         * @description What the `repurpose` workflow needs beyond a topic.
+         *
+         *     Nested rather than flattened onto `JobRequest`: these eleven fields are
+         *     meaningless to the Create screen, and hanging them off the request every
+         *     generation reads would make the common case harder to see than the rare one.
+         *
+         *     `source_ids` is the only required field, and it is required by
+         *     `RightsStage` rather than here — a validator that rejected an empty list would
+         *     produce a 422 saying "field required" where the workflow produces "no clips
+         *     selected — pick at least one on the Repurpose screen".
+         */
+        RepurposeInputs: {
+            /**
+             * Annotated
+             * @default false
+             */
+            annotated: boolean;
+            /**
+             * Attribution In Description
+             * @default false
+             */
+            attribution_in_description: boolean;
+            /**
+             * Attribution On Screen
+             * @default false
+             */
+            attribution_on_screen: boolean;
+            /**
+             * Audio Bed Replaced
+             * @default false
+             */
+            audio_bed_replaced: boolean;
+            /**
+             * Cut Count
+             * @default 0
+             */
+            cut_count: number;
+            /** Media Urls */
+            media_urls?: {
+                [key: string]: string;
+            };
+            /** Original Segments */
+            original_segments?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Platform
+             * @default youtube
+             */
+            platform: string;
+            /**
+             * Project Id
+             * @default
+             */
+            project_id: string;
+            /**
+             * Segment Seconds
+             * @default 20
+             */
+            segment_seconds: number;
+            /** Source Ids */
+            source_ids?: string[];
+            /**
+             * Thesis
+             * @default
+             */
+            thesis: string;
+        };
         /** RerunRequest */
         RerunRequest: {
             /** Stage */
@@ -1779,6 +2253,17 @@ export interface components {
             video_count: number;
             /** Worth Reading */
             worth_reading: boolean;
+        };
+        /** RightsVerdictOut */
+        RightsVerdictOut: {
+            /** Cleared */
+            cleared: boolean;
+            /** Problems */
+            problems: {
+                [key: string]: components["schemas"]["ProblemOut"][];
+            };
+            /** Ungranted */
+            ungranted: string[];
         };
         /** RouteUpdate */
         RouteUpdate: {
@@ -1815,6 +2300,25 @@ export interface components {
             at: string;
             /** Video Id */
             video_id: string;
+        };
+        /** SegmentIn */
+        SegmentIn: {
+            /**
+             * Annotated
+             * @default false
+             */
+            annotated: boolean;
+            /** End S */
+            end_s: number;
+            /**
+             * Narrated
+             * @default false
+             */
+            narrated: boolean;
+            /** Source Id */
+            source_id?: string | null;
+            /** Start S */
+            start_s: number;
         };
         /** SetupStatus */
         SetupStatus: {
@@ -1876,6 +2380,19 @@ export interface components {
             note: string | null;
             /** Video Id */
             video_id: string;
+        };
+        /** SignalOut */
+        SignalOut: {
+            /** Message */
+            message: string;
+            /** Name */
+            name: string;
+            /** Severity */
+            severity: string;
+            /** Threshold */
+            threshold: number | null;
+            /** Value */
+            value: number | null;
         };
         /**
          * Spend
@@ -2017,6 +2534,103 @@ export interface components {
             cost_per_generation: number;
             /** Variants */
             variants: components["schemas"]["Variant"][];
+        };
+        /**
+         * TikTokAccountOut
+         * @description A connected account, as the Setup screen reads it.
+         *
+         *     Carries no credential. The refresh token is never returned by any endpoint —
+         *     a status read has no business handling one.
+         */
+        TikTokAccountOut: {
+            /** Connected */
+            connected: boolean;
+            /** Expires At */
+            expires_at: string | null;
+            /** Handle */
+            handle: string;
+            /** Key */
+            key: string;
+            /** Open Id */
+            open_id: string;
+            /** Refresh Expires At */
+            refresh_expires_at: string | null;
+            /** Scope */
+            scope: string;
+        };
+        /**
+         * TikTokStatusOut
+         * @description Configured and connected are separate answers.
+         *
+         *     An install can have both keys and nobody signed in, and the fix differs: one
+         *     is a `.env` edit, the other is a button. Declared rather than returned as a
+         *     bare `dict` for the reason `ReportOut` records — `-> dict` generates
+         *     `Record<string, never>` in TypeScript, which pushes the screen into
+         *     hand-writing the shape CLAUDE.md forbids.
+         */
+        TikTokStatusOut: {
+            account: components["schemas"]["TikTokAccountOut"] | null;
+            /** Configured */
+            configured: boolean;
+        };
+        /** TimelineIn */
+        TimelineIn: {
+            /**
+             * Attribution In Description
+             * @default false
+             */
+            attribution_in_description: boolean;
+            /**
+             * Attribution On Screen
+             * @default false
+             */
+            attribution_on_screen: boolean;
+            /**
+             * Audio Bed Replaced
+             * @default false
+             */
+            audio_bed_replaced: boolean;
+            /**
+             * Compared Against
+             * @default 0
+             */
+            compared_against: number;
+            /**
+             * Cuts
+             * @default 0
+             */
+            cuts: number;
+            /**
+             * Is Compilation
+             * @default false
+             */
+            is_compilation: boolean;
+            /**
+             * Max Similarity
+             * @default 0
+             */
+            max_similarity: number;
+            /** Segments */
+            segments?: components["schemas"]["SegmentIn"][];
+            /**
+             * Structure Repeats
+             * @default 0
+             */
+            structure_repeats: number;
+            /**
+             * Template Repeats
+             * @default 0
+             */
+            template_repeats: number;
+            /** Watermarked Sources */
+            watermarked_sources?: string[];
+        };
+        /** TransformationVerdictOut */
+        TransformationVerdictOut: {
+            /** Passed */
+            passed: boolean;
+            /** Signals */
+            signals: components["schemas"]["SignalOut"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -3572,6 +4186,303 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuotaResponse"];
+                };
+            };
+        };
+    };
+    begin_tiktok_auth_v1_repurpose_auth_tiktok_get: {
+        parameters: {
+            query?: {
+                redirect_uri?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disconnect_tiktok_v1_repurpose_auth_tiktok_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    tiktok_callback_v1_repurpose_auth_tiktok_callback_get: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+                error?: string;
+                error_description?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tiktok_status_v1_repurpose_auth_tiktok_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TikTokStatusOut"];
+                };
+            };
+        };
+    };
+    clips_v1_repurpose_clips_get: {
+        parameters: {
+            query?: {
+                channel_key?: string;
+                status?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Clips"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_v1_repurpose_clips__source_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_grant_v1_repurpose_clips__source_id__grant_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_v1_repurpose_clips__source_id__select_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_v1_repurpose_discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiscoverRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Discovered"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluate_timeline_v1_repurpose_evaluate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TimelineIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

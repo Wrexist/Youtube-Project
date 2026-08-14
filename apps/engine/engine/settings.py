@@ -145,6 +145,21 @@ class Settings(BaseSettings):
     google_client_id: str = Field(default="", validation_alias="GOOGLE_CLIENT_ID")
     google_client_secret: str = Field(default="", validation_alias="GOOGLE_CLIENT_SECRET")
 
+    # TikTok, for Lane A only — the Display API returns the authenticated user's
+    # own posts and nothing else. There is no credential here that would unlock
+    # other people's video, because TikTok issues no such credential.
+    # Unprefixed, like every other third-party credential here — `validation_alias`
+    # overrides `env_prefix`, so `STUDIO_TIKTOK_CLIENT_KEY` reads as unset. Worth
+    # stating because two error messages named the prefixed form and would have
+    # sent an operator to set a variable nothing reads.
+    tiktok_client_key: str = Field(default="", validation_alias="TIKTOK_CLIENT_KEY")
+    tiktok_client_secret: str = Field(default="", validation_alias="TIKTOK_CLIENT_SECRET")
+    #: Where trending terms come from. Configured rather than fixed because
+    #: Creative Center has no documented public API — point this at a proxy, an
+    #: export, or a cache. Empty means the freshness component scores zero, which
+    #: is honest, rather than being invented.
+    tiktok_trends_url: str = Field(default="", validation_alias="TIKTOK_TRENDS_URL")
+
 
 @lru_cache
 def get_settings() -> Settings:
