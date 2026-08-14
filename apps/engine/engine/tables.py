@@ -182,6 +182,31 @@ class BacklogIdea(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class KeywordSnapshot(Base):
+    """The autocomplete terms seen for a seed, the last time trend monitoring polled it.
+
+    `engine.trending.rising_autocomplete_terms` is what "a query is newly moving"
+    means in this codebase: today's `research.keywords.suggest()` output for a seed,
+    diffed against whatever this table held for that seed last time. One row per
+    seed, overwritten on each poll — history is not kept because only "what did we
+    see last time" is ever read; a row-per-poll table would grow forever for a
+    source meant to run on every backlog build.
+
+    `seed` is unique for the same reason `BacklogIdea.topic` is: two pollers racing
+    on the same niche should update one row, not create a duplicate the next diff
+    never looks at.
+    """
+
+    __tablename__ = "keyword_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    seed: Mapped[str] = mapped_column(String(300), unique=True, index=True)
+    #: A JSON array of strings, not a JSON object — the whole point is "the exact
+    #: list seen last time", and wrapping it would only add a key nothing reads.
+    terms: Mapped[list] = mapped_column(JSON, default=list)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class TikTokAccount(Base):
     """A connected TikTok account, for Lane A.
 

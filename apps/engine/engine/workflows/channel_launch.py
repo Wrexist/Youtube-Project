@@ -13,6 +13,7 @@ real search queries and the channels already ranking in the niche, not invented.
 from __future__ import annotations
 
 from engine import channel as ch
+from engine import trending
 from engine.ideas import build_backlog_async
 from engine.providers import llm
 from engine.providers.llm import DEFAULT_OLLAMA_URL
@@ -300,6 +301,15 @@ Return: {{"topics": [str]}}""",
             max_tokens=3000,
         )
 
+        # FIX-TASKS E3: the same niche seed and (if the launch already has one) the
+        # same YouTube client the grounding stage used, so a brand-new channel's
+        # first thirty ideas are not scored with freshness pinned at zero just
+        # because nothing supplied `trending_terms` yet.
+        trending_terms = await trending.gather_trending_terms(
+            youtube_client=ctx.inputs.get("youtube_client"),
+            seed=ctx.inputs["niche"],
+        )
+
         # Runs through the same duplicate detection as every other backlog — a fresh
         # channel is exactly where thirty near-identical ideas would slip through.
         # Ollama embedding check is used when available; falls back to Jaccard-only.
@@ -307,6 +317,7 @@ Return: {{"topics": [str]}}""",
             result["topics"],
             published_topics=[],
             suggestions=evidence.suggestions,
+            trending_terms=trending_terms,
             ollama_base_url=DEFAULT_OLLAMA_URL,
         )
         return StageOutput(
@@ -315,7 +326,10 @@ Return: {{"topics": [str]}}""",
             provenance=Provenance(
                 model=completion.model,
                 prompt=completion.prompt,
-                params={"rejected_duplicates": sum(1 for i in ideas if i.duplicate_of)},
+                params={
+                    "rejected_duplicates": sum(1 for i in ideas if i.duplicate_of),
+                    "trending_terms": len(trending_terms),
+                },
             ),
         )
 

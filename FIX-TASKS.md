@@ -410,6 +410,29 @@ and the swap is recorded in a form the insights module can read.
 **Done when:** `freshness` is non-zero for a real trending topic and the run planner
 demonstrably prioritises it.
 
+**Status: done (2026-08-14).** `engine/trending.py` combines two independently-
+degrading signals: `youtube_trending_terms` (a new `YouTube.trending()` method in
+`providers/youtube.py`, `videos.list?chart=mostPopular`, 1 quota unit — reuses the
+existing `"videos.list"` cost entry) and `rising_autocomplete_terms` (today's
+`research.keywords.suggest()` for a seed, diffed against a new `KeywordSnapshot`
+table — one row per seed, holding what was seen last poll; migration
+`b6a4f8d1c72e`). Wired into both places `build_backlog_async` is actually called:
+`workflows/channel_launch.py`'s `BacklogStage` (seed = the niche, client = the
+launch's own YouTube client if one exists) and `api/ideas.py`'s `_score` (seed =
+the channel's most recent published topic, client = the connected channel via the
+same `CHANNELS.get("default")` lookup `api/channels.py` already uses). Either
+signal missing — no client, no seed, no prior snapshot, an unreachable API —
+degrades to `[]` rather than raising, the same contract `providers/tiktok.py`'s
+pre-existing `trends()` (a Lane-A-only, unrelated source) already established.
+
+`test_automation.py::test_a_genuinely_trending_topic_jumps_the_queue` is the
+literal "done when": three ideas with identical demand and fit, only one with a
+trending match, and `plan_week` schedules it first despite it being listed last in
+the input. 27 new tests total (`test_trending.py` plus the one above). Full
+engine suite: 1309 passed / 1 skipped against SQLite, and against real Postgres
+identically — except two pre-existing, unrelated files failing when run
+together; see KNOWN-ISSUES.md §4.9. `ruff check`/`format` clean.
+
 ---
 
 ## Suggested order

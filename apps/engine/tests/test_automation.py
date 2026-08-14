@@ -266,3 +266,23 @@ def test_duplicates_never_reach_a_run_plan():
     plan = plan_week(series(), ideas, SpendLedger(), BudgetPolicy())
     topics = [i.topic for i in plan.to_generate]
     assert "the reason bridges collapse" not in topics
+
+
+def test_a_genuinely_trending_topic_jumps_the_queue():
+    """FIX-TASKS E3's target: freshness bought from `trending_terms` is not just a
+    number shown on the idea card, it is what `plan_week` (via `next_up`) actually
+    schedules first.
+
+    Demand is 0 for all three (no suggestions) and fit is 0 for all three (no
+    published topics), so only "why bridges collapse" has a nonzero freshness
+    component — if the run planner ignored `trending_terms`, every idea would tie
+    on score and the input order (it is listed last, below) would win instead.
+    """
+    ideas = build_backlog(
+        ["how salt built cities", "how glass is made", "why bridges collapse"],
+        published_topics=[],
+        suggestions=[],
+        trending_terms=["bridge collapse investigation update"],
+    )
+    plan = plan_week(series(), ideas, SpendLedger(), BudgetPolicy())
+    assert plan.to_generate[0].topic == "why bridges collapse"

@@ -261,6 +261,22 @@ worse failure than a missing package.
 Nested same-quotes in an f-string. Ran fine on the 3.13 venv, would have crashed on
 the 3.11 the project claims to support.
 
+### 4.9 `test_repurpose_workflow.py` + `test_repurpose_endpoint.py` against real Postgres
+CLAUDE.md is right that a green SQLite run is not a green CI run — running these two
+files together against `asyncpg` (not SQLite) produces `3 failed, 16 errors`, most as
+`asyncpg.exceptions._base.InternalClientError: got result for unknown protocol state 3`
+and `Exception terminating connection` from the SQLAlchemy pool. **Pre-existing**, not
+introduced by FIX-TASKS E3 — reproduced identically with E3's changes stashed out via
+`git stash`, on the exact commit this note was added against. Every other file in the
+suite (1309 tests) passes clean against the same Postgres instance; it is specific to
+these two files' interaction, which points at connection-pool/event-loop state leaking
+between them rather than either file being wrong on its own (`test_repurpose_endpoint.py`
+alone was not separately isolated to confirm — recorded as found, not yet root-caused).
+Not fixed here: diagnosing an asyncpg protocol desync between two unrelated test files
+is its own investigation, and blocking E3 on it would hold a working feature hostage to
+a pre-existing gap in a different one. Needs someone with a Postgres instance handy to
+bisect which fixture leaks first.
+
 ---
 
 ## 5. Known-imperfect, working as intended for now

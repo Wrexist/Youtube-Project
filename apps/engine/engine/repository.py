@@ -52,6 +52,7 @@ from engine.tables import (
     ClipGrant,
     ClipSource,
     Job,
+    KeywordSnapshot,
     PerformanceRecord,
     RepurposeProject,
     ReviewSnapshot,
@@ -580,6 +581,38 @@ async def open_backlog_ideas(limit: int = 20) -> list[dict]:
         }
         for r in rows
     ]
+
+
+async def get_keyword_snapshot(seed: str) -> list[str]:
+    """The autocomplete terms seen for `seed` last time trend monitoring polled it.
+
+    `[]` covers three different situations on purpose — persistence disabled, no
+    seed, first-ever poll — because `engine.trending.rising_autocomplete_terms`
+    treats all three the same way: nothing to diff against, so today's terms are
+    all "new".
+    """
+    if not _persistence_enabled() or not seed:
+        return []
+    async with session() as db:
+        row = (
+            await db.execute(select(KeywordSnapshot).where(KeywordSnapshot.seed == seed))
+        ).scalar_one_or_none()
+        return list(row.terms) if row else []
+
+
+async def save_keyword_snapshot(seed: str, terms: list[str]) -> None:
+    """Overwrite what `seed` last saw. One row per seed — see `KeywordSnapshot`."""
+    if not _persistence_enabled() or not seed:
+        return
+    async with session() as db:
+        row = (
+            await db.execute(select(KeywordSnapshot).where(KeywordSnapshot.seed == seed))
+        ).scalar_one_or_none()
+        if row:
+            row.terms = terms
+            row.captured_at = datetime.now(UTC)
+        else:
+            db.add(KeywordSnapshot(seed=seed, terms=terms))
 
 
 async def resolve_backlog_idea(

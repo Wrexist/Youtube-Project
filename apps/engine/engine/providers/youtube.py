@@ -698,6 +698,36 @@ class YouTube:
         raw = items[0].get("contentDetails", {}).get("duration")
         return _parse_iso8601_duration(raw) if raw else None
 
+    async def trending(
+        self,
+        *,
+        region_code: str = "US",
+        category_id: str | None = None,
+        limit: int = 25,
+    ) -> list[str]:
+        """Titles from YouTube's own Trending feed (`chart=mostPopular`).
+
+        1 quota unit — `COSTS["videos.list"]` already covers it, so this shares the
+        operation name rather than needing its own entry. Cheap enough to poll on
+        every backlog build (CLAUDE.md's 10,000/day budget is ~6 uploads; a daily
+        poll here is a rounding error against that).
+
+        Returns titles, not video IDs: `ideas.score_idea` matches `trending_terms`
+        by tokenized word overlap against a topic, and a title ("Why the Baltimore
+        bridge collapsed") is the shape that overlap check wants. An ID is not.
+        """
+        params: dict[str, Any] = {
+            "part": "snippet",
+            "chart": "mostPopular",
+            "regionCode": region_code,
+            "maxResults": min(limit, 50),
+        }
+        if category_id:
+            params["videoCategoryId"] = category_id
+        resp = await self._call("GET", f"{API}/videos", "videos.list", params=params)
+        items = resp.json().get("items", [])
+        return [title for item in items if (title := item.get("snippet", {}).get("title"))]
+
 
 def _parse_iso8601_duration(value: str) -> float | None:
     """Parse the `PT#H#M#S` form the Data API reports durations in.
