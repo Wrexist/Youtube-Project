@@ -726,3 +726,28 @@ async def test_a_missing_alembic_ini_does_not_break_startup(fresh_sqlite, monkey
     monkeypatch.setattr(db, "_stamp_head", lambda conn: None)
     assert await db.ensure_schema() == f"created schema ({_table_count()} tables)"
     assert await _version_rows(fresh_sqlite) == []
+
+
+async def test_sqlite_enforces_the_foreign_keys_postgres_does(database):
+    """Dev and CI must agree about what the schema *is*.
+
+    SQLite ships with foreign key checks off, so every `ForeignKey` in
+    `tables.py` was decoration locally and a real constraint on the Postgres CI
+    runs. A write pointing at a job that did not exist therefore passed for the
+    length of a feature branch and failed the first time CI saw it — and because
+    the Postgres error poisons the connection, one bad write took sixteen
+    unrelated tests down with it and the suite looked broken everywhere except
+    where the bug was.
+
+    Asserted through a real write rather than by reading the pragma back: the
+    pragma is per connection, so checking it on one connection proves nothing
+    about the one the next session gets.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from engine.db import session
+    from engine.tables import RepurposeProject
+
+    with pytest.raises(IntegrityError):
+        async with session() as db_session:
+            db_session.add(RepurposeProject(id="orphan", job_id="no-such-job"))

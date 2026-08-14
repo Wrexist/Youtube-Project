@@ -228,6 +228,7 @@ async def test_the_report_is_stored_against_the_project(database, monkeypatch):
     reconstructed once the thresholds move."""
     source_id = await _seed()
     _stub_media(monkeypatch, duration=30.0)
+    await _persist_job("job1")
     await repository.save_project("proj1", channel_key="main")
 
     await _up_to("originality").run(
@@ -243,6 +244,26 @@ async def test_the_report_is_stored_against_the_project(database, monkeypatch):
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
+
+
+async def _persist_job(job_id: str) -> None:
+    """A job row, so a project may point at it.
+
+    `repurpose_projects.job_id` is a real foreign key. Calling a stage directly
+    skips `create_job`, which in production always writes this row *before*
+    dispatching the workflow — so without it the test asks for a state production
+    never reaches. It went unnoticed because SQLite ignored the constraint;
+    `db._enforce_foreign_keys` is why it does not any more.
+    """
+    await repository.save_job(
+        {
+            "id": job_id,
+            "workflow": repurpose.REPURPOSE_WORKFLOW,
+            "status": "running",
+            "inputs": {},
+            "states": {},
+        }
+    )
 
 
 def _up_to(stage_name: str):
