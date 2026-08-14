@@ -268,6 +268,28 @@ per connection because that is the only scope SQLite offers, and a connection th
 misses it silently stops enforcing. The full suite passes with it on, which is the
 evidence that this was the only violation rather than the first of many.
 
+### 4.10 The repurpose tests mixed `TestClient` with the `database` fixture
+`test_spend.py` has documented the rule since it was written: `TestClient` runs the
+app on a blocking portal with **its own event loop**, so a test that also writes rows
+on pytest's loop ends up with one asyncpg pool shared across two — which aiosqlite
+tolerates and asyncpg refuses. The suite is deliberately split, `database`-fixture
+tests on one side and `TestClient` tests on the other.
+
+`test_repurpose_endpoint.py` and two tests in `test_repurpose_workflow.py` did both.
+Every one of them passed locally on SQLite and all eighteen failed on CI with
+"attached to a different loop" — an error naming neither the file nor the cause.
+They now call the endpoint functions directly, like `test_spend.py` and
+`test_backlog.py` already did.
+
+Two things made this expensive to find, and both are worth remembering. The failures
+appeared in files whose own logic was fine, so the message pointed nowhere useful.
+And the branch had no CI history at all — the pull request was opened after the work
+was done, so the first run was also the first time any of it met Postgres.
+
+**Run the suite against Postgres before pushing** if you have touched persistence or
+added an endpoint test. `CLAUDE.md` has the command. It takes seven minutes and it
+is the only way to see what CI sees.
+
 ---
 
 ## 5. Known-imperfect, working as intended for now
