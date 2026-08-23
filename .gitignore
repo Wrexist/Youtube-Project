@@ -44,3 +44,6 @@ scripts/studio-launch.sh
 # Written by setup.ps1 to interrogate the Python interpreters on the machine, and
 # deleted again when it finishes. Only survives a setup that died partway.
 studio-python-probe.py
+
+# Playwright MCP session artifacts
+.playwright-mcp/
