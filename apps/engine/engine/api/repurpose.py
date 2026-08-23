@@ -388,9 +388,13 @@ async def begin_tiktok_auth(redirect_uri: str = "") -> dict:
 
     redirect_uri = redirect_uri or _default_redirect()
     state = secrets.token_urlsafe(24)
-    _PENDING_STATES[state] = (datetime.now(UTC), redirect_uri)
+    verifier, challenge = tiktok.pkce_pair()
+    # The verifier rides with the state rather than in a cookie: the callback is a
+    # plain browser redirect from TikTok, and this is the only side of the round
+    # trip that is guaranteed to reach it.
+    _PENDING_STATES[state] = (datetime.now(UTC), redirect_uri, verifier)
     _expire_states()
-    return {"url": tiktok.authorize_url(redirect_uri, state)}
+    return {"url": tiktok.authorize_url(redirect_uri, state, challenge)}
 
 
 @router.get("/auth/tiktok/callback")  # no [Depends] — see the module comment above
@@ -417,12 +421,12 @@ async def tiktok_callback(
         # code arriving without one is exactly the CSRF the state exists to stop.
         return _back("tiktok_error=" + quote("that sign-in link has expired — try again"))
 
-    _, redirect_uri = pending
+    _, redirect_uri, verifier = pending
     if not code:
         return _back("tiktok_error=" + quote("TikTok returned no authorisation code"))
 
     try:
-        tokens = await tiktok.exchange_code(code, redirect_uri)
+        tokens = await tiktok.exchange_code(code, redirect_uri, verifier)
         handle = await tiktok.creator_handle(tokens.access_token)
         await repository.save_tiktok_account(tokens, handle=handle)
     except tiktok.TikTokUnavailable as exc:
@@ -457,13 +461,14 @@ async def disconnect_tiktok() -> None:
 #: seconds, an engine restart mid-sign-in is a retry rather than a data loss, and
 #: a table would need its own sweeper. Bounded by `_expire_states` so a stream of
 #: abandoned sign-ins cannot grow it without limit.
-_PENDING_STATES: dict[str, tuple[datetime, str]] = {}
+#: `state -> (issued_at, redirect_uri, pkce_verifier)`.
+_PENDING_STATES: dict[str, tuple[datetime, str, str]] = {}
 _STATE_TTL = timedelta(minutes=10)
 
 
 def _expire_states() -> None:
     cutoff = datetime.now(UTC) - _STATE_TTL
-    for key in [k for k, (issued, _) in _PENDING_STATES.items() if issued < cutoff]:
+    for key in [k for k, (issued, *_) in _PENDING_STATES.items() if issued < cutoff]:
         _PENDING_STATES.pop(key, None)
 
 

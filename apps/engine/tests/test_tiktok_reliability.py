@@ -395,7 +395,7 @@ async def test_a_token_response_is_parsed_with_expiry(monkeypatch):
         ),
     )
 
-    tokens = await tiktok.exchange_code("code", "https://example.test/cb")
+    tokens = await tiktok.exchange_code("code", "https://example.test/cb", "verifier")
 
     assert tokens.access_token == "at"
     assert tokens.open_id == "oid"
@@ -408,7 +408,7 @@ async def test_tokens_nested_under_data_are_also_accepted(monkeypatch):
     away from the cause."""
     _transport(monkeypatch, lambda _r: _ok({"data": {"access_token": "at", "expires_in": 100}}))
 
-    tokens = await tiktok.exchange_code("code", "https://example.test/cb")
+    tokens = await tiktok.exchange_code("code", "https://example.test/cb", "verifier")
 
     assert tokens.access_token == "at"
 
@@ -456,8 +456,33 @@ async def test_no_token_means_no_call(monkeypatch):
 
 
 def test_the_authorize_url_carries_the_state_and_scopes():
-    url = tiktok.authorize_url("https://example.test/cb", "st4te")
+    url = tiktok.authorize_url("https://example.test/cb", "st4te", "ch4llenge")
 
     assert "state=st4te" in url
     assert "user.info.basic" in url
     assert "video.list" in url
+
+
+def test_the_authorize_url_carries_pkce():
+    """Without these TikTok's consent page fails with a bare "code_challenge" and
+    no indication of which side is wrong. It cost an afternoon once."""
+    url = tiktok.authorize_url("https://example.test/cb", "st4te", "ch4llenge")
+
+    assert "code_challenge=ch4llenge" in url
+    assert "code_challenge_method=S256" in url
+
+
+def test_the_pkce_challenge_is_the_hex_sha256_of_the_verifier():
+    """TikTok documents hex, not RFC 7636's base64url. Asserted so nobody
+    "corrects" it to the standard encoding and breaks the connect flow."""
+    import hashlib
+
+    verifier, challenge = tiktok.pkce_pair()
+
+    assert challenge == hashlib.sha256(verifier.encode("ascii")).hexdigest()
+    assert 43 <= len(verifier) <= 128
+    assert len(challenge) == 64
+
+
+def test_pkce_pairs_are_not_reused():
+    assert tiktok.pkce_pair()[0] != tiktok.pkce_pair()[0]

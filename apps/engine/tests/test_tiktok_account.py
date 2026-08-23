@@ -165,10 +165,14 @@ async def test_an_expired_token_read_from_sqlite_still_refreshes(database, monke
     monkeypatch.setattr(tiktok, "refresh", fake_refresh)
     await repository.save_tiktok_account(_tokens(access_token="stale"), handle="@me")
 
-    # Force the naive shape SQLite hands back.
+    # Force the naive shape SQLite hands back: the UTC instant with the tzinfo
+    # dropped. Not `datetime.now()` — that is naive *local* time, which
+    # `_aware_utc` then relabels as UTC, so on any machine east of UTC an hour
+    # in the past becomes an hour in the future and the token reads as live.
+    naive_utc_now = datetime.now(UTC).replace(tzinfo=None)
     async with session() as db:
         row = (await db.execute(select(TikTokAccount))).scalars().one()
-        row.expires_at = datetime.now() - timedelta(hours=1)  # noqa: DTZ005 — the point
+        row.expires_at = naive_utc_now - timedelta(hours=1)
 
     assert await repository.tiktok_access_token() == "fresh"
 

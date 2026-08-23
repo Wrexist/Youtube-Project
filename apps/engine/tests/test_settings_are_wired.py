@@ -565,7 +565,7 @@ def test_the_tiktok_error_message_names_the_variable_that_works(monkeypatch):
     monkeypatch.delenv("TIKTOK_CLIENT_SECRET", raising=False)
 
     try:
-        tiktok.authorize_url("https://example.test/cb", "state")
+        tiktok.authorize_url("https://example.test/cb", "state", "challenge")
     except tiktok.TikTokUnavailable as exc:
         assert "STUDIO_TIKTOK" not in str(exc)
         assert "TIKTOK_CLIENT_KEY" in str(exc)
