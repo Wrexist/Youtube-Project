@@ -478,9 +478,7 @@ class WatchedChannel(Base):
     #: is skipped by sweeps — pause, don't destroy, is the right verb for
     #: "we're not competing with them this quarter".
     active: Mapped[bool] = mapped_column(default=True)
-    last_synced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -503,7 +501,8 @@ class WatchedVideo(Base):
 
     video_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     watched_channel_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("watched_channels.youtube_channel_id", ondelete="CASCADE"),
+        String(64),
+        ForeignKey("watched_channels.youtube_channel_id", ondelete="CASCADE"),
         index=True,
     )
     title: Mapped[str] = mapped_column(Text, default="")

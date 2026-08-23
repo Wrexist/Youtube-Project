@@ -626,9 +626,7 @@ async def save_keyword_snapshot(seed: str, terms: list[str]) -> None:
 # Postgres in CI then cannot disagree about what happened.
 
 
-async def add_watched_channel(
-    youtube_channel_id: str, *, label: str = "", note: str = ""
-) -> None:
+async def add_watched_channel(youtube_channel_id: str, *, label: str = "", note: str = "") -> None:
     """Watch a channel. Re-adding an existing one updates the label/note and
     reactivates it — the API surface is "this channel matters to us", which is
     true again on re-add whether or not we remembered it from before."""
@@ -643,11 +641,7 @@ async def add_watched_channel(
                 row.note = note
             row.active = True
         else:
-            db.add(
-                WatchedChannel(
-                    youtube_channel_id=youtube_channel_id, label=label, note=note
-                )
-            )
+            db.add(WatchedChannel(youtube_channel_id=youtube_channel_id, label=label, note=note))
 
 
 async def remove_watched_channel(youtube_channel_id: str) -> bool:
@@ -683,17 +677,11 @@ async def list_watched_channels(*, active_only: bool = False) -> list[dict]:
         rows = list((await db.execute(stmt)).scalars())
         counts: dict[str, int] = {}
         if rows:
-            grouped = (
-                select(
-                    WatchedVideo.watched_channel_id,
-                    func.count(WatchedVideo.video_id),
-                )
-                .group_by(WatchedVideo.watched_channel_id)
-            )
-            counts = {
-                channel_id: count
-                for channel_id, count in (await db.execute(grouped)).all()
-            }
+            grouped = select(
+                WatchedVideo.watched_channel_id,
+                func.count(WatchedVideo.video_id),
+            ).group_by(WatchedVideo.watched_channel_id)
+            counts = {channel_id: count for channel_id, count in (await db.execute(grouped)).all()}
         return [
             {
                 "youtube_channel_id": r.youtube_channel_id,
