@@ -113,6 +113,18 @@ export type Discovered = Ok<paths["/v1/repurpose/discover"]["post"]>;
 export type Backlog = Ok<paths["/v1/ideas/backlog"]["get"]>;
 export type BacklogIdea = Backlog["ideas"][number];
 
+// ── genre intelligence ──────────────────────────────────────────────────────
+
+export type GenreWatchlist = Ok<paths["/v1/genre/watchlist"]["get"]>;
+export type GenreChannel = components["schemas"]["WatchedChannelOut"];
+export type GenreAdded = components["schemas"]["AddedChannel"];
+export type GenreWatchRequest = components["schemas"]["WatchRequest"];
+export type GenreSyncResponse = Ok<paths["/v1/genre/sync"]["post"]>;
+export type GenrePatterns = Ok<paths["/v1/genre/patterns"]["get"]>;
+export type GenreGaps = Ok<paths["/v1/genre/gaps"]["post"]>;
+export type GenreRemoved = components["schemas"]["Removed"];
+export type GenreToggle = components["schemas"]["ToggleResult"];
+
 /** What the channel has cost, per day and in total. */
 export type Spend = Ok<paths["/v1/spend"]["get"]>;
 

@@ -478,6 +478,119 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/genre/gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Gaps
+         * @description Demand ÷ supply per candidate topic.
+         *
+         *     Supply comes from the watchlist corpus — a floor on real competition, not
+         *     a census of YouTube. The screen should say so wherever these numbers
+         *     appear next to idea scores.
+         */
+        post: operations["gaps_v1_genre_gaps_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/genre/patterns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Patterns
+         * @description Hook-strategy, duration and cadence aggregates over the mined corpus.
+         */
+        get: operations["patterns_v1_genre_patterns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/genre/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync Watchlist
+         * @description Sweep every active watched channel (~1 quota unit per channel).
+         *
+         *     Per-channel failures are reported inline rather than failing the sweep —
+         *     the response shows exactly which channels are quietly broken.
+         */
+        post: operations["sync_watchlist_v1_genre_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/genre/watchlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Watchlist
+         * @description Every watched channel with its corpus size.
+         */
+        get: operations["watchlist_v1_genre_watchlist_get"];
+        put?: never;
+        /**
+         * Add To Watchlist
+         * @description Watch a channel. Accepts an id or an @handle (resolved via the Data API
+         *     for one unit when a channel is connected; without one, id only).
+         */
+        post: operations["add_to_watchlist_v1_genre_watchlist_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/genre/watchlist/{youtube_channel_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove From Watchlist */
+        delete: operations["remove_from_watchlist_v1_genre_watchlist__youtube_channel_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Toggle Watchlist
+         * @description Pause or resume a channel without losing its mined history.
+         */
+        patch: operations["toggle_watchlist_v1_genre_watchlist__youtube_channel_id__patch"];
+        trace?: never;
+    };
     "/v1/ideas/backlog": {
         parameters: {
             query?: never;
@@ -1522,6 +1635,10 @@ export interface components {
             /** Provider */
             provider: string;
         };
+        /** AddedChannel */
+        AddedChannel: {
+            channel: components["schemas"]["WatchedChannelOut"];
+        };
         /** Assignment */
         Assignment: {
             /**
@@ -1707,6 +1824,11 @@ export interface components {
             label: string;
             /** Required */
             required: boolean;
+            /**
+             * Secret
+             * @default true
+             */
+            secret: boolean;
             /** Tail */
             tail: string;
             /** Unlocks */
@@ -1787,6 +1909,22 @@ export interface components {
             /** Value */
             value: unknown;
         };
+        /** GapOut */
+        GapOut: {
+            /** Autocomplete Matches */
+            autocomplete_matches: number;
+            /** Gap */
+            gap: number;
+            /** Topic */
+            topic: string;
+            /** Watched Videos On Topic */
+            watched_videos_on_topic: number;
+        };
+        /** GapRequest */
+        GapRequest: {
+            /** Topics */
+            topics: string[];
+        };
         /**
          * GrantIn
          * @description Authority to use a clip, as the rights panel submits it.
@@ -1857,6 +1995,19 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HookPatternOut */
+        HookPatternOut: {
+            /** Count */
+            count: number;
+            /** Median Views */
+            median_views?: number | null;
+            /** Median Views Per Day */
+            median_views_per_day?: number | null;
+            /** Pattern */
+            pattern: string;
+            /** Share */
+            share: number;
         };
         /** JobRequest */
         JobRequest: {
@@ -2016,6 +2167,29 @@ export interface components {
             voices_live: boolean;
         };
         /**
+         * PatternsReport
+         * @description What `genre.patterns.analyze` computed over the watched corpus.
+         */
+        PatternsReport: {
+            /**
+             * Duration Buckets
+             * @default {}
+             */
+            duration_buckets: {
+                [key: string]: number;
+            };
+            /** Hook Patterns */
+            hook_patterns: components["schemas"]["HookPatternOut"][];
+            /** Median Duration S */
+            median_duration_s?: number | null;
+            /** Top By Velocity */
+            top_by_velocity: components["schemas"]["VelocityTitleOut"][];
+            /** Uploads Per Week */
+            uploads_per_week?: number | null;
+            /** Video Count */
+            video_count: number;
+        };
+        /**
          * PendingVideo
          * @description One video waiting for a slot.
          *
@@ -2129,6 +2303,11 @@ export interface components {
             base_index: number;
             /** Instruction */
             instruction: string;
+        };
+        /** Removed */
+        Removed: {
+            /** Removed */
+            removed: boolean;
         };
         /**
          * ReportOut
@@ -2484,6 +2663,30 @@ export interface components {
             /** Suggestions */
             suggestions: components["schemas"]["Suggestion"][];
         };
+        /** SyncReport */
+        SyncReport: {
+            /** Channel Id */
+            channel_id: string;
+            /** Error */
+            error: string;
+            /** New Videos */
+            new_videos: number;
+            /** Ok */
+            ok: boolean;
+            /** Videos Seen */
+            videos_seen: number;
+        };
+        /** SyncResponse */
+        SyncResponse: {
+            /** Channels Synced */
+            channels_synced: number;
+            /** Failures */
+            failures: number;
+            /** Reports */
+            reports: components["schemas"]["SyncReport"][];
+            /** Videos New */
+            videos_new: number;
+        };
         /** TaskRoute */
         TaskRoute: {
             /** Group */
@@ -2625,6 +2828,13 @@ export interface components {
             /** Watermarked Sources */
             watermarked_sources?: string[];
         };
+        /** ToggleResult */
+        ToggleResult: {
+            /** Active */
+            active: boolean;
+            /** Youtube Channel Id */
+            youtube_channel_id: string;
+        };
         /** TransformationVerdictOut */
         TransformationVerdictOut: {
             /** Passed */
@@ -2664,6 +2874,17 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** VelocityTitleOut */
+        VelocityTitleOut: {
+            /** Channel Label */
+            channel_label: string;
+            /** Title */
+            title: string;
+            /** Views */
+            views: number;
+            /** Views Per Day */
+            views_per_day: number;
+        };
         /**
          * Voice
          * @description One narrator, described in the service's own words rather than ours.
@@ -2679,6 +2900,62 @@ export interface components {
             name: string;
             /** Traits */
             traits?: string[];
+        };
+        /**
+         * WatchRequest
+         * @description Add a channel to the watchlist — by id, or by @handle when a YouTube
+         *     credential is connected to resolve it (one quota unit).
+         */
+        WatchRequest: {
+            /** Channel Id */
+            channel_id?: string | null;
+            /** Handle */
+            handle?: string | null;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /** WatchToggle */
+        WatchToggle: {
+            /** Active */
+            active: boolean;
+        };
+        /** WatchedChannelOut */
+        WatchedChannelOut: {
+            /** Active */
+            active: boolean;
+            /** Created At */
+            created_at: string;
+            /** Label */
+            label: string;
+            /**
+             * Last Error
+             * @default
+             */
+            last_error: string;
+            /** Last Synced At */
+            last_synced_at?: string | null;
+            /** Note */
+            note: string;
+            /**
+             * Video Count
+             * @default 0
+             */
+            video_count: number;
+            /** Youtube Channel Id */
+            youtube_channel_id: string;
+        };
+        /** WatchlistResponse */
+        WatchlistResponse: {
+            /** Channels */
+            channels: components["schemas"]["WatchedChannelOut"][];
         };
         /** ApplyRequest */
         engine__api__channels__ApplyRequest: {
@@ -3331,6 +3608,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    gaps_v1_genre_gaps_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GapRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GapOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patterns_v1_genre_patterns_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatternsReport"];
+                };
+            };
+        };
+    };
+    sync_watchlist_v1_genre_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncResponse"];
+                };
+            };
+        };
+    };
+    watchlist_v1_genre_watchlist_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchlistResponse"];
+                };
+            };
+        };
+    };
+    add_to_watchlist_v1_genre_watchlist_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddedChannel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_from_watchlist_v1_genre_watchlist__youtube_channel_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                youtube_channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Removed"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    toggle_watchlist_v1_genre_watchlist__youtube_channel_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                youtube_channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WatchToggle"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToggleResult"];
                 };
             };
             /** @description Validation Error */

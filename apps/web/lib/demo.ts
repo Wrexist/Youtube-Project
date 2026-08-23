@@ -748,3 +748,65 @@ export const REPURPOSE_REPORT = {
     ],
   },
 };
+
+
+
+/**
+ * Genre — two watched channels (one paused, one quietly failing, because those
+ * are the states the screen exists to make visible) and a patterns report with
+ * real-shaped numbers. The fixture is what a healthy watchlist looks like after
+ * a few nightly sweeps.
+ */
+export const DEMO_GENRE_WATCHLIST = {
+  channels: [
+    {
+      youtube_channel_id: "UCdemo-bridge-files",
+      label: "The Bridge Files",
+      note: "",
+      active: true,
+      last_synced_at: "2026-08-22T06:12:00+00:00",
+      last_error: "",
+      video_count: 58,
+      created_at: "2026-08-01T09:00:00+00:00",
+    },
+    {
+      youtube_channel_id: "UCdemo-megaprojects",
+      label: "Mega Builds",
+      note: "",
+      active: false,
+      last_synced_at: "2026-08-15T06:12:00+00:00",
+      last_error: "",
+      video_count: 41,
+      created_at: "2026-08-02T11:30:00+00:00",
+    },
+    {
+      youtube_channel_id: "UCdemo-failure-analysis",
+      label: "Failure Analysis",
+      note: "",
+      active: true,
+      last_synced_at: "2026-08-22T06:14:00+00:00",
+      last_error: "videos.list failed (503): backend error",
+      video_count: 27,
+      created_at: "2026-08-05T15:00:00+00:00",
+    },
+  ],
+};
+
+export const DEMO_GENRE_PATTERNS = {
+  video_count: 126,
+  hook_patterns: [
+    { pattern: "curiosity", count: 44, share: 0.349, median_views: 214_000, median_views_per_day: 12_400 },
+    { pattern: "number", count: 31, share: 0.246, median_views: 148_000, median_views_per_day: 8_100 },
+    { pattern: "contrarian", count: 18, share: 0.143, median_views: 96_500, median_views_per_day: 6_900 },
+    { pattern: "question", count: 15, share: 0.119, median_views: 88_000, median_views_per_day: 5_200 },
+    { pattern: "statement", count: 18, share: 0.143, median_views: 61_000, median_views_per_day: 3_800 },
+  ],
+  median_duration_s: 512,
+  duration_buckets: { under_60s: 38, "60s_to_8m": 61, over_8m: 27 },
+  uploads_per_week: 2.4,
+  top_by_velocity: [
+    { title: "The Dam That Should Never Have Been Built", channel_label: "The Bridge Files", views: 2_140_000, views_per_day: 96_000 },
+    { title: "7 Engineering Lies You Were Taught In School", channel_label: "Failure Analysis", views: 1_380_000, views_per_day: 54_000 },
+    { title: "Why This Bridge Took 94 Years To Finish", channel_label: "The Bridge Files", views: 890_000, views_per_day: 31_500 },
+  ],
+};
