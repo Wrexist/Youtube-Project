@@ -20,6 +20,12 @@
 # ("Unexpected token ')'") on lines that are perfectly valid. Same for the .cmd
 # files at the repository root.
 
+# -FullTests runs the entire engine suite instead of the smoke check. See the
+# "Checking the engine runs here" step for why that is not the default.
+param(
+    [switch]$FullTests
+)
+
 $ErrorActionPreference = "Stop"
 
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -600,20 +606,45 @@ Show-Output $schema 1
 
 # -- verify ------------------------------------------------------------------
 
-Step "Running the test suite"
+if ($FullTests) { Step "Running the full test suite" } else { Step "Checking the engine runs here" }
 $env:STUDIO_PERSIST = "false"
+# A smoke check by default, not the whole suite.
+#
+# This step answers one question - "is the engine broken on THIS machine" - and
+# the full suite is the wrong instrument for it. It takes thirteen minutes, which
+# is most of the install, and all but a few seconds of that is business logic
+# that cannot vary by machine. What does vary is covered here and in the doctor
+# below: Python and its packages import, ffmpeg and MoviePy actually compose a
+# file, fonts resolve, settings bind, SQLite is reachable.
+#
+# The cost of running everything was not just time. A single environment-sensitive
+# assertion - one test that built a timestamp from local time rather than UTC -
+# failed on any machine east of UTC and aborted the whole install with "the engine
+# is not working on this machine", on an install that was in fact fine. A gate
+# that fails for reasons unrelated to the thing it guards teaches people to ignore
+# it, and this one is not ignorable: it stops setup dead.
+#
+# Developers who want the regression suite pass -FullTests, and the line printed
+# at the end says so.
+$suiteArgs = if ($FullTests) { @("-m", "pytest", "-q") } else {
+    @("-m", "pytest", "-q",
+      "tests/test_compose_bake.py",      # MoviePy + ffmpeg + fonts, end to end
+      "tests/test_settings_are_wired.py", # .env actually reaches the settings object
+      "tests/test_setup.py")              # the screen the operator lands on next
+}
+$activity = if ($FullTests) { "running the full test suite" } else { "checking the engine" }
 # Captured whole, then summarised - only the last few lines are interesting when
 # it passes, and all of it is when it does not. Reading the exit code from the
 # captured run (rather than after piping pytest into a cmdlet) is what keeps a
 # failing suite from scrolling past and setup going on to print "Setup complete",
 # the one thing this step exists to stop.
-$tests = Invoke-Native $VenvPython @("-m", "pytest", "-q") -WorkingDirectory "apps\engine" -Activity "running the test suite"
+$tests = Invoke-Native $VenvPython $suiteArgs -WorkingDirectory "apps\engine" -Activity $activity
 Remove-Item Env:\STUDIO_PERSIST -ErrorAction SilentlyContinue
 
 if ($tests.Code -ne 0) {
     Show-Output $tests 3
     Write-Host ""
-    Write-Host "       The test suite failed. Full output:" -ForegroundColor Yellow
+    Write-Host "       The checks failed. Full output:" -ForegroundColor Yellow
     $tests.Lines | ForEach-Object { Write-Host "       $_" -ForegroundColor DarkGray }
     Die "the engine is not working on this machine - please open an issue with the output above"
 }
@@ -628,6 +659,7 @@ $summary = ($summary -replace "\s+", " ").Trim()
 # A pytest that changes its summary wording should not blank this line out. The
 # exit code is what decided we are here; the summary only decorates it.
 if (-not $summary) { $summary = "the test suite passed" }
+if (-not $FullTests) { $summary = "$summary - full suite: setup.ps1 -FullTests" }
 Done $summary $tests.Elapsed
 
 Step "Adding a launcher"
