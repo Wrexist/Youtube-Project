@@ -25,6 +25,7 @@ from engine import automation, db, feedback, logs, models, repository, worker
 from engine.api import publishing as channels
 from engine.api.brief import router as brief_router
 from engine.api.channels import router as channels_router
+from engine.api.genre import router as genre_router
 from engine.api.ideas import router as ideas_router
 from engine.api.insights import RECORDS
 from engine.api.insights import router as insights_router
@@ -103,6 +104,7 @@ app = FastAPI(title="Studio Engine", version="0.1.0", lifespan=lifespan)
 _gated = [Depends(require_token)]
 app.include_router(brief_router, dependencies=_gated)
 app.include_router(ideas_router, dependencies=_gated)
+app.include_router(genre_router, dependencies=_gated)
 app.include_router(publishing_router)
 app.include_router(insights_router, dependencies=_gated)
 app.include_router(channels_router, dependencies=_gated)

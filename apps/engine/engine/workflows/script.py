@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from engine import feedback
+from engine.genre import briefing as genre_briefing
 from engine.providers import llm
 from engine.research import web
 from engine.untrusted import fence
@@ -199,6 +200,12 @@ class HookStage(Stage[dict]):
         if not learned and ctx.inputs.get("insights"):
             learned = feedback.guidance_for(ctx.inputs["insights"], "hook")
         learned += feedback.retention_guidance(ctx.inputs.get("last_retention_map", []))
+
+        # Observational evidence about what hooks this niche's competitors run —
+        # "" with no watchlist, which leaves the prompt exactly as it was.
+        genre_note = await genre_briefing.hook_guidance()
+        if genre_note:
+            learned += f"\n\n{genre_note}\n"
 
         result, completion = await model.json(
             f"""Angle: {chosen["angle"]}

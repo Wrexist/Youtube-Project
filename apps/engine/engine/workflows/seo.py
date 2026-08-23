@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 from engine import feedback
+from engine.genre import briefing as genre_briefing
 from engine.providers import llm
 from engine.research import keywords
 from engine.workflows.base import (
@@ -285,6 +286,12 @@ class TitlesStage(Stage[list]):
         learned = ctx.inputs.get("insight_guidance", {}).get("titles", "")
         if not learned and ctx.inputs.get("insights"):
             learned = feedback.guidance_for(ctx.inputs["insights"], "titles")
+
+        # Observational evidence about which title strategies carry velocity in
+        # this niche — "" with no watchlist, leaving the prompt unchanged.
+        genre_note = await genre_briefing.title_guidance()
+        if genre_note:
+            learned += f"\n\n{genre_note}\n"
 
         result, completion = await model.json(
             f"""Topic: {evidence.seed}
