@@ -432,7 +432,7 @@ function Field({
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <input
           id={id}
-          type="password"
+          type={credential.secret ? "password" : "text"}
           autoComplete="off"
           spellCheck={false}
           disabled={disabled}
@@ -441,7 +441,9 @@ function Field({
           placeholder={
             credential.configured
               ? `Set — ends ${credential.tail || "••••"}. Type to replace.`
-              : "Paste your key"
+              : credential.secret
+                ? "Paste your key"
+                : "Paste the URL"
           }
           className="mono min-w-[260px] flex-1 rounded-[var(--radius-btn)] border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2 text-[12px] transition-colors duration-150 placeholder:text-[var(--color-faint)] focus:border-[var(--color-line-hover)] focus:outline-none disabled:opacity-50"
         />

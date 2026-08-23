@@ -17,6 +17,10 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/queue", label: "Queue", icon: "M4 6h16M4 12h16M4 18h10" },
   { href: "/series", label: "Series", icon: "M4 7h16M4 12h16M4 17h9M18 15v6M15 18h6" },
   { href: "/new-channel", label: "New channel", icon: "M12 8v8M8 12h8M12 3a9 9 0 100 18 9 9 0 000-18z" },
+  // Beside Series because both shape what gets made next: Series fixes the
+  // format, Genre learns what the niche rewards. A rising line — the one glyph
+  // that reads as "what's working" at 20px.
+  { href: "/genre", label: "Genre", icon: "M3 17l6-6 4 4 8-8M14 7h7v7" },
   // Beside Library because it produces Library entries — it sits with the content
   // screens, not the configuration ones. Scissors: the one glyph that reads as
   // "cut a clip out of something" at 20px.

@@ -341,7 +341,7 @@ function Field({
       </p>
       <input
         id={id}
-        type="password"
+        type={credential.secret ? "password" : "text"}
         autoComplete="off"
         spellCheck={false}
         disabled={disabled}
@@ -350,7 +350,9 @@ function Field({
         placeholder={
           credential.configured
             ? `Set — ends ${credential.tail || "••••"}. Type to replace.`
-            : "Paste your key"
+            : credential.secret
+              ? "Paste your key"
+              : "Paste the URL"
         }
         className="mono mt-2.5 w-full rounded-[var(--radius-btn)] border border-[var(--color-line)] bg-[var(--color-bg)] px-3 py-2.5 text-[13px] transition-colors duration-150 placeholder:text-[var(--color-faint)] focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50"
       />

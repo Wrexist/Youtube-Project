@@ -233,10 +233,19 @@ async def _score(candidates: list[str], *, published: list[str]) -> list[dict]:
         seed=published[0] if published else "",
     )
 
+    # Competition from the genre watchlist, where one exists — zero quota, the
+    # corpus is already on disk. These counts are a *floor* on real competition
+    # (only watched channels), so an empty watchlist passes all zeros and this
+    # scores exactly as it did before the genre module existed.
+    from engine.genre import gaps as genre_gaps
+
+    competitor_counts = await genre_gaps.competitor_counts_for(candidates)
+
     ideas = await build_backlog_async(
         candidates,
         published_topics=published,
         suggestions=pooled,
+        competitor_counts=competitor_counts,
         trending_terms=trending_terms,
     )
 

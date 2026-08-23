@@ -32,7 +32,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from engine.db import session
@@ -59,6 +59,8 @@ from engine.tables import (
     ScheduleSlot,
     ThumbnailSwap,
     TikTokAccount,
+    WatchedChannel,
+    WatchedVideo,
 )
 from engine.workflows.base import StageState, StageStatus
 
@@ -614,6 +616,175 @@ async def save_keyword_snapshot(seed: str, terms: list[str]) -> None:
             row.captured_at = datetime.now(UTC)
         else:
             db.add(KeywordSnapshot(seed=seed, terms=terms))
+
+
+# ── genre watchlist ─────────────────────────────────────────────────────────
+#
+# Select-then-write rather than dialect upserts: a sweep touches at most a few
+# hundred rows, and the codebase's other idempotent writers (keyword snapshots,
+# clip sources) already chose readability over one round trip. SQLite in dev and
+# Postgres in CI then cannot disagree about what happened.
+
+
+async def add_watched_channel(youtube_channel_id: str, *, label: str = "", note: str = "") -> None:
+    """Watch a channel. Re-adding an existing one updates the label/note and
+    reactivates it — the API surface is "this channel matters to us", which is
+    true again on re-add whether or not we remembered it from before."""
+    if not _persistence_enabled() or not youtube_channel_id:
+        return
+    async with session() as db:
+        row = await db.get(WatchedChannel, youtube_channel_id)
+        if row:
+            if label:
+                row.label = label
+            if note:
+                row.note = note
+            row.active = True
+        else:
+            db.add(WatchedChannel(youtube_channel_id=youtube_channel_id, label=label, note=note))
+
+
+async def remove_watched_channel(youtube_channel_id: str) -> bool:
+    """Stop watching. The videos go with it — they only exist as that channel's
+    mining input, and keeping them after the human unmade the decision would
+    have gaps scored against competitors nobody watches."""
+    if not _persistence_enabled() or not youtube_channel_id:
+        return False
+    async with session() as db:
+        row = await db.get(WatchedChannel, youtube_channel_id)
+        if not row:
+            return False
+        await db.delete(row)
+        return True
+
+
+async def set_watched_channel_active(youtube_channel_id: str, active: bool) -> None:
+    if not _persistence_enabled() or not youtube_channel_id:
+        return
+    async with session() as db:
+        row = await db.get(WatchedChannel, youtube_channel_id)
+        if row:
+            row.active = active
+
+
+async def list_watched_channels(*, active_only: bool = False) -> list[dict]:
+    """Every watched channel with its video count. `[]` covers persistence-off,
+    the same contract every reader here gives trend monitoring."""
+    if not _persistence_enabled():
+        return []
+    async with session() as db:
+        stmt = select(WatchedChannel).order_by(WatchedChannel.created_at)
+        rows = list((await db.execute(stmt)).scalars())
+        counts: dict[str, int] = {}
+        if rows:
+            grouped = select(
+                WatchedVideo.watched_channel_id,
+                func.count(WatchedVideo.video_id),
+            ).group_by(WatchedVideo.watched_channel_id)
+            counts = {channel_id: count for channel_id, count in (await db.execute(grouped)).all()}
+        return [
+            {
+                "youtube_channel_id": r.youtube_channel_id,
+                "label": r.label,
+                "note": r.note,
+                "active": r.active,
+                "last_synced_at": r.last_synced_at.isoformat() if r.last_synced_at else None,
+                "last_error": r.last_error,
+                "video_count": counts.get(r.youtube_channel_id, 0),
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+            if r.active or not active_only
+        ]
+
+
+async def mark_watched_channel_synced(
+    youtube_channel_id: str, *, error: str = "", at: datetime | None = None
+) -> None:
+    """Record a sweep outcome on the channel row, success or failure alike —
+    `last_error` is how a quietly failing channel becomes visible without
+    anyone reading worker logs."""
+    if not _persistence_enabled() or not youtube_channel_id:
+        return
+    async with session() as db:
+        row = await db.get(WatchedChannel, youtube_channel_id)
+        if row:
+            row.last_synced_at = at or datetime.now(UTC)
+            row.last_error = error
+
+
+async def upsert_watched_videos(rows: list[dict]) -> int:
+    """Refresh the mined corpus. Existing videos update their counters; new ones
+    get `first_seen_views` stamped at insert, which is what makes velocity a
+    subtraction instead of a history table.
+
+    Returns how many rows were new, so the sync report can say "watching N new
+    uploads" rather than implying every sweep re-found everything.
+    """
+    if not _persistence_enabled() or not rows:
+        return 0
+    added = 0
+    async with session() as db:
+        for r in rows:
+            row = await db.get(WatchedVideo, r["video_id"])
+            if row:
+                row.title = r.get("title", row.title)
+                row.views = r.get("views", row.views)
+                row.likes = r.get("likes", row.likes)
+                row.duration_s = r.get("duration_s", row.duration_s)
+                row.published_at = r.get("published_at", row.published_at)
+            else:
+                views = r.get("views", 0)
+                db.add(
+                    WatchedVideo(
+                        video_id=r["video_id"],
+                        watched_channel_id=r["watched_channel_id"],
+                        title=r.get("title", ""),
+                        published_at=r.get("published_at"),
+                        duration_s=r.get("duration_s", 0.0),
+                        views=views,
+                        likes=r.get("likes", 0),
+                        first_seen_views=views,
+                    )
+                )
+                added += 1
+    return added
+
+
+async def watched_videos_for_mining() -> list[dict]:
+    """Titles + counters for every video of an *active* watched channel.
+
+    This is the corpus pattern mining and gap scoring read. Deactivated
+    channels are excluded here rather than filtered by callers, so pausing a
+    competitor takes their titles out of every downstream number at once.
+    """
+    if not _persistence_enabled():
+        return []
+    async with session() as db:
+        stmt = (
+            select(WatchedVideo, WatchedChannel.label)
+            .join(
+                WatchedChannel,
+                WatchedVideo.watched_channel_id == WatchedChannel.youtube_channel_id,
+            )
+            .where(WatchedChannel.active.is_(True))
+        )
+        out = []
+        for video, label in (await db.execute(stmt)).all():
+            out.append(
+                {
+                    "video_id": video.video_id,
+                    "channel_label": label,
+                    "title": video.title,
+                    "published_at": video.published_at,
+                    "duration_s": video.duration_s,
+                    "views": video.views,
+                    "likes": video.likes,
+                    "first_seen_at": video.first_seen_at,
+                    "first_seen_views": video.first_seen_views,
+                }
+            )
+        return out
 
 
 async def job_id_for_video(video_id: str) -> str | None:

@@ -51,7 +51,9 @@ regardless of the code it carries.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
+import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -200,10 +202,36 @@ def configured() -> bool:
     return bool(settings.tiktok_client_key and settings.tiktok_client_secret)
 
 
-def authorize_url(redirect_uri: str, state: str) -> str:
-    """Where the browser goes to grant Lane A access."""
+def pkce_pair() -> tuple[str, str]:
+    """A PKCE `(code_verifier, code_challenge)` pair.
+
+    **TikTok hex-encodes the challenge.** RFC 7636 specifies base64url of the raw
+    SHA-256 digest; TikTok's Login Kit documents plain hexadecimal and rejects the
+    standard encoding. So this is `.hexdigest()` deliberately, and swapping it for
+    the RFC-correct form breaks the flow rather than fixing it.
+
+    `token_urlsafe(64)` yields ~86 characters from `[A-Za-z0-9_-]`, inside the
+    43–128 range the spec requires and using only unreserved characters, so the
+    verifier survives form encoding unchanged.
+    """
+    verifier = secrets.token_urlsafe(64)
+    challenge = hashlib.sha256(verifier.encode("ascii")).hexdigest()
+    return verifier, challenge
+
+
+def authorize_url(redirect_uri: str, state: str, code_challenge: str) -> str:
+    """Where the browser goes to grant Lane A access.
+
+    `code_challenge` is not optional: TikTok requires PKCE for web apps and
+    answers a request without it with a consent page reading "Something went
+    wrong … code_challenge", which says nothing about which side is at fault.
+    Required rather than defaulted for that reason — a caller that forgets it
+    should fail here, not in a browser.
+    """
     if not configured():
         raise TikTokUnavailable("TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET are not set")
+    if not code_challenge:
+        raise TikTokUnavailable("a PKCE code_challenge is required to authorise with TikTok")
 
     return (
         AUTH_URL
@@ -215,6 +243,8 @@ def authorize_url(redirect_uri: str, state: str) -> str:
                 "response_type": "code",
                 "redirect_uri": redirect_uri,
                 "state": state,
+                "code_challenge": code_challenge,
+                "code_challenge_method": "S256",
             }
         )
     )
@@ -338,10 +368,18 @@ def _tokens_from(payload: dict) -> Tokens:
     )
 
 
-async def exchange_code(code: str, redirect_uri: str) -> Tokens:
-    """Trade an authorisation code for tokens."""
+async def exchange_code(code: str, redirect_uri: str, code_verifier: str) -> Tokens:
+    """Trade an authorisation code for tokens.
+
+    `code_verifier` is the other half of the PKCE pair `authorize_url` sent as a
+    challenge. TikTok recomputes the hash and refuses the exchange if it does not
+    match, so the verifier has to survive from the authorise call to here — which
+    is why `_PENDING_STATES` carries it alongside the redirect URI.
+    """
     if not configured():
         raise TikTokUnavailable("TikTok credentials are not configured")
+    if not code_verifier:
+        raise TikTokUnavailable("a PKCE code_verifier is required to exchange a TikTok code")
 
     settings = get_settings()
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -355,6 +393,7 @@ async def exchange_code(code: str, redirect_uri: str) -> Tokens:
                 "code": code,
                 "grant_type": "authorization_code",
                 "redirect_uri": redirect_uri,
+                "code_verifier": code_verifier,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )

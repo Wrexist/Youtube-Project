@@ -73,6 +73,10 @@ class Credential:
     required: bool = False
     #: Name of the settings attribute, when it differs from the lowercased env var.
     attr: str = ""
+    #: False for values that are not credentials — a URL to point at, say. The
+    #: screen masks secrets and calls them keys; doing that to an address the
+    #: operator needs to read back and check is actively unhelpful.
+    secret: bool = True
 
     @property
     def field(self) -> str:
@@ -197,6 +201,7 @@ CREDENTIALS: tuple[Credential, ...] = (
         url="https://ads.tiktok.com/business/creativecenter/pc/en",
         effort="only if you have a feed to point at; Creative Center has no public API",
         group="Repurpose",
+        secret=False,
     ),
 )
 
@@ -222,6 +227,9 @@ class CredentialStatus(BaseModel):
     configured: bool
     #: The last four characters, or "". Enough to recognise a key, useless as one.
     tail: str
+    #: False for values that are not credentials, so the screen can stop calling
+    #: them keys and stop masking them. See `Credential.secret`.
+    secret: bool = True
 
 
 class SetupStatus(BaseModel):
@@ -369,6 +377,7 @@ async def status() -> SetupStatus:
                 required=cred.required,
                 configured=bool(value),
                 tail=_tail(value),
+                secret=cred.secret,
             )
         )
 

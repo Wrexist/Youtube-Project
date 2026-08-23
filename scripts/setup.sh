@@ -14,6 +14,15 @@
 
 set -euo pipefail
 
+# --full-tests runs the entire engine suite instead of the smoke check.
+FULL_TESTS=0
+for arg in "$@"; do
+  case "$arg" in
+    --full-tests) FULL_TESTS=1 ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
+
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT="$PWD"
 
@@ -205,20 +214,32 @@ print('       ' + asyncio.run(db.ensure_schema()))
 
 # ── verify ──────────────────────────────────────────────────────────────────
 
-step "Running the test suite"
+if [ "$FULL_TESTS" = "1" ]; then
+  step "Running the full test suite"
+  SUITE=""
+else
+  step "Checking the engine runs here"
+  # A smoke check, not the whole suite. See the long note at the same step in
+  # setup.ps1: this answers "is the engine broken on THIS machine", and the full
+  # suite spends thirteen minutes on business logic that cannot vary by machine.
+  # One environment-sensitive assertion was enough to abort an install that was
+  # in fact fine.
+  SUITE="tests/test_compose_bake.py tests/test_settings_are_wired.py tests/test_setup.py"
+fi
 # Captured, not piped straight through. `... | tail -3` makes the pipeline's exit
 # status tail's, which is always 0 — so a failing suite scrolled three lines past
 # and setup went on to print "Setup complete", the one thing this step exists to
 # stop. (The same bug was in setup.ps1.)
 started=$SECONDS
 set +e
-TEST_OUTPUT=$(cd apps/engine && STUDIO_PERSIST=false "$ROOT/$VENV_BIN/python" -m pytest -q 2>&1)
+# shellcheck disable=SC2086 -- SUITE is a deliberate word-split list of paths.
+TEST_OUTPUT=$(cd apps/engine && STUDIO_PERSIST=false "$ROOT/$VENV_BIN/python" -m pytest -q $SUITE 2>&1)
 TESTS=$?
 set -e
 if [ $TESTS -ne 0 ]; then
   echo "$TEST_OUTPUT" | tail -3 | sed 's/^/       /'
   echo
-  echo "       ${bold}The test suite failed.${reset} Full output:"
+  echo "       ${bold}The checks failed.${reset} Full output:"
   echo "$TEST_OUTPUT" | sed 's/^/       /'
   echo
   die "the engine is not working on this machine — please open an issue with the output above"

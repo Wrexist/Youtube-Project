@@ -27,6 +27,14 @@ import type {
   ClipGrantRequest,
   ClipGrant,
   Diagnostics,
+  GenreAdded,
+  GenreGaps,
+  GenrePatterns,
+  GenreRemoved,
+  GenreSyncResponse,
+  GenreToggle,
+  GenreWatchRequest,
+  GenreWatchlist,
   Insights,
   Monetisation,
   OriginalityReport,
@@ -423,6 +431,42 @@ export const refineBrief = (rough: string, format: string) =>
  */
 export const getIdeaSuggestions = (limit = 4) =>
   get<Suggestions>(`/v1/ideas/suggestions?limit=${limit}`);
+
+// ── genre intelligence ──────────────────────────────────────────────────────
+//
+// Reads of the mined corpus are free; the mutations name their cost where it
+// exists (`watchChannel` may spend one quota unit resolving a handle, `syncGenre`
+// one per channel swept).
+
+/** Who we watch, with per-channel sync state and corpus sizes. */
+export const getGenreWatchlist = () => get<GenreWatchlist>("/v1/genre/watchlist");
+
+export const watchChannel = (body: Partial<GenreWatchRequest>) =>
+  post<GenreAdded>("/v1/genre/watchlist", body);
+
+export const unwatchChannel = (channelId: string) =>
+  del<GenreRemoved>(
+    `/v1/genre/watchlist/${encodeURIComponent(channelId)}`,
+  );
+
+/** Pause or resume. History is kept either way — this is not deletion. */
+export const toggleChannel = (channelId: string, active: boolean) =>
+  send<GenreToggle>("PATCH", `/v1/genre/watchlist/${encodeURIComponent(channelId)}`, {
+    active,
+  });
+
+/**
+ * Sweep every active channel. ~1 quota unit each — cheap by design (see
+ * `engine/genre/sync.py`), so a manual button needs no confirmation.
+ */
+export const syncGenre = () => post<GenreSyncResponse>("/v1/genre/sync");
+
+/** Hook strategies, durations and cadence across the watched corpus. */
+export const getGenrePatterns = () => get<GenrePatterns>("/v1/genre/patterns");
+
+/** Demand ÷ supply per candidate topic. Costs an autocomplete sweep per topic. */
+export const scoreGaps = (topics: string[]) =>
+  post<GenreGaps>("/v1/genre/gaps", { topics });
 
 /** The composed thumbnail variants for a job, as pictures rather than a count. */
 export const getThumbnails = (jobId: string) =>

@@ -84,6 +84,18 @@
         "title": "AddModel",
         "type": "object"
       },
+      "AddedChannel": {
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/WatchedChannelOut"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "title": "AddedChannel",
+        "type": "object"
+      },
       "Assignment": {
         "properties": {
           "at": {
@@ -545,6 +557,11 @@
             "title": "Required",
             "type": "boolean"
           },
+          "secret": {
+            "default": true,
+            "title": "Secret",
+            "type": "boolean"
+          },
           "tail": {
             "title": "Tail",
             "type": "string"
@@ -721,6 +738,52 @@
         "title": "EditRequest",
         "type": "object"
       },
+      "GapOut": {
+        "properties": {
+          "autocomplete_matches": {
+            "title": "Autocomplete Matches",
+            "type": "integer"
+          },
+          "gap": {
+            "title": "Gap",
+            "type": "number"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          },
+          "watched_videos_on_topic": {
+            "title": "Watched Videos On Topic",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "topic",
+          "autocomplete_matches",
+          "watched_videos_on_topic",
+          "gap"
+        ],
+        "title": "GapOut",
+        "type": "object"
+      },
+      "GapRequest": {
+        "properties": {
+          "topics": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Topics",
+            "type": "array"
+          }
+        },
+        "required": [
+          "topics"
+        ],
+        "title": "GapRequest",
+        "type": "object"
+      },
       "GrantIn": {
         "description": "Authority to use a clip, as the rights panel submits it.",
         "properties": {
@@ -892,6 +955,51 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HookPatternOut": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "median_views": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Views"
+          },
+          "median_views_per_day": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Views Per Day"
+          },
+          "pattern": {
+            "title": "Pattern",
+            "type": "string"
+          },
+          "share": {
+            "title": "Share",
+            "type": "number"
+          }
+        },
+        "required": [
+          "pattern",
+          "count",
+          "share"
+        ],
+        "title": "HookPatternOut",
         "type": "object"
       },
       "JobRequest": {
@@ -1261,6 +1369,66 @@
         "title": "Options",
         "type": "object"
       },
+      "PatternsReport": {
+        "description": "What `genre.patterns.analyze` computed over the watched corpus.",
+        "properties": {
+          "duration_buckets": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Duration Buckets",
+            "type": "object"
+          },
+          "hook_patterns": {
+            "items": {
+              "$ref": "#/components/schemas/HookPatternOut"
+            },
+            "title": "Hook Patterns",
+            "type": "array"
+          },
+          "median_duration_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Duration S"
+          },
+          "top_by_velocity": {
+            "items": {
+              "$ref": "#/components/schemas/VelocityTitleOut"
+            },
+            "title": "Top By Velocity",
+            "type": "array"
+          },
+          "uploads_per_week": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uploads Per Week"
+          },
+          "video_count": {
+            "title": "Video Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "video_count",
+          "hook_patterns",
+          "top_by_velocity"
+        ],
+        "title": "PatternsReport",
+        "type": "object"
+      },
       "PendingVideo": {
         "description": "One video waiting for a slot.\n\nWas `dict`, which meant a missing `id` reached `auto_schedule` and came back\nas a 500 with a KeyError \u2014 four ordinary malformed payloads all did. Declaring\nthe shape turns each of them into a 422 naming the field.",
         "properties": {
@@ -1469,6 +1637,19 @@
           "instruction"
         ],
         "title": "Regenerate",
+        "type": "object"
+      },
+      "Removed": {
+        "properties": {
+          "removed": {
+            "title": "Removed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "title": "Removed",
         "type": "object"
       },
       "ReportOut": {
@@ -2292,6 +2473,70 @@
         "title": "Suggestions",
         "type": "object"
       },
+      "SyncReport": {
+        "properties": {
+          "channel_id": {
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "new_videos": {
+            "title": "New Videos",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "videos_seen": {
+            "title": "Videos Seen",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channel_id",
+          "ok",
+          "videos_seen",
+          "new_videos",
+          "error"
+        ],
+        "title": "SyncReport",
+        "type": "object"
+      },
+      "SyncResponse": {
+        "properties": {
+          "channels_synced": {
+            "title": "Channels Synced",
+            "type": "integer"
+          },
+          "failures": {
+            "title": "Failures",
+            "type": "integer"
+          },
+          "reports": {
+            "items": {
+              "$ref": "#/components/schemas/SyncReport"
+            },
+            "title": "Reports",
+            "type": "array"
+          },
+          "videos_new": {
+            "title": "Videos New",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channels_synced",
+          "failures",
+          "videos_new",
+          "reports"
+        ],
+        "title": "SyncResponse",
+        "type": "object"
+      },
       "TaskRoute": {
         "properties": {
           "group": {
@@ -2570,6 +2815,24 @@
         "title": "TimelineIn",
         "type": "object"
       },
+      "ToggleResult": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "youtube_channel_id": {
+            "title": "Youtube Channel Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "youtube_channel_id",
+          "active"
+        ],
+        "title": "ToggleResult",
+        "type": "object"
+      },
       "TransformationVerdictOut": {
         "properties": {
           "passed": {
@@ -2679,6 +2942,34 @@
         "title": "Variant",
         "type": "object"
       },
+      "VelocityTitleOut": {
+        "properties": {
+          "channel_label": {
+            "title": "Channel Label",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "views": {
+            "title": "Views",
+            "type": "integer"
+          },
+          "views_per_day": {
+            "title": "Views Per Day",
+            "type": "number"
+          }
+        },
+        "required": [
+          "title",
+          "channel_label",
+          "views",
+          "views_per_day"
+        ],
+        "title": "VelocityTitleOut",
+        "type": "object"
+      },
       "Voice": {
         "description": "One narrator, described in the service's own words rather than ours.",
         "properties": {
@@ -2713,6 +3004,128 @@
           "gender"
         ],
         "title": "Voice",
+        "type": "object"
+      },
+      "WatchRequest": {
+        "description": "Add a channel to the watchlist \u2014 by id, or by @handle when a YouTube\ncredential is connected to resolve it (one quota unit).",
+        "properties": {
+          "channel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Id"
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handle"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "title": "WatchRequest",
+        "type": "object"
+      },
+      "WatchToggle": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "active"
+        ],
+        "title": "WatchToggle",
+        "type": "object"
+      },
+      "WatchedChannelOut": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_error": {
+            "default": "",
+            "title": "Last Error",
+            "type": "string"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "video_count": {
+            "default": 0,
+            "title": "Video Count",
+            "type": "integer"
+          },
+          "youtube_channel_id": {
+            "title": "Youtube Channel Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "youtube_channel_id",
+          "label",
+          "note",
+          "active",
+          "created_at"
+        ],
+        "title": "WatchedChannelOut",
+        "type": "object"
+      },
+      "WatchlistResponse": {
+        "properties": {
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/WatchedChannelOut"
+            },
+            "title": "Channels",
+            "type": "array"
+          }
+        },
+        "required": [
+          "channels"
+        ],
+        "title": "WatchlistResponse",
         "type": "object"
       },
       "engine__api__channels__ApplyRequest": {
@@ -3710,6 +4123,286 @@
           }
         ],
         "summary": "Get File"
+      }
+    },
+    "/v1/genre/gaps": {
+      "post": {
+        "description": "Demand \u00f7 supply per candidate topic.\n\nSupply comes from the watchlist corpus \u2014 a floor on real competition, not\na census of YouTube. The screen should say so wherever these numbers\nappear next to idea scores.",
+        "operationId": "gaps_v1_genre_gaps_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GapOut"
+                  },
+                  "title": "Response Gaps V1 Genre Gaps Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Gaps",
+        "tags": [
+          "genre"
+        ]
+      }
+    },
+    "/v1/genre/patterns": {
+      "get": {
+        "description": "Hook-strategy, duration and cadence aggregates over the mined corpus.",
+        "operationId": "patterns_v1_genre_patterns_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatternsReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patterns",
+        "tags": [
+          "genre"
+        ]
+      }
+    },
+    "/v1/genre/sync": {
+      "post": {
+        "description": "Sweep every active watched channel (~1 quota unit per channel).\n\nPer-channel failures are reported inline rather than failing the sweep \u2014\nthe response shows exactly which channels are quietly broken.",
+        "operationId": "sync_watchlist_v1_genre_sync_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sync Watchlist",
+        "tags": [
+          "genre"
+        ]
+      }
+    },
+    "/v1/genre/watchlist": {
+      "get": {
+        "description": "Every watched channel with its corpus size.",
+        "operationId": "watchlist_v1_genre_watchlist_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchlistResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Watchlist",
+        "tags": [
+          "genre"
+        ]
+      },
+      "post": {
+        "description": "Watch a channel. Accepts an id or an @handle (resolved via the Data API\nfor one unit when a channel is connected; without one, id only).",
+        "operationId": "add_to_watchlist_v1_genre_watchlist_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddedChannel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Add To Watchlist",
+        "tags": [
+          "genre"
+        ]
+      }
+    },
+    "/v1/genre/watchlist/{youtube_channel_id}": {
+      "delete": {
+        "operationId": "remove_from_watchlist_v1_genre_watchlist__youtube_channel_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "youtube_channel_id",
+            "required": true,
+            "schema": {
+              "title": "Youtube Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Removed"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Remove From Watchlist",
+        "tags": [
+          "genre"
+        ]
+      },
+      "patch": {
+        "description": "Pause or resume a channel without losing its mined history.",
+        "operationId": "toggle_watchlist_v1_genre_watchlist__youtube_channel_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "youtube_channel_id",
+            "required": true,
+            "schema": {
+              "title": "Youtube Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchToggle"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToggleResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Toggle Watchlist",
+        "tags": [
+          "genre"
+        ]
       }
     },
     "/v1/ideas/backlog": {
