@@ -279,6 +279,27 @@ per connection because that is the only scope SQLite offers, and a connection th
 misses it silently stops enforcing. The full suite passes with it on, which is the
 evidence that this was the only violation rather than the first of many.
 
+### 4.11 moviepy loads the repo `.env` into the test process
+`moviepy/config.py` calls `load_dotenv()` at import, and its search walks *up*
+from the working directory — so under pytest, the first test that touches
+MoviePy hoisted every real credential from the repo-root `.env` into
+`os.environ`. pydantic-settings prefers the process environment over any
+dotenv, so from that point every later test saw the operator's actual keys.
+
+The symptom looked like flakiness and worse: five tests failed in full-suite
+runs and passed standalone, because standalone they never imported moviepy
+first — and CI never reproduced any of it, having no real `.env`. Found by
+spying on `os._Environ.__setitem__` during a single assemble test and watching
+`ANTHROPIC_API_KEY`, `PEXELS_API_KEY`, `TIKTOK_CLIENT_KEY` and friends land.
+
+`conftest.purge_credential_env` is the defence: every name `Settings` can read
+a credential from (plain and `validation_alias` spellings, so new fields are
+covered automatically) is removed from the environment by the autouse fixture
+before each test, and tests that trigger the walk-up themselves can re-run it.
+`test_moviepy_dotenv_walkup_cannot_reach_the_provider` pins both halves.
+
+---
+
 ### 4.10 The repurpose tests mixed `TestClient` with the `database` fixture
 `test_spend.py` has documented the rule since it was written: `TestClient` runs the
 app on a blocking portal with **its own event loop**, so a test that also writes rows
@@ -400,16 +421,16 @@ Everything showing fixtures carries a "demo data" badge, Library omits views and
 in live mode rather than showing zeros, and Calendar refuses to persist a drag when
 `!live` and says "nothing was saved".
 
-### 5.6 Duplicate detection is lexical, not semantic
-Jaccard overlap on content words. Catches "why bridges collapse" vs "the reason
-bridges collapse". Will **not** catch "why bridges collapse" vs "the physics of
-structural failure in suspension spans" — same video, no shared words. An embedding
-model would; it was rejected because this runs on every idea against the whole
-catalogue and needs to be explainable on the idea card.
+### 5.6 ~~Duplicate detection is lexical, not semantic~~ — layered
+Jaccard overlap on content words remains the base (it is explainable on the idea
+card), and FIX-TASKS D3 layered an Ollama embedding check over it for the
+0.2–0.45 similarity band — `ideas.find_duplicate_async`. The semantic layer
+needs a running Ollama; without one the lexical pass still stands alone.
 
-### 5.7 The 500-char keyword and tag trimmers are naive
-They keep the earliest entries and drop the rest. Should drop the *lowest-value*
-ones.
+### 5.7 ~~The 500-char keyword and tag trimmers are naive~~ — fixed
+Both `trim_keywords` and `validate_tags` now rank by autocomplete-suggestion
+position when suggestions are available (FIX-TASKS D4, `test_trimming.py`), so
+the *lowest-value* entries are the ones dropped.
 
 ### 5.8 Two surfaces exist, cost something, and are read by nothing
 Both are decisions rather than oversights, recorded so they stop being re-found:
@@ -529,13 +550,14 @@ From Git Bash the same line needs `MSYS_NO_PATHCONV=1` in front of it and
   rather than silently accepted. Every write and every credential-bearing route —
   `PUT /v1/setup/keys` included — takes the header only, which only server-side
   code can supply.
-- **No ⌘K command palette**, though the design spec leans on it to keep screens
-  sparse.
-- **No thumbnail A/B swapping**, which Phase 8's attribution is otherwise ready for.
-- **No trend monitoring.** The idea backlog accepts a `trending_terms` argument that
-  nothing currently supplies, so `freshness` is zero on every real idea and its
-  decay curve has nothing to decay. The scoring is ready for a supplier; there
-  isn't one.
+- ~~**No ⌘K command palette**~~ — done (FIX-TASKS E1): `components/command-palette.tsx`,
+  keyboard-only, on every screen but `/welcome`.
+- ~~**No thumbnail A/B swapping**~~ — done (FIX-TASKS E2): `thumbnail_ab.py`, hourly
+  cron, `thumbnail_swaps` table.
+- ~~**No trend monitoring**~~ — done (FIX-TASKS E3): `trending.py` supplies
+  `freshness` from YouTube trending plus rising autocomplete. Genre intelligence
+  (2026-08-23, `engine/genre/`) extends this with watched-competitor channels,
+  hook-pattern mining and demand-vs-supply gap scoring.
 - **The weekly review has no screen and sends no notification.** The cron job runs
   Monday 06:00 UTC and `POST /v1/insights/review` runs it on demand, but the only
   way to read the result is the API or the worker log. `Review.worth_reading` is

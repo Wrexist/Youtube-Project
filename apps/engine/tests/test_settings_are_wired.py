@@ -556,6 +556,34 @@ def test_tiktok_credentials_read_the_unprefixed_names(monkeypatch):
     assert settings.tiktok_client_secret == ""
 
 
+def test_moviepy_dotenv_walkup_cannot_reach_the_provider(monkeypatch):
+    """moviepy/config.py runs `load_dotenv()` over the working directory at
+    import, and its search walks *up* to the repo root — so on a machine with a
+    real `.env`, the first test that touches MoviePy hoists every credential
+    into `os.environ`, where pydantic-settings prefers it over any dotenv.
+
+    That was five full-suite-only failures that passed standalone and were
+    invisible on CI (no real `.env` there). The suite's defence is
+    `conftest.purge_credential_env`, applied by `scratch_state` and re-runnable
+    inside a test that triggers the walk-up itself. This pins both halves: the
+    leak is real, and the purge turns it off.
+    """
+    from conftest import purge_credential_env
+
+    from engine.providers import tiktok
+    from engine.settings import get_settings
+
+    # Simulate exactly what moviepy's load_dotenv did to this process.
+    monkeypatch.setenv("TIKTOK_CLIENT_KEY", "leaked-key")
+    monkeypatch.setenv("TIKTOK_CLIENT_SECRET", "leaked-secret")
+    get_settings.cache_clear()
+    assert tiktok.configured() is True, "precondition: environ beats the dotenv"
+
+    purge_credential_env(monkeypatch)
+    get_settings.cache_clear()
+    assert tiktok.configured() is False
+
+
 def test_the_tiktok_error_message_names_the_variable_that_works(monkeypatch):
     from engine.providers import tiktok
     from engine.settings import get_settings

@@ -8,6 +8,7 @@ production imports.
 
 from __future__ import annotations
 
+import os
 import sys
 import types
 
@@ -56,6 +57,28 @@ def _stub(name: str, **attrs: object) -> None:
 # corrupting the one after it, which is exactly what nobody remembers to opt into.
 
 
+def purge_credential_env(monkeypatch) -> None:
+    """Remove every name `Settings` can read a credential from, from `os.environ`.
+
+    The defence against moviepy's dotenv walk-up (see `scratch_state` below for
+    the full story). A function rather than inline fixture code so tests can
+    re-run it after *they* trigger the walk-up — the first `import moviepy`
+    inside a test body leaks into that test's own window, after the fixture has
+    already done its work.
+    """
+    from engine.settings import Settings
+
+    for field_name, field in Settings.model_fields.items():
+        names = {field.alias or field_name}
+        if field.validation_alias is not None:
+            alias = field.validation_alias
+            names = {alias} if isinstance(alias, str) else set(getattr(alias, "choices", ()) or ())
+        for name in names:
+            candidate = name.upper()
+            if candidate in os.environ:
+                monkeypatch.delenv(candidate, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def scratch_state(tmp_path, monkeypatch):
     """Persistence off, and pointed at a throwaway file even so.
@@ -68,6 +91,18 @@ def scratch_state(tmp_path, monkeypatch):
     """
     from engine import db
     from engine.settings import Settings, get_settings
+
+    # moviepy's `config.py` runs `load_dotenv()` over the working directory at
+    # import, and its search walks *up* — so the first test that touches
+    # MoviePy hoists every real credential from the repo-root `.env` into
+    # `os.environ`. pydantic-settings prefers the process environment over any
+    # dotenv, so from that moment every later test saw the operator's actual
+    # keys: the "unconfigured TikTok" and "connecting without credentials"
+    # assertions failed in full-suite runs and passed standalone, because
+    # standalone they never imported moviepy first. CI never saw it — no real
+    # `.env` there — which made it look like flakiness for exactly as long as
+    # nobody had run the suite on a machine with keys.
+    purge_credential_env(monkeypatch)
 
     monkeypatch.setenv("STUDIO_PERSIST", "false")
     monkeypatch.setenv("STUDIO_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'scratch.db'}")
