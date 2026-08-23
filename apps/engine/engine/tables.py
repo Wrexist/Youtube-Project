@@ -454,3 +454,67 @@ class ReviewSnapshot(Base):
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, index=True
     )
+
+
+class WatchedChannel(Base):
+    """A competitor channel the genre intelligence follows.
+
+    Watching a channel is a decision a human made about whose moves matter to
+    this niche, so rows are created deliberately (API or UI) and removed
+    explicitly — nothing here auto-discovers channels, because "who competes
+    with us" is editorial judgement, not something to infer from one search
+    result. `youtube_channel_id` is the stable key: handles change, ids do not.
+
+    Sync state lives on the row (`last_synced_at`, `last_error`) so the watchlist
+    screen can show which channels are quietly failing without a sweep log.
+    """
+
+    __tablename__ = "watched_channels"
+
+    youtube_channel_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str] = mapped_column(String(200), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    #: A deactivated channel keeps its history (`watched_videos` rows survive) but
+    #: is skipped by sweeps — pause, don't destroy, is the right verb for
+    #: "we're not competing with them this quarter".
+    active: Mapped[bool] = mapped_column(default=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class WatchedVideo(Base):
+    """One video from a watched channel, with the counters genre mining reads.
+
+    One row per video, upserted on every sweep: `views`/`likes` are refreshed in
+    place and `first_seen_*` is written once on insert, which is what makes
+    view velocity computable without a snapshot-history table. The alternative —
+    a row per observation — grows forever for data only ever read as "latest"
+    and "how fast it got here", and neither needs history to answer.
+
+    Titles are stored verbatim: they are the input to hook-pattern mining, and
+    they are public metadata about a public post — same standing as
+    `ClipSource.caption`, untrusted at prompt boundaries but not secret.
+    """
+
+    __tablename__ = "watched_videos"
+
+    video_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    watched_channel_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("watched_channels.youtube_channel_id", ondelete="CASCADE"),
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(Text, default="")
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    duration_s: Mapped[float] = mapped_column(default=0.0)
+    views: Mapped[int] = mapped_column(Integer, default=0)
+    likes: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    first_seen_views: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )

@@ -728,6 +728,93 @@ class YouTube:
         items = resp.json().get("items", [])
         return [title for item in items if (title := item.get("snippet", {}).get("title"))]
 
+    async def channel_details(self, channel_ids: list[str]) -> list[dict]:
+        """channels.list for arbitrary channels — how the watchlist resolves an id
+        into uploads playlist + title. 1 quota unit per call, up to 50 ids per
+        call, so a whole watchlist resolves in one unit however long it grows.
+
+        Returns raw items; callers pick the parts they need.
+        """
+        if not channel_ids:
+            return []
+        resp = await self._call(
+            "GET",
+            f"{API}/channels",
+            "channels.list",
+            params={"part": "snippet,contentDetails", "id": ",".join(channel_ids[:50])},
+        )
+        return resp.json().get("items", [])
+
+    async def channel_by_handle(self, handle: str) -> dict | None:
+        """Resolve a @handle to its channel, so the watchlist accepts what a URL
+        actually contains. 1 unit; None when the handle matches nothing.
+
+        `forHandle` rather than `forUsername`: legacy usernames still resolve
+        through it, while the reverse is not true for channels created since
+        handles became the public identity.
+        """
+        clean = handle.strip().lstrip("@")
+        if not clean:
+            return None
+        resp = await self._call(
+            "GET",
+            f"{API}/channels",
+            "channels.list",
+            params={"part": "snippet,contentDetails", "forHandle": f"@{clean}"},
+        )
+        items = resp.json().get("items", [])
+        return items[0] if items else None
+
+    async def playlist_items(self, playlist_id: str, limit: int = 50) -> list[dict]:
+        """A playlist's videos, newest first — for a channel that is its uploads
+        feed. 1 unit per page of up to 50; pagination stops at `limit` or when
+        `nextPageToken` runs out, whichever comes first.
+
+        A missing `nextPageToken` on page one is normal (small channel), not an
+        error — the same honest-empty contract every read here follows.
+        """
+        out: list[dict] = []
+        page_token: str | None = None
+        while len(out) < limit:
+            params: dict[str, Any] = {
+                "part": "snippet,contentDetails",
+                "playlistId": playlist_id,
+                "maxResults": min(50, limit - len(out)),
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = await self._call(
+                "GET", f"{API}/playlistItems", "playlistItems.list", params=params
+            )
+            body = resp.json()
+            out.extend(body.get("items", []))
+            page_token = body.get("nextPageToken")
+            if not page_token:
+                break
+        return out
+
+    async def video_details(self, video_ids: list[str]) -> list[dict]:
+        """videos.list by id, batched — statistics + durations for mining. 1 unit
+        per call of up to 50 ids, so 500 watched videos refresh in ten units
+        where re-searching each topic would burn hundreds.
+
+        Ids YouTube does not know (deleted, private) are simply absent from the
+        response; callers treat fewer rows back than ids sent as normal.
+        """
+        out: list[dict] = []
+        for i in range(0, len(video_ids), 50):
+            resp = await self._call(
+                "GET",
+                f"{API}/videos",
+                "videos.list",
+                params={
+                    "part": "snippet,statistics,contentDetails",
+                    "id": ",".join(video_ids[i : i + 50]),
+                },
+            )
+            out.extend(resp.json().get("items", []))
+        return out
+
 
 def _parse_iso8601_duration(value: str) -> float | None:
     """Parse the `PT#H#M#S` form the Data API reports durations in.
