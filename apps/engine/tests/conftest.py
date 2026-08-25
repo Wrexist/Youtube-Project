@@ -11,7 +11,16 @@ from __future__ import annotations
 import sys
 import types
 
+import httpx2
 import pytest
+
+# Before any test module (or respx) imports `httpx`: the anthropic 1.x SDK moved
+# its HTTP layer to `httpx2`, so respx — which patches `httpx` — silently stopped
+# seeing the SDK's requests and every mocked Anthropic call escaped to the real
+# API. Aliasing makes `import httpx` resolve to `httpx2` process-wide, so respx
+# and the SDK are back on the same transport. Raises loudly if something imported
+# `httpx` first, which is the failure mode we want visible.
+httpx2.alias_httpx()
 
 
 def _stub(name: str, **attrs: object) -> None:

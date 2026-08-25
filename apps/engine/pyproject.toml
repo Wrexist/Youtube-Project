@@ -15,7 +15,10 @@ dependencies = [
     "redis>=5.2",
     "arq>=0.26",
     "httpx>=0.28",
-    "anthropic>=0.40",
+    # 1.x, which moved the SDK's HTTP layer to `httpx2` and removed the sampling
+    # keywords from `messages.create()` — llm.py and tests/conftest.py are both
+    # written against that; a 0.x resolve would break them.
+    "anthropic>=1,<2",
     "cryptography>=44.0",
     # ZoneInfo("America/Los_Angeles") — the quota day boundary. The stdlib reads the
     # system tz database, which slim containers and Windows do not ship, so without
@@ -59,6 +62,9 @@ dev = [
     "ruff>=0.8",
     "respx>=0.22",
     "httpx>=0.28",
+    # Imported directly by tests/conftest.py for `alias_httpx()`. Arrives
+    # transitively with `anthropic` 1.x anyway; declared because we import it.
+    "httpx2>=2.0",
 ]
 
 [tool.ruff]
@@ -79,6 +85,12 @@ ignore = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# `-p no:respx` blocks respx's entry-point plugin, which imports `httpx` before
+# conftest.py can run `httpx2.alias_httpx()` — and an un-aliased respx patches a
+# transport the anthropic 1.x SDK no longer uses, so every mocked Anthropic call
+# escaped to the real API. The suite only ever uses `@respx.mock` directly, never
+# the plugin's `respx_mock` fixture, so nothing is lost by blocking it.
+addopts = "-p no:respx"
 
 [build-system]
 requires = ["hatchling"]

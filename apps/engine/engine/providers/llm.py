@@ -131,9 +131,14 @@ class LLM:
         # `temperature` is not universally accepted any more, and the models that
         # dropped it reject it with a 400 rather than ignoring it — so sending it
         # unconditionally broke every stage routed to the strongest model available.
+        # Via `extra_body` rather than as a keyword: the 1.x SDK removed the
+        # sampling parameters from `messages.create()`'s signature entirely
+        # (a client-side TypeError before any request is made), while the models
+        # this policy admits still accept them on the wire. `extra_body` merges
+        # into the request JSON as-is, so the wire shape is unchanged.
         policy = self.spec.temperature_policy
         if policy == "any" or (policy == "default-only" and temp == 1.0):
-            kwargs["temperature"] = temp
+            kwargs["extra_body"] = {"temperature": temp}
         if system:
             kwargs["system"] = system
         resp = await client.messages.create(**kwargs)
