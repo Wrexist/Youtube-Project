@@ -18,6 +18,8 @@
  */
 
 import type {
+  AnalyticsDaily,
+  AnalyticsVideos,
   Backlog,
   Brief,
   Calendar,
@@ -38,11 +40,20 @@ import type {
   JobRequest,
   JobStatus,
   JobSummary,
+  Launch,
+  LaunchRequest,
+  LaunchSummary,
   Models,
+  PendingVideos,
   Playlist,
   PublishRequest,
   Quota,
+  Retention,
   Review,
+  Series,
+  SeriesPatch,
+  SeriesPlan,
+  SeriesRequest,
   Sharpened,
   SetupStatus,
   Spend,
@@ -226,6 +237,11 @@ export async function put<T>(path: string, body?: unknown): Promise<T> {
 /** Unscheduling is a DELETE — the slot is removed, not set to nothing. */
 export async function del<T>(path: string): Promise<T> {
   return send<T>("DELETE", path);
+}
+
+/** Partial update — only the fields present are changed. */
+export async function patch<T>(path: string, body?: unknown): Promise<T> {
+  return send<T>("PATCH", path, body);
 }
 
 /** FastAPI's `detail` is a string, or a list of validation errors, or an object. */
@@ -518,6 +534,53 @@ export const sweepClips = (channelKey = "main", limit = 40) =>
 /** Whether TikTok is configured, and whether anyone has signed in. */
 export const getTikTokStatus = () =>
   get<TikTokStatus>("/v1/repurpose/auth/tiktok/status");
+
+// ── series ──────────────────────────────────────────────────────────────────
+//
+// The endpoints the Series screen shipped without. A series is cadence + budget
+// + auto-publish, persisted engine-side; the plan is the run planner's answer
+// for this week, with the reasons anything was blocked.
+
+export const getSeries = () => get<Series[]>("/v1/series");
+export const createSeries = (body: SeriesRequest) => post<Series>("/v1/series", body);
+export const updateSeries = (id: string, changes: SeriesPatch) =>
+  patch<Series>(`/v1/series/${encodeURIComponent(id)}`, changes);
+export const deleteSeries = (id: string) =>
+  del<void>(`/v1/series/${encodeURIComponent(id)}`);
+export const getSeriesPlan = (id: string) =>
+  get<SeriesPlan>(`/v1/series/${encodeURIComponent(id)}/plan`);
+
+// ── channel launch ──────────────────────────────────────────────────────────
+//
+// `POST /launch` returns immediately with a running design; the screen polls
+// `getLaunch` until it completes. Through `send` rather than `get` where the
+// failure's message is the value — a launch that cannot start names why.
+
+export const startLaunch = (body: LaunchRequest) =>
+  post<Launch>("/v1/channels/launch", body);
+export const getLaunch = (id: string) =>
+  get<Launch>(`/v1/channels/launch/${encodeURIComponent(id)}`);
+export const getLaunches = () => get<LaunchSummary[]>("/v1/channels/launches");
+/** Push description, keywords and country onto the connected channel. The 409s
+ *  and 400s carry the exact reason — surface them, never "failed". */
+export const applyLaunch = (launchId: string) =>
+  post<{ applied: string[]; still_manual: string[] }>("/v1/channels/launch/apply", {
+    launch_id: launchId,
+    confirm_channel_created: true,
+  });
+
+// ── analytics reads the screen was missing ──────────────────────────────────
+
+/** Rendered but unpublished — what the Calendar tray drags onto slots. */
+export const getPendingVideos = () => get<PendingVideos>("/v1/calendar/pending");
+/** Every published video with metrics and provenance, newest first. */
+export const getAnalyticsVideos = () => get<AnalyticsVideos>("/v1/analytics/videos");
+/** The daily channel curve behind the tiles. Null until a channel is connected. */
+export const getAnalyticsDaily = (days = 28) =>
+  get<AnalyticsDaily>(`/v1/analytics/daily?days=${days}`);
+/** One video's retention curve mapped onto its script beats. */
+export const getRetention = (videoId: string) =>
+  get<Retention>(`/v1/analytics/retention/${encodeURIComponent(videoId)}`);
 
 /**
  * Begin the TikTok round trip.

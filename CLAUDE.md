@@ -118,11 +118,11 @@ On Windows the interpreter is at `.venv/Scripts/python` instead of `.venv/bin/py
 
 The web app runs **without an engine and without any API keys** — start it alone and
 every screen still renders, from `apps/web/lib/demo.ts`, so the design can be judged
-before the plumbing exists. With the engine up, eight of the ten screens read it for
-real; Series and New channel make no network call at all because the endpoints behind
-them do not exist yet, and Analytics is only partly wired — its monetisation card is
-live, the rest is still demo. `KNOWN-ISSUES.md` §5.5 has the per-screen breakdown.
-When you wire one of these up, that table is what needs updating.
+before the plumbing exists. With the engine up, every screen reads it for real —
+Series and New channel got their endpoints (`/v1/series`, the async launch flow) and
+Analytics is wired per section, falling back to demo with a badge wherever the data
+needs a connected channel to exist. `KNOWN-ISSUES.md` §5.5 has the per-screen
+breakdown; if you change what a screen reads, that table is what needs updating.
 
 **Toolchain note:** this machine has neither `pnpm` nor `uv`, so the repo uses npm
 workspaces and a plain venv at `apps/engine/.venv`. Switch to pnpm/uv if you install

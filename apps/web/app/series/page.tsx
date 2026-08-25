@@ -1,6 +1,8 @@
-import { Header, Page, Card, Button } from "@/components/ui";
+import { Header, Page, Card } from "@/components/ui";
 import { LiveBadge } from "@/components/live-badge";
+import { getBacklog, getSeries, getSeriesPlan } from "@/lib/engine";
 import { SERIES, BACKLOG } from "@/lib/demo";
+import { NewSeriesForm, SeriesCards, type SeriesView } from "./series-view";
 
 /** Series — standing instructions to keep making a kind of video at a rate.
  *
@@ -9,100 +11,108 @@ import { SERIES, BACKLOG } from "@/lib/demo";
  *  spent its month stops on its own and should say so before you wonder why it went
  *  quiet.
  *
- *  Read-only until the engine has a series table. The Pause/Resume and Edit buttons
- *  that were on each card are gone rather than left inert, following the same rule
- *  as the queue screen: a button that does nothing is worse than no button, because
- *  it claims the system can do something it cannot. "New series" survives as a
- *  disabled control with a reason on it — it is what says what this screen is for,
- *  and disabled-and-explained is not the same lie as live-and-inert.
+ *  Live against `/v1/series` — the endpoint whose absence this screen spent its
+ *  demo era apologising for. Each active card's warning line now comes from the
+ *  run planner itself (`/v1/series/{id}/plan`), so "backlog too thin" is the
+ *  planner's own verdict rather than a client-side guess at one.
  */
-export default function SeriesPage() {
+export default async function SeriesPage() {
+  const [series, backlog] = await Promise.all([getSeries(), getBacklog(8)]);
+  const live = series !== null;
+
+  const cards: SeriesView[] = live
+    ? await Promise.all(
+        series.map(async (s) => {
+          // The planner's verdict for this week. Skipped for paused series —
+          // "it is paused" is already on the card as a tag.
+          const plan = s.paused ? null : await getSeriesPlan(s.id);
+          return {
+            id: s.id,
+            name: s.name,
+            niche: s.niche,
+            shortsPerWeek: s.shorts_per_week,
+            longPerWeek: s.long_per_week,
+            autoPublish: s.auto_publish,
+            paused: s.paused,
+            monthlyBudget: s.monthly_budget_usd,
+            spentThisMonth: s.spent_this_month_usd,
+            backlogDepth: s.backlog_depth,
+            producedThisWeek: s.produced_this_week,
+            blockers: (plan?.blocked ?? []).map((b) => ({
+              code: b.code,
+              message: b.message,
+            })),
+          };
+        }),
+      )
+    : SERIES.map((s) => ({
+        ...s,
+        blockers:
+          s.backlogDepth < s.shortsPerWeek + s.longPerWeek
+            ? [
+                {
+                  code: "thin_backlog",
+                  message: `Backlog has ${s.backlogDepth} ideas but the cadence needs ${s.shortsPerWeek + s.longPerWeek}. It will produce fewer rather than reach for a weak topic.`,
+                },
+              ]
+            : [],
+      }));
+
+  const ideas = live
+    ? (backlog?.ideas ?? []).map((i) => ({
+        topic: i.topic,
+        score: i.score,
+        demand: i.demand,
+        fit: 0,
+        duplicate: null as string | null,
+        similarity: 0,
+      }))
+    : BACKLOG;
+
   return (
     <>
       <Header
         title="Series"
-        action={
-          <Button disabled title="Creating a series needs the series endpoint, which does not exist yet.">
-            New series
-          </Button>
-        }
+        action={<NewSeriesForm live={live} />}
         meta={
           <span className="flex items-center gap-2">
-            {SERIES.filter((s) => !s.paused).length} active
-            {/* No endpoint serves series yet — the engine has no series table. */}
-            <LiveBadge live={false} />
+            {cards.filter((s) => !s.paused).length} active
+            <LiveBadge live={live} />
           </span>
         }
       />
       <Page>
-        <div className="grid gap-3">
-          {SERIES.map((s) => {
-            const pct = Math.min(100, (s.spentThisMonth / s.monthlyBudget) * 100);
-            const target = s.shortsPerWeek + s.longPerWeek;
-            const thin = s.backlogDepth < target;
-            const tight = pct > 80;
-
-            return (
-              <Card key={s.id} className="p-5">
-                <div className="flex flex-wrap items-start gap-4">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-[15px] font-semibold">{s.name}</h2>
-                      {s.paused && <Tag tone="muted">paused</Tag>}
-                      {s.autoPublish && <Tag tone="accent">auto-publish</Tag>}
-                    </div>
-                    <p className="mt-1 text-[12px] text-[var(--color-faint)]">
-                      {s.niche}
-                    </p>
-
-                    <p className="mono mt-3 text-[12px] text-[var(--color-muted)]">
-                      {s.shortsPerWeek} shorts + {s.longPerWeek} long-form / week ·{" "}
-                      {s.producedThisWeek}/{target} made this week
-                    </p>
-
-                    <div className="mt-3 flex items-center gap-3">
-                      <div className="h-1 w-40 overflow-hidden rounded-full bg-[var(--color-raised)]">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${pct}%`,
-                            background: tight
-                              ? "var(--color-warn)"
-                              : "var(--color-muted)",
-                          }}
-                        />
-                      </div>
-                      <span className="mono text-[11px] text-[var(--color-faint)]">
-                        ${s.spentThisMonth.toFixed(2)} / ${s.monthlyBudget} this month
-                      </span>
-                    </div>
-
-                    {thin && (
-                      <p className="mt-2.5 text-[12px] text-[var(--color-warn)]">
-                        Backlog has {s.backlogDepth} ideas but the cadence needs{" "}
-                        {target}. It will produce fewer rather than reach for a weak
-                        topic.
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
+        {cards.length === 0 ? (
+          <Card className="p-8 text-center">
+            <p className="text-[14px] font-semibold">No series yet</p>
+            <p className="mx-auto mt-2 max-w-[48ch] text-[12px] leading-relaxed text-[var(--color-faint)]">
+              A series is a repeatable format with its own cadence and budget —
+              &ldquo;3 shorts a week about engineering failures&rdquo;. Create one
+              and the backlog, the planner and the budget bars all attach to it.
+            </p>
+          </Card>
+        ) : (
+          <SeriesCards series={cards} live={live} />
+        )}
 
         <section className="mt-10">
           <div className="flex items-baseline justify-between">
             <h2 className="text-[13px] font-semibold text-[var(--color-muted)]">
-              Backlog · Engineering failures
+              Backlog
             </h2>
             <span className="mono text-[12px] text-[var(--color-faint)]">
-              {BACKLOG.filter((b) => !b.duplicate).length} usable
+              {ideas.filter((b) => !b.duplicate).length} usable
             </span>
           </div>
 
           <div className="mt-3 grid gap-1.5">
-            {BACKLOG.map((idea) => (
+            {ideas.length === 0 && (
+              <Card className="px-4 py-3 text-[12px] text-[var(--color-faint)]">
+                Nothing researched yet — ideas land here as the suggestion engine
+                and channel launches propose them.
+              </Card>
+            )}
+            {ideas.map((idea) => (
               <Card
                 key={idea.topic}
                 className={`flex items-center gap-4 px-4 py-3 ${idea.duplicate ? "opacity-60" : ""}`}
@@ -119,7 +129,8 @@ export default function SeriesPage() {
                     </p>
                   ) : (
                     <p className="mono mt-0.5 text-[11px] text-[var(--color-faint)]">
-                      demand {idea.demand.toFixed(2)} · fit {idea.fit.toFixed(2)}
+                      demand {idea.demand.toFixed(2)}
+                      {idea.fit > 0 && ` · fit ${idea.fit.toFixed(2)}`}
                     </p>
                   )}
                 </div>
@@ -135,26 +146,5 @@ export default function SeriesPage() {
         </section>
       </Page>
     </>
-  );
-}
-
-function Tag({
-  children,
-  tone,
-}: {
-  children: React.ReactNode;
-  tone: "muted" | "accent";
-}) {
-  return (
-    <span
-      className="mono rounded-full border px-2 py-0.5 text-[10px] uppercase"
-      style={{
-        color: tone === "accent" ? "var(--color-accent)" : "var(--color-faint)",
-        borderColor:
-          tone === "accent" ? "var(--color-accent)" : "var(--color-line-hover)",
-      }}
-    >
-      {children}
-    </span>
   );
 }

@@ -164,6 +164,53 @@ body {
 .palette-overlay[data-state="open"] { animation: palette-overlay-in 120ms var(--ease-in-out); }
 .palette-content[data-state="open"] { animation: palette-content-in 120ms var(--ease-in-out); }
 
+/* ── The play layer ─────────────────────────────────────────────────────────
+   Rules in docs/UI-DESIGN.md § The play layer: derived from real work, moments
+   not chrome, and everything below collapses to instant under the
+   prefers-reduced-motion override at the bottom of this file. */
+
+/* Confetti: one burst on a finished render or publish. Token colors only. */
+@keyframes confetti-fall {
+  0%   { transform: translate3d(0, -10vh, 0) rotate(var(--confetti-tilt, 0deg)); opacity: 1; }
+  100% { transform: translate3d(var(--confetti-drift, 0px), 105vh, 0)
+                    rotate(calc(var(--confetti-tilt, 0deg) + 540deg)); opacity: 0; }
+}
+.confetti-piece {
+  position: absolute;
+  top: 0;
+  width: 7px;
+  height: 11px;
+  border-radius: 2px;
+  animation: confetti-fall 1.8s ease-in both;
+}
+
+/* The celebration toast: a quick pop, then it sits still. */
+@keyframes toast-pop {
+  0%   { opacity: 0; transform: translateY(-8px) scale(0.92); }
+  60%  { transform: translateY(2px) scale(1.03); }
+  100% { opacity: 1; transform: none; }
+}
+.toast-pop { animation: toast-pop 0.4s var(--ease-in-out) both; }
+
+/* A week's cadence as slots — the Series screen's quest row. Filled slots carry
+   a tick as well as color, so the state reads without hue. */
+.quest-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--color-line-hover);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--color-ok);
+}
+.quest-slot.is-done {
+  border-color: var(--color-ok);
+  background: color-mix(in srgb, var(--color-ok) 12%, transparent);
+}
+
 /* Motion communicates state change; when the user opts out, state still changes. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

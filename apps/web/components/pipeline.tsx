@@ -198,7 +198,7 @@ export function CopyButton({ label, text }: { label: string; text: string }) {
   );
 }
 
-function StatusGlyph({ status }: { status: StageStatus }) {
+export function StatusGlyph({ status }: { status: StageStatus }) {
   const map: Record<StageStatus, { glyph: string; color: string; label: string }> = {
     done: { glyph: "✓", color: "var(--color-ok)", label: "completed" },
     running: { glyph: "◐", color: "var(--color-accent)", label: "running" },

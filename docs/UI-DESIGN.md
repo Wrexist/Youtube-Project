@@ -129,6 +129,34 @@ Charts follow the `dataviz` skill conventions: no gridline clutter, direct label
 - Easing: `cubic-bezier(0.32, 0.72, 0, 1)` for entrances, plain `ease-out` for exits.
 - Skeletons, never spinners, for content that has a known shape.
 
+## The play layer
+
+The app should be satisfying to use — a little like a game, never like a casino.
+The line between those two is drawn by four rules, and everything playful in the
+product lives inside them:
+
+1. **Derived from real work, never invented.** XP is finished videos and
+   publishes; levels and achievements are pure functions of the jobs table
+   (`lib/progress.ts`). Delete the layer and no data is lost. A number that
+   flatters is a number people learn to ignore.
+2. **Moments, not chrome.** Celebration plays once at a real milestone — a
+   finished render bursts confetti for two seconds and disappears completely
+   (`components/celebration.tsx`). The one persistent fixture is the level chip
+   at the bottom of the rail, which is exactly as loud as the Setup link above
+   it. No progress rings on dashboards, no streak counters nagging from headers.
+3. **It never gates or delays anything.** The overlay is `pointer-events-none`;
+   the approval flow, the publish gate and every screen work identically with
+   the layer ignored. A game layer you must engage with is a dark pattern.
+4. **All existing rules still apply.** Token colors only, states readable
+   without hue (the Series screen's week slots carry ticks, not just green),
+   `prefers-reduced-motion` collapses every animation, and the accent budget is
+   unchanged — confetti spends the ok/warn/ink tokens, not five new hues.
+
+The vocabulary: **levels** (triangular XP ladder, named Newcomer → Mogul),
+**achievements** (six, all verifiable from job history), the **week-slot row**
+on Series cards (cadence as filled ticks), and **celebrations** (render
+complete). Anything new joins this list only if it passes all four rules.
+
 ## Responsive
 
 Desktop-first — this is a production tool. But **approval must work on a phone**: the Queue and the approve/publish action collapse to a clean mobile view. That's the only mobile requirement.

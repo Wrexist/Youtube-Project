@@ -32,7 +32,7 @@ function timestamp(seconds: number) {
 export function ShortCuts({ cuts, note }: { cuts: Cut[]; note?: string | null }) {
   if (cuts.length === 0) {
     return (
-      <p className="max-w-[60ch] text-[13px] leading-relaxed text-[var(--color-dim)]">
+      <p className="max-w-[60ch] text-[13px] leading-relaxed text-[var(--color-muted)]">
         {note ??
           "Nothing in this video rises far enough above its own retention curve to single out."}
       </p>
@@ -44,7 +44,7 @@ export function ShortCuts({ cuts, note }: { cuts: Cut[]; note?: string | null })
       {cuts.map((cut) => (
         <li key={cut.start_s} className="flex gap-4">
           <span
-            className="shrink-0 pt-px font-mono text-[13px] tabular-nums text-[var(--color-dim)]"
+            className="shrink-0 pt-px font-mono text-[13px] tabular-nums text-[var(--color-muted)]"
             aria-label={`from ${timestamp(cut.start_s)} to ${timestamp(cut.end_s)}`}
           >
             {timestamp(cut.start_s)}–{timestamp(cut.end_s)}
@@ -56,7 +56,7 @@ export function ShortCuts({ cuts, note }: { cuts: Cut[]; note?: string | null })
                 {Math.round(cut.duration_s)}s
               </span>
             </p>
-            <p className="mt-1 max-w-[58ch] text-[13px] leading-relaxed text-[var(--color-dim)]">
+            <p className="mt-1 max-w-[58ch] text-[13px] leading-relaxed text-[var(--color-muted)]">
               {cut.reason}
             </p>
           </div>

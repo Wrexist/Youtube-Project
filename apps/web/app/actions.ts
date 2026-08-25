@@ -51,6 +51,12 @@ import {
   sweepClips,
   getTikTokStatus,
   beginTikTokAuth,
+  createSeries,
+  updateSeries,
+  deleteSeries,
+  startLaunch,
+  getLaunch,
+  applyLaunch,
 } from "@/lib/engine";
 import { ONBOARDED_COOKIE, ONBOARDED_MAX_AGE } from "@/lib/onboarding";
 import type {
@@ -65,6 +71,10 @@ import type {
   JobRequest,
   Playlist,
   PublishRequest,
+  Launch,
+  Series,
+  SeriesPatch as SeriesPatchRequest,
+  SeriesRequest,
   Sharpened,
   Style,
   StyleUpdate,
@@ -719,6 +729,97 @@ export async function tiktokStatus(): Promise<ActionResult<TikTokStatus>> {
 export async function startTikTokConnection(): Promise<ActionResult<{ url: string }>> {
   try {
     return { ok: true, data: await beginTikTokAuth() };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+// ── series ──────────────────────────────────────────────────────────────────
+
+export async function addSeries(body: SeriesRequest): Promise<ActionResult<Series>> {
+  try {
+    const data = await createSeries(body);
+    revalidatePath("/series");
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+export async function editSeries(
+  id: string,
+  changes: SeriesPatchRequest,
+): Promise<ActionResult<Series>> {
+  try {
+    const data = await updateSeries(id, changes);
+    revalidatePath("/series");
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+export async function removeSeries(id: string): Promise<ActionResult> {
+  try {
+    await deleteSeries(id);
+    revalidatePath("/series");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+// ── channel launch ──────────────────────────────────────────────────────────
+
+/** Kick off the seven-stage design. Returns the running launch immediately. */
+export async function designChannel(niche: string): Promise<ActionResult<Launch>> {
+  try {
+    return { ok: true, data: await startLaunch({ niche, country: "US", language: "en" }) };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+/** One poll of a running (or finished) launch. `null` data = engine unreachable. */
+export async function pollLaunch(id: string): Promise<ActionResult<Launch>> {
+  const data = await getLaunch(id);
+  if (!data) return { ok: false, error: "the engine did not answer" };
+  return { ok: true, data };
+}
+
+/** Push description, keywords and country onto the connected channel. */
+export async function applyChannelLaunch(launchId: string): Promise<ActionResult> {
+  try {
+    await applyLaunch(launchId);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+/**
+ * Turn a finished launch's series plan into real series rows.
+ *
+ * The button this backs was `disabled` with "needs the series endpoint, which
+ * does not exist yet" — this is that endpoint existing.
+ */
+export async function createSeriesFromLaunch(
+  niche: string,
+  planned: { name: string; format: string; per_week: number }[],
+): Promise<ActionResult<{ created: number }>> {
+  try {
+    for (const s of planned) {
+      await createSeries({
+        name: s.name,
+        niche,
+        shorts_per_week: s.format === "short" ? s.per_week : 0,
+        long_per_week: s.format === "long" ? s.per_week : 0,
+        monthly_budget_usd: 30,
+        auto_publish: false,
+      });
+    }
+    revalidatePath("/series");
+    return { ok: true, data: { created: planned.length } };
   } catch (error) {
     return { ok: false, error: message(error) };
   }

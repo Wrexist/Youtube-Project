@@ -20,7 +20,7 @@ function Bar({ threshold }: { threshold: Threshold }) {
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[13px] text-[var(--color-dim)]">
+        <span className="text-[13px] text-[var(--color-muted)]">
           {threshold.name}
         </span>
         <span className="tabular-nums text-[13px]">
@@ -95,7 +95,7 @@ export function MonetisationCard({ data }: { data: Monetisation }) {
             a bar reading "0 / 1,000" states a fact about the channel that nobody
             knows — directly contradicting the note below it. */}
         {data.subscriber_count_hidden ? (
-          <p className="self-center text-[13px] text-[var(--color-dim)]">
+          <p className="self-center text-[13px] text-[var(--color-muted)]">
             Subscriber count unavailable
           </p>
         ) : (
@@ -105,7 +105,7 @@ export function MonetisationCard({ data }: { data: Monetisation }) {
       </div>
 
       {!data.eligible && data.blocking.length > 0 && (
-        <p className="mt-4 text-[13px] text-[var(--color-dim)]">
+        <p className="mt-4 text-[13px] text-[var(--color-muted)]">
           Held up by {data.blocking.join(" and ")}.
         </p>
       )}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 
+import { LevelChip } from "@/components/level-chip";
 import { NAV_ITEMS as ITEMS, SETUP_ITEM as SETUP } from "@/lib/nav-items";
 
 /** 64px icon rail, expanding to 220px on hover. The command palette carries
@@ -74,7 +75,11 @@ export function Rail() {
         })}
       </ul>
 
-      <div className="absolute bottom-4 left-0 w-full px-3">
+      <div className="absolute bottom-4 left-0 w-full">
+        {/* The play layer's one fixture: level and achievements, derived from
+            real jobs. Above Setup so the utility row keeps the very bottom. */}
+        <LevelChip expanded={open} />
+        <div className="px-3">
         <Link
           href={SETUP.href}
           aria-current={pathname === SETUP.href ? "page" : undefined}
@@ -109,6 +114,7 @@ export function Rail() {
         >
           ⌘K to search
         </kbd>
+        </div>
       </div>
     </nav>
   );

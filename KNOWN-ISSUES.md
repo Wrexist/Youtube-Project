@@ -6,8 +6,8 @@ Ordered by how likely it is to bite you.
 > **A full-system audit on 2026-07-26 found 20 issues this file did not list.**
 > **19 are now fixed.** Publishing is wired up and gated, CI is green, SSE no longer
 > duplicates events, every setting either works or is gone, state survives a restart,
-> renders run in a worker, and most of the web app reads live data (seven of ten
-> screens — see §5.5, which is the honest version). The exception is the npm
+> renders run in a worker, and the whole web app reads live data (every screen —
+> see §5.5, which is the honest version). The exception is the npm
 > advisories, which need an upstream Next release — see [AUDIT.md](AUDIT.md) §4.7 for
 > what each actually exposes. Several entries below are now out of date; AUDIT.md is
 > the current record.
@@ -301,6 +301,31 @@ was done, so the first run was also the first time any of it met Postgres.
 added an endpoint test. `CLAUDE.md` has the command. It takes seven minutes and it
 is the only way to see what CI sees.
 
+### 4.11 The anthropic 1.x SDK broke the suite twice, in two different ways
+`pyproject.toml` said `anthropic>=0.40`, so a fresh install resolved 1.0.0 — and six
+tests failed on a clean clone while every existing environment stayed green.
+
+Two independent breakages, one release:
+
+* **The sampling keywords are gone from `messages.create()`.** Passing
+  `temperature` is a client-side `TypeError` before any request is made, while the
+  models our `temperature_policy` admits still accept it on the wire. The transport
+  now sends it via `extra_body`, which merges into the request JSON as-is — the
+  wire shape is unchanged, which is why `test_llm.py`'s body assertions needed no
+  edits.
+* **The HTTP layer moved from `httpx` to `httpx2`.** respx patches `httpx`, so
+  every mocked Anthropic call silently stopped being intercepted and escaped to
+  the real API — the failure was an `AuthenticationError` from api.anthropic.com,
+  in a test suite. The fix is `httpx2.alias_httpx()` before anything imports
+  `httpx`, which is earlier than it sounds: respx registers a pytest entry-point
+  plugin that imports `httpx` before `conftest.py` loads, so `addopts = "-p
+  no:respx"` blocks the plugin (the suite only ever uses `@respx.mock` directly,
+  never the fixture) and the alias in `conftest.py` runs first. `alias_httpx`
+  raises if it is too late, which is the failure mode you want.
+
+The pin is now `anthropic>=1,<2` because the code is written against 1.x in both
+places; a 0.x resolve would break the conftest import.
+
 ---
 
 ## 5. Known-imperfect, working as intended for now
@@ -365,7 +390,7 @@ startup; a job that was mid-run at shutdown comes back marked `interrupted` and 
 be resumed. `STUDIO_PERSIST=false` turns persistence off, which is what the test
 suite uses.
 
-### 5.5 ~~The web app runs entirely on demo data~~ — seven of ten screens fixed
+### 5.5 ~~The web app runs entirely on demo data~~ — every screen now reads live data
 This entry and the header above used to disagree with each other — one said "every
 screen renders from demo.ts", the other "the web app reads live data". Neither was
 right. Per screen, as of today:
@@ -375,20 +400,17 @@ right. Per screen, as of today:
 | Create | live; `POST /v1/jobs` then SSE, falling back to `DEMO_JOB` if the create fails |
 | Queue, Library, Models | live, falling back to `demo.ts` when the engine is unreachable |
 | Setup, Welcome | live only — no fallback, deliberately. They show "the engine is not running" instead of plausible fiction, because a setup screen that invents its own state is worse than one that admits it is blind |
-| Calendar | mixed even when live: quota and bookings come from the engine, the draggable video tray is always `PENDING_VIDEOS` |
-| Analytics | partly live: the monetisation card reads `GET /v1/analytics/monetisation` and hides itself when the engine is unreachable or no channel is connected. Everything below it is still demo — the per-video, retention and Short-cut panels remain unwired. The Short-cut fixture in `demo.ts` is at least the genuine output of `engine/shorts.py` run over the demo retention curve, not an invented one |
-| Series, New channel | demo only, **no network call at all** — there is no series table, and the channel-launch endpoint has no caller |
+| Calendar | live: quota, bookings **and the draggable tray** — `GET /v1/calendar/pending` serves rendered-but-unpublished videos server-side (completed video jobs minus anything a publish job has uploaded or is uploading), so a scheduled chip's title resolves to the video actually booked. Demo tray only when the engine is unreachable |
+| Analytics | live per section, each with its own badge: monetisation, spend and the weekly review as before; the tiles read `GET /v1/analytics/daily`; findings read `GET /v1/insights`; the retention map and Short-cut panel anchor to the newest published video via `GET /v1/analytics/retention/{id}` and `/analytics/shorts/{id}`; the per-video table reads the new `GET /v1/analytics/videos`. Sections without live data (no channel, nothing published) fall back to the demo fixture and say so — the numbers need a connected channel to be real |
+| Series | **live.** `GET/POST/PATCH/DELETE /v1/series` exist and the screen uses all four; each active card's warning line is the run planner's own verdict from `GET /v1/series/{id}/plan` — the first production caller `plan_week` has ever had. "New series" is a real form; Pause/Resume/Remove are back and wired |
+| New channel | **live.** "Design it" calls `POST /v1/channels/launch`, which now runs as a background task the screen polls (it used to run seven LLM stages inside one request); progress renders as a pipeline; finished designs are persisted and resumable from the input screen; "Create series" materialises the launch's series plan through the series endpoints; "Apply description & keywords" calls `/launch/apply` and surfaces its 409s verbatim |
 | Repurpose | **live end to end.** "Find clips" runs a sweep, and clips, grants and the episode builder all read and write the engine; "Build episode" starts the `repurpose` workflow and links to the running job. Until the sweep button existed the screen said "nothing has been swept in yet" above no control that swept anything, which left the whole TikTok path unreachable from the UI while every part of it worked. Two honest limits remain: the pre-check shows a *real* rights verdict but only a projection of originality, because narration, cuts and audio are decided while it builds — the card says so; and the standalone originality card lower down is still the `demo.ts` fixture, labelled "example report", since it describes no particular episode. Falls back to `demo.ts` wholesale when the engine is unreachable, with every write disabled and carrying its reason. TikTok itself is **connectable but unproven**: OAuth, token refresh, pagination and error handling are all implemented and unit-tested against mocked responses, and none of it has been run against TikTok — the app needs review before credentials exist. §1.1's argument, for a second API |
 
-Series and New channel used to ship five buttons wired to nothing, including both
-screens' single primary action: pressing the one prominent control did nothing at
-all — no navigation, no request, no message. That contradicted this codebase's own
-rule, written down in `queue/page.tsx`, that a button doing nothing is worse than no
-button. Pause, Resume and Edit are now deleted; "New series" and "Create series"
-remain as `disabled` controls carrying the reason ("Creating a series needs the
-series endpoint, which does not exist yet"), because they are what tells you what the
-screen is for. Disabled-and-explained is not the same lie as live-and-inert. When the
-series endpoint lands, these are the controls to re-enable.
+The disabled "New series"/"Create series" buttons this section used to document —
+kept disabled-and-explained because the series endpoint did not exist — are live
+now that it does. What the live analytics sections still need to show real numbers
+is a connected channel and published videos (§1.1), which no amount of wiring
+supplies.
 
 The fallback is not a flag or an env var: `get<T>()` in `apps/web/lib/engine.ts`
 returns `null` on any failure including a non-2xx, and each page does
@@ -411,27 +433,26 @@ catalogue and needs to be explainable on the idea card.
 They keep the earliest entries and drop the rest. Should drop the *lowest-value*
 ones.
 
-### 5.8 Two surfaces exist, cost something, and are read by nothing
-Both are decisions rather than oversights, recorded so they stop being re-found:
+### 5.8 ~~Two surfaces exist, cost something, and are read by nothing~~ — both wired
+Both were long-standing "recorded rather than fixed" entries; both are fixed:
 
-**Channel launches are not persisted.** `repository.save_launch`/`load_launches` and
-the `ChannelLaunch` table all exist; no application code calls either, so a launch is
-lost on restart. Wiring it up is a loader rewrite, not a missing call — `load_launches`
-returns a flattened dict that does not match the mirror shape `api/channels.py` reads
-(`states`, `events`, `inputs`). What is lost is a regenerable LLM artifact on a flow
-whose manual channel-creation step is a documented gap anyway (§3.1). The module
-docstring used to claim launches survived a restart; that claim is gone.
+**Channel launches are persisted.** The loader rewrite this entry said was needed
+happened: `load_launches` returns the payload unflattened, `api/channels.py` saves
+after every stage boundary and `restore()` (called from the lifespan handler)
+rebuilds the `states`/`events`/`inputs` mirror with `load_states`. A launch that was
+mid-run at shutdown comes back `interrupted` rather than pretending to still run.
+`GET /v1/channels/launches` lists stored designs so the New channel screen can
+resume one — the point, since the manual steps take days. Covered by
+`tests/test_launch_persistence.py`.
 
-**`ChaptersStage` output is generated, billed and consumed by nothing.** YouTube only
-renders chapters from timestamps in the description, and nothing appends them there —
-`SeoPackage` (which has a `chapters` field) is never constructed anywhere. So the
-stage costs about $0.01 per run for a value no caller reads. It is left in place
-rather than deleted because plumbing it properly is a real design choice: either
-append the block to the description with 5000-char guarding, or reorder the graph to
-`titles → chapters → description`, which drags `subtitles` into the SEO chain. Its
-dependency declaration *was* wrong and is fixed — it read `ctx.get("subtitles")` while
-declaring only `("titles",)`, so re-running the voiceover left chapter timestamps
-pointing at cues that no longer existed.
+**`ChaptersStage` output reaches YouTube.** `seo.append_chapters` appends the
+chapter block to the description at upload time — the first point where both the
+written description and the render-timed chapter list exist — with the 5000-byte
+ceiling enforced all-or-nothing: a truncated chapter list misdescribes the video,
+and the description is prose someone may have edited, so neither is ever cut.
+`UploadStage` records `chapters_appended` in its provenance so "why does this video
+have no chapters" is answerable. Covered by `tests/test_chapters_append.py`.
+`SeoPackage` remains unconstructed and is now the only vestige of the old design.
 
 ### 5.9 On Windows, the `0o600` on `.env` and the key file does nothing
 Both writers ask for owner-only access — `api/setup.py` chmods the temp file before
@@ -536,11 +557,12 @@ From Git Bash the same line needs `MSYS_NO_PATHCONV=1` in front of it and
   nothing currently supplies, so `freshness` is zero on every real idea and its
   decay curve has nothing to decay. The scoring is ready for a supplier; there
   isn't one.
-- **The weekly review has no screen and sends no notification.** The cron job runs
-  Monday 06:00 UTC and `POST /v1/insights/review` runs it on demand, but the only
-  way to read the result is the API or the worker log. `Review.worth_reading` is
-  there for a notifier that does not exist yet — most weeks it is false, which is
-  the point.
+- **The weekly review sends no notification.** It *does* have a screen — the
+  `WeeklyReview` card sits at the top of Analytics, with an honest `NoReviewYet`
+  state that distinguishes "no worker running" from "engine unreachable" (this
+  entry used to claim no screen existed; that was stale). What is still missing is
+  a push: `Review.worth_reading` is there for a notifier that does not exist yet —
+  most weeks it is false, which is the point.
 - **The review needs a running worker.** It is an arq cron job, so the in-process
   fallback mode (no Redis) never fires it. Nothing warns about this.
 - **Shorts are selected but not cut.** `GET /v1/analytics/shorts/{video_id}` ranks

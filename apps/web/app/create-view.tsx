@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Header, Page, Button, Card } from "@/components/ui";
+import { Celebration } from "@/components/celebration";
 import { Pipeline } from "@/components/pipeline";
 import { VideoPreview } from "@/components/video-preview";
 import { useJobStream } from "@/lib/use-job-stream";
@@ -151,6 +152,24 @@ export function CreateView({
   const cost = demo ? DEMO_JOB.cost_usd : stream.cost_usd;
 
   /**
+   * The play layer's moment: confetti once, when a real render lands.
+   *
+   * Its own ref rather than sharing `notified` — the notification effect bails
+   * out early on focused tabs and denied permissions, and the celebration must
+   * fire exactly when a job completes regardless of either. Once per job, never
+   * for demo runs (celebrating work nobody did teaches you to ignore it), and
+   * never for a resumed job that was already complete when the page loaded.
+   */
+  const [celebrate, setCelebrate] = useState(false);
+  const celebrated = useRef<string | null>(resumeJobId);
+  useEffect(() => {
+    if (demo || !jobId || stream.status !== "completed") return;
+    if (celebrated.current === jobId) return;
+    celebrated.current = jobId;
+    setCelebrate(true);
+  }, [demo, jobId, stream.status]);
+
+  /**
    * Sharpen the fragment in the box into a topic the pipeline can research.
    *
    * Deliberately its own state rather than `startTransition`: `pending` gates
@@ -257,6 +276,13 @@ export function CreateView({
   if (jobId || demo) {
     return (
       <>
+        {celebrate && (
+          <Celebration
+            label="Video complete"
+            detail="+100 XP"
+            onDone={() => setCelebrate(false)}
+          />
+        )}
         <Header
           title={topic || DEMO_JOB.topic}
           meta={

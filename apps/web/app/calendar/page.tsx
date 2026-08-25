@@ -1,7 +1,7 @@
 import { Header, Page } from "@/components/ui";
 import { Calendar } from "@/components/calendar";
 import { LiveBadge } from "@/components/live-badge";
-import { getCalendar, getQuota } from "@/lib/engine";
+import { getCalendar, getPendingVideos, getQuota } from "@/lib/engine";
 import { PENDING_VIDEOS, QUOTA_BY_DAY } from "@/lib/demo";
 
 /** Calendar — real quota when the engine is up, demo data when it is not.
@@ -13,10 +13,27 @@ import { PENDING_VIDEOS, QUOTA_BY_DAY } from "@/lib/demo";
  *  though they were real.
  */
 export default async function CalendarPage() {
-  const [quota, calendar] = await Promise.all([getQuota(), getCalendar()]);
+  const [quota, calendar, pending] = await Promise.all([
+    getQuota(),
+    getCalendar(),
+    getPendingVideos(),
+  ]);
   const live = quota !== null;
 
   const quotaByDay = calendar?.quota_by_day ?? quota?.by_day ?? QUOTA_BY_DAY;
+
+  // The tray: rendered-but-unpublished videos from the engine, so a scheduled
+  // chip's title resolves to the video actually booked. Until this endpoint the
+  // tray was always the demo fixture, and a real booking's chip looked up its
+  // title in a list of seven inventions and found nothing (KNOWN-ISSUES §5.5).
+  const videos = live
+    ? (pending ?? []).map((v) => ({
+        id: v.id,
+        title: v.title,
+        format: (v.format === "long" ? "long" : "short") as "long" | "short",
+        duration: v.duration,
+      }))
+    : PENDING_VIDEOS;
 
   // Bookings the engine already holds. This page destructured only `quota_by_day`,
   // so an upload the engine had already scheduled was invisible — and the same day
@@ -40,7 +57,7 @@ export default async function CalendarPage() {
       />
       <Page>
         <Calendar
-          videos={PENDING_VIDEOS}
+          videos={videos}
           quotaByDay={quotaByDay}
           initialScheduled={initialScheduled}
           live={live}
