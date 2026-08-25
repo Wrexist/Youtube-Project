@@ -235,6 +235,35 @@ def assemble_description(hook: str, body: str, tail: list[str]) -> str:
     return joined(truncate_utf8(body, budget).rstrip())
 
 
+def append_chapters(description: str, chapters: list) -> str:
+    """The description with the chapter block YouTube actually reads.
+
+    YouTube renders chapters from timestamps *in the description* — there is no
+    chapters field anywhere in the API — and for a long time nothing appended
+    them, so `ChaptersStage` was generated, billed and read by nothing
+    (KNOWN-ISSUES §5.8). Appended at publish time rather than inside
+    `DescriptionStage`, because chapters need the rendered subtitle timings and
+    the description is written stages earlier.
+
+    All-or-nothing under the 5000-byte ceiling: a truncated chapter list is worse
+    than none (YouTube ignores a list whose entries don't parse, and a list that
+    silently lost its tail misdescribes the video), and the description itself is
+    prose someone may have edited — never cut. YouTube also requires the first
+    chapter at 0:00 and at least three entries; fewer is not a chapter list.
+    """
+    entries = [tuple(c) for c in chapters if isinstance(c, (list, tuple)) and len(c) == 2]
+    if len(entries) < 3:
+        return description
+    if entries[0][0] not in ("0:00", "00:00"):
+        return description
+
+    block = "\n\nChapters:\n" + "\n".join(f"{time} {title}" for time, title in entries)
+    combined = description.rstrip() + block
+    if len(combined.encode("utf-8")) > DESCRIPTION_MAX:
+        return description
+    return combined
+
+
 # ── stages ──────────────────────────────────────────────────────────────────
 
 

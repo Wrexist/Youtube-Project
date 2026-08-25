@@ -132,6 +132,30 @@ class ChannelLaunch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class Series(Base):
+    """A standing series config: a repeatable format with its own cadence and budget.
+
+    This is the persistence for `automation.Series`, which spent its whole life as
+    an in-memory dataclass that only tests ever constructed — the Series screen
+    shipped with its primary action disabled and the honest excuse "the series
+    endpoint does not exist yet". Columns mirror the dataclass one-to-one so
+    `repository` can move between the two with `asdict`-shaped code rather than a
+    mapping layer.
+    """
+
+    __tablename__ = "series"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    niche: Mapped[str] = mapped_column(Text, default="")
+    monthly_budget_usd: Mapped[float] = mapped_column(default=0.0)
+    shorts_per_week: Mapped[int] = mapped_column(Integer, default=3)
+    long_per_week: Mapped[int] = mapped_column(Integer, default=1)
+    auto_publish: Mapped[bool] = mapped_column(default=False)
+    paused: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class PerformanceRecord(Base):
     """A published video's metrics, for the Phase 8 feedback loop."""
 

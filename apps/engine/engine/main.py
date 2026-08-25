@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from engine import automation, db, feedback, logs, models, repository, worker
+from engine.api import channels as channel_launches
 from engine.api import publishing as channels
 from engine.api.brief import router as brief_router
 from engine.api.channels import router as channels_router
@@ -31,6 +32,7 @@ from engine.api.insights import router as insights_router
 from engine.api.models import router as models_router
 from engine.api.publishing import router as publishing_router
 from engine.api.repurpose import router as repurpose_router
+from engine.api.series import router as series_router
 from engine.api.setup import router as setup_router
 from engine.api.style import router as style_router
 from engine.api.thumbnails import router as thumbnails_router
@@ -72,6 +74,7 @@ async def lifespan(_: FastAPI):
             channels.CHANNELS.update(await repository.load_channels())
             channels.SCHEDULE.update(await repository.load_schedule())
             RECORDS.update(await repository.load_performance_records())
+            await channel_launches.restore()
         except Exception:
             # A missing migration must not look like an empty database — starting
             # with a blank quota ledger is exactly how the ceiling gets overrun.
@@ -107,6 +110,7 @@ app.include_router(publishing_router)
 app.include_router(insights_router, dependencies=_gated)
 app.include_router(channels_router, dependencies=_gated)
 app.include_router(models_router, dependencies=_gated)
+app.include_router(series_router, dependencies=_gated)
 app.include_router(setup_router, dependencies=_gated)
 app.include_router(repurpose_router)
 app.include_router(style_router, dependencies=_gated)
@@ -209,6 +213,10 @@ class JobRequest(BaseModel):
     workflow: str = "video"
     voice: str | None = None
     target_seconds: int | None = None
+    #: Which series this video belongs to, when it was queued from one. Flattened
+    #: into the job's inputs like everything else, which is what
+    #: `repository.series_usage` reads spend and cadence off.
+    series_id: str | None = None
     #: Present only for `workflow="repurpose"`. Flattened into the job's inputs by
     #: `create_job`, because stages read `ctx.inputs[...]` flat and threading a
     #: nested dict through every one of them would buy nothing.
@@ -1004,6 +1012,89 @@ async def list_jobs(
 
     out.sort(key=_age, reverse=True)
     return out[: max(1, min(limit, 500))]
+
+
+class PendingVideoOut(BaseModel):
+    """A rendered video that has not been published — what the Calendar tray drags.
+
+    The tray used to render a demo fixture unconditionally, so a genuinely
+    scheduled video's chip looked up its title in a list of seven inventions and
+    found nothing. This is the server-side join the tray needed: completed video
+    jobs, minus anything a publish job has already uploaded or is uploading.
+    """
+
+    id: str
+    title: str
+    format: str
+    duration: str
+    ready_at: datetime | None = None
+    scheduled_at: datetime | None = None
+
+
+@app.get("/v1/calendar/pending", dependencies=[Depends(require_token)])
+async def pending_videos() -> list[PendingVideoOut]:
+    await _resync([job_id for job_id, job in JOBS.items() if _needs_resync(job)])
+
+    out: list[PendingVideoOut] = []
+    for job_id, job in JOBS.items():
+        if job.get("status") != "completed" or job["workflow"].name == "publish":
+            continue
+        states = job.get("states", {})
+        artifacts: dict = {}
+        for state in states.values():
+            if state.output:
+                artifacts.update(state.output.artifacts or {})
+        if not (artifacts.get("render") or artifacts.get("video")):
+            continue  # completed script/seo-only workflows have nothing to schedule
+
+        existing = _existing_publish(job_id)
+        if existing is not None:
+            publish_id, state = existing
+            if state == "running" or _upload_landed(JOBS[publish_id]):
+                continue  # live or on its way — not pending any more
+
+        def value(name: str, default=None, _states=states):
+            stage = _states.get(name)
+            return stage.output.value if stage is not None and stage.output else default
+
+        titles = value("titles") or []
+        chosen = job["inputs"].get("chosen_title_index", 0)
+        title = (
+            titles[chosen].text
+            if titles and 0 <= chosen < len(titles)
+            else str(job["inputs"].get("topic", ""))
+        )
+
+        duration = ""
+        cues = value("subtitles") or []
+        if cues:
+            seconds = int(round(cues[-1]["end"]))
+            duration = f"{seconds // 60}:{seconds % 60:02d}"
+
+        scheduled = channels.SCHEDULE.get(job_id)
+        out.append(
+            PendingVideoOut(
+                id=job_id,
+                title=title,
+                format=str(job["inputs"].get("format", "short")),
+                duration=duration,
+                ready_at=job.get("updated_at") or job.get("created_at"),
+                scheduled_at=scheduled,
+            )
+        )
+
+    # Same naive/aware mix as `list_jobs` (SQLite restores naive datetimes), so the
+    # sort key is a plain number for the same reason.
+    def _readiness(video: PendingVideoOut) -> float:
+        if video.ready_at is None:
+            return float("-inf")
+        moment = video.ready_at
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment.timestamp()
+
+    out.sort(key=_readiness, reverse=True)
+    return out
 
 
 @app.get("/v1/jobs/{job_id}", dependencies=[Depends(require_token)])

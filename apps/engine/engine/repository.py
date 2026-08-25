@@ -5,14 +5,12 @@ and booking — and, worst of all, the day's quota spend. The dict shapes were k
 compatible with this on purpose, so these functions are mostly a serialise/
 deserialise pair rather than a redesign.
 
-**`LAUNCHES` is the exception and this docstring used to imply otherwise.**
-`save_launch`/`load_launches` exist and work, but nothing in the application calls
-either — only a test does — so a channel launch is still lost on restart. It is not a
-one-line fix: `load_launches` returns a flattened dict that does not match the mirror
-shape `api/channels.py` reads (which needs `states`, `events`, `inputs`), so wiring it
-up means rewriting the loader. What is lost is a regenerable LLM artifact on a flow
-whose manual channel-creation step is a documented gap anyway, which is why this is
-recorded rather than fixed. See KNOWN-ISSUES §5.8.
+`LAUNCHES` was the long-standing exception — `save_launch`/`load_launches` existed
+with no application caller, and the loader returned a flattened dict that could not
+be assigned into the mirror shape `api/channels.py` reads. Both halves are fixed:
+the loader hands back the payload unflattened and `api/channels.py` saves after
+every stage and restores at startup, so a launch now survives a restart like
+everything else here.
 
 Jobs keep a **live in-process mirror** as well as their row. A running job holds
 things that cannot go in a database — the `asyncio.Event` subscribers wait on,
@@ -57,6 +55,7 @@ from engine.tables import (
     RepurposeProject,
     ReviewSnapshot,
     ScheduleSlot,
+    Series,
     ThumbnailSwap,
     TikTokAccount,
 )
@@ -1130,10 +1129,13 @@ async def load_schedule() -> dict[str, datetime]:
 
 # ── channel launches ────────────────────────────────────────────────────────
 #
-# UNWIRED. Neither function below has an application caller — grep says the only
-# call site in the repository is a test. A channel launch therefore does not survive
-# a restart, whatever the `ChannelLaunch` table's existence suggests. Do not treat
-# this section as working persistence; see the note at the top of the module.
+# Wired: `api/channels.py` saves after every stage and the lifespan handler calls
+# `api.channels.restore()` at startup, so a launch now survives a restart. The
+# payload is the serialised half of the in-process mirror — `states` (via
+# `dump_states`), `events` and `inputs` — and `load_launches` hands it back
+# *unflattened* so the caller can rebuild `states` onto a fresh workflow template
+# with `load_states`. The old loader spread the payload into the top level, which
+# is exactly the shape mismatch that kept this section unwired for so long.
 
 
 async def save_launch(launch_id: str, status: str, niche: str, payload: dict) -> None:
@@ -1153,8 +1155,120 @@ async def load_launches() -> dict[str, dict]:
     async with session() as s:
         rows = (await s.execute(select(ChannelLaunch))).scalars().all()
     return {
-        r.id: {"id": r.id, "status": r.status, "niche": r.niche, **(r.payload or {})} for r in rows
+        r.id: {"id": r.id, "status": r.status, "niche": r.niche, "payload": r.payload or {}}
+        for r in rows
     }
+
+
+# ── series ──────────────────────────────────────────────────────────────────
+
+
+def _series_dict(row: Series) -> dict:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "niche": row.niche,
+        "monthly_budget_usd": row.monthly_budget_usd,
+        "shorts_per_week": row.shorts_per_week,
+        "long_per_week": row.long_per_week,
+        "auto_publish": row.auto_publish,
+        "paused": row.paused,
+        "created_at": _aware(row.created_at),
+    }
+
+
+async def save_series(data: dict) -> None:
+    """Upsert one series config. `data` carries the `_series_dict` keys."""
+    if not _persistence_enabled():
+        return
+    async with session() as s:
+        row = await s.get(Series, data["id"])
+        if row is None:
+            row = Series(id=data["id"])
+            s.add(row)
+        row.name = data["name"]
+        row.niche = data.get("niche", "")
+        row.monthly_budget_usd = float(data.get("monthly_budget_usd", 0.0))
+        row.shorts_per_week = int(data.get("shorts_per_week", 3))
+        row.long_per_week = int(data.get("long_per_week", 1))
+        row.auto_publish = bool(data.get("auto_publish", False))
+        row.paused = bool(data.get("paused", False))
+
+
+async def list_series() -> list[dict]:
+    if not _persistence_enabled():
+        return []
+    async with session() as s:
+        rows = (await s.execute(select(Series).order_by(Series.created_at))).scalars().all()
+    return [_series_dict(r) for r in rows]
+
+
+async def get_series(series_id: str) -> dict | None:
+    if not _persistence_enabled():
+        return None
+    async with session() as s:
+        row = await s.get(Series, series_id)
+    return _series_dict(row) if row else None
+
+
+async def delete_series(series_id: str) -> bool:
+    if not _persistence_enabled():
+        return False
+    async with session() as s:
+        row = await s.get(Series, series_id)
+        if row is None:
+            return False
+        await s.delete(row)
+        return True
+
+
+async def series_usage() -> dict[str, dict]:
+    """Per-series spend and output, read off the jobs table.
+
+    The same reasoning as `spend_by_day`: `automation.SpendLedger` is in-memory
+    and written by nothing, while `jobs.cost_usd` is written at the same stage
+    boundary that spends the money. A job belongs to a series when its inputs
+    carry `series_id`, which `POST /v1/jobs` accepts and stores.
+
+    Returns `{series_id: {spent_today, spent_this_month, produced_this_week}}`.
+    Weeks start Monday UTC, matching the weekly review's cadence; months are
+    calendar months, matching `SpendLedger.spent_this_month`.
+    """
+    if not _persistence_enabled():
+        return {}
+    now = datetime.now(UTC)
+    since = now - timedelta(days=45)
+    async with session() as db:
+        rows = (
+            await db.execute(
+                select(Job.created_at, Job.cost_usd, Job.inputs, Job.status).where(
+                    Job.created_at >= since
+                )
+            )
+        ).all()
+
+    week_start = (now - timedelta(days=now.weekday())).date()
+    out: dict[str, dict] = {}
+    for created_at, cost, inputs, status in rows:
+        series_id = (inputs or {}).get("series_id")
+        if not series_id:
+            continue
+        moment = created_at if created_at.tzinfo else created_at.replace(tzinfo=UTC)
+        moment = moment.astimezone(UTC)
+        usage = out.setdefault(
+            series_id, {"spent_today": 0.0, "spent_this_month": 0.0, "produced_this_week": 0}
+        )
+        if moment.date() == now.date():
+            usage["spent_today"] += cost or 0.0
+        if (moment.year, moment.month) == (now.year, now.month):
+            usage["spent_this_month"] += cost or 0.0
+        if moment.date() >= week_start and status in ("completed", "running", "queued"):
+            usage["produced_this_week"] += 1
+
+    for usage in out.values():
+        usage["spent_today"] = round(usage["spent_today"], 4)
+        usage["spent_this_month"] = round(usage["spent_this_month"], 4)
+    return out
 
 
 # ── repurpose: clips, grants, assets ────────────────────────────────────────

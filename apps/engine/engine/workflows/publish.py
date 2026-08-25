@@ -17,6 +17,7 @@ from engine.providers.youtube import YouTube
 from engine.quota import ledger
 from engine.storage import store
 from engine.workflows.base import Provenance, Stage, StageOutput, WorkflowContext
+from engine.workflows.seo import append_chapters
 
 
 class UploadStage(Stage[str]):
@@ -34,13 +35,19 @@ class UploadStage(Stage[str]):
 
         video_path = await store.local_path(ctx.get("render"))
 
+        # Chapters only exist as timestamps in the description — YouTube has no
+        # chapters field — and this is the first point where both the written
+        # description and the render-timed chapter list exist. `try_get`: the
+        # stage is optional and a video without chapters publishes fine.
+        description = append_chapters(ctx.get("description"), ctx.try_get("chapters") or [])
+
         async def on_progress(fraction: float, message: str) -> None:
             await ctx.progress(message, fraction)
 
         video_id = await client.upload(
             video_path,
             title=titles[chosen].text,
-            description=ctx.get("description"),
+            description=description,
             tags=ctx.get("tags"),
             # Scheduled videos must go up private; publishAt is ignored otherwise.
             privacy="private" if publish_at else ctx.inputs.get("privacy", "public"),
@@ -57,6 +64,10 @@ class UploadStage(Stage[str]):
                     "strategy": titles[chosen].strategy,  # attributed to CTR in Phase 8
                     "publish_at": publish_at.isoformat() if publish_at else None,
                     "quota_spent": ledger.cost_of("videos.insert"),
+                    # Whether the chapter block made it in — `append_chapters` is
+                    # all-or-nothing, and "why does this video have no chapters"
+                    # should be answerable from the record.
+                    "chapters_appended": description != ctx.get("description"),
                 }
             ),
         )

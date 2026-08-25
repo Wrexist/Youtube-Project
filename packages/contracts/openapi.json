@@ -204,6 +204,24 @@
         "title": "BacklogIdeaOut",
         "type": "object"
       },
+      "BlockerOut": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "BlockerOut",
+        "type": "object"
+      },
       "Brief": {
         "properties": {
           "cost_usd": {
@@ -577,6 +595,55 @@
         "title": "CredentialStatus",
         "type": "object"
       },
+      "DailyDay": {
+        "properties": {
+          "avd_seconds": {
+            "title": "Avd Seconds",
+            "type": "number"
+          },
+          "day": {
+            "title": "Day",
+            "type": "string"
+          },
+          "provisional": {
+            "title": "Provisional",
+            "type": "boolean"
+          },
+          "subscribers_gained": {
+            "title": "Subscribers Gained",
+            "type": "integer"
+          },
+          "views": {
+            "title": "Views",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "day",
+          "views",
+          "avd_seconds",
+          "subscribers_gained",
+          "provisional"
+        ],
+        "title": "DailyDay",
+        "type": "object"
+      },
+      "DailyOut": {
+        "properties": {
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/DailyDay"
+            },
+            "title": "Days",
+            "type": "array"
+          }
+        },
+        "required": [
+          "days"
+        ],
+        "title": "DailyOut",
+        "type": "object"
+      },
       "DiagnosticCheck": {
         "properties": {
           "command": {
@@ -719,6 +786,73 @@
           "value"
         ],
         "title": "EditRequest",
+        "type": "object"
+      },
+      "FindingOut": {
+        "description": "One attribution finding, exactly as `Finding.as_dict` shapes it.",
+        "properties": {
+          "ci95": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Ci95",
+            "type": "array"
+          },
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "lift": {
+            "title": "Lift",
+            "type": "number"
+          },
+          "loser": {
+            "title": "Loser",
+            "type": "string"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "n_loser": {
+            "title": "N Loser",
+            "type": "integer"
+          },
+          "n_winner": {
+            "title": "N Winner",
+            "type": "integer"
+          },
+          "p_value": {
+            "title": "P Value",
+            "type": "number"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "verdict": {
+            "title": "Verdict",
+            "type": "string"
+          },
+          "winner": {
+            "title": "Winner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dimension",
+          "metric",
+          "winner",
+          "loser",
+          "verdict",
+          "lift",
+          "p_value",
+          "n_winner",
+          "n_loser",
+          "ci95",
+          "sentence"
+        ],
+        "title": "FindingOut",
         "type": "object"
       },
       "GrantIn": {
@@ -894,6 +1028,40 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "InsightsOut": {
+        "properties": {
+          "confirmed_count": {
+            "title": "Confirmed Count",
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/FindingOut"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped",
+            "type": "array"
+          },
+          "video_count": {
+            "title": "Video Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "findings",
+          "confirmed_count",
+          "skipped",
+          "video_count"
+        ],
+        "title": "InsightsOut",
+        "type": "object"
+      },
       "JobRequest": {
         "properties": {
           "aspect": {
@@ -917,6 +1085,17 @@
                 "type": "null"
               }
             ]
+          },
+          "series_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Id"
           },
           "target_seconds": {
             "anyOf": [
@@ -1092,6 +1271,252 @@
         "title": "Lane",
         "type": "string"
       },
+      "LaunchBacklogItem": {
+        "properties": {
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Of"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "score"
+        ],
+        "title": "LaunchBacklogItem",
+        "type": "object"
+      },
+      "LaunchIdentity": {
+        "properties": {
+          "avatar_concept": {
+            "title": "Avatar Concept",
+            "type": "string"
+          },
+          "banner_concept": {
+            "title": "Banner Concept",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "handle": {
+            "title": "Handle",
+            "type": "string"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "keywords_string": {
+            "title": "Keywords String",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "palette": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Palette",
+            "type": "array"
+          },
+          "tagline": {
+            "title": "Tagline",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "handle",
+          "tagline",
+          "description",
+          "keywords",
+          "keywords_string",
+          "avatar_concept",
+          "banner_concept",
+          "palette"
+        ],
+        "title": "LaunchIdentity",
+        "type": "object"
+      },
+      "LaunchOut": {
+        "description": "A launch design in full \u2014 response models rather than a bare dict, so the\ncontract package generates real types instead of `Record<string, unknown>`.",
+        "properties": {
+          "backlog": {
+            "items": {
+              "$ref": "#/components/schemas/LaunchBacklogItem"
+            },
+            "title": "Backlog",
+            "type": "array"
+          },
+          "blocked": {
+            "title": "Blocked",
+            "type": "boolean"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LaunchIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "manual_steps": {
+            "items": {
+              "$ref": "#/components/schemas/ManualStep"
+            },
+            "title": "Manual Steps",
+            "type": "array"
+          },
+          "name_options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name Options"
+          },
+          "niche": {
+            "title": "Niche",
+            "type": "string"
+          },
+          "positioning": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positioning"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/LaunchProblem"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "series": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/LaunchStage"
+            },
+            "title": "Stages",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "visuals": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visuals"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "stages",
+          "niche",
+          "backlog",
+          "problems",
+          "blocked",
+          "manual_steps",
+          "cost_usd"
+        ],
+        "title": "LaunchOut",
+        "type": "object"
+      },
+      "LaunchProblem": {
+        "properties": {
+          "fatal": {
+            "title": "Fatal",
+            "type": "boolean"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "message",
+          "fatal"
+        ],
+        "title": "LaunchProblem",
+        "type": "object"
+      },
       "LaunchRequest": {
         "properties": {
           "country": {
@@ -1115,6 +1540,113 @@
           "niche"
         ],
         "title": "LaunchRequest",
+        "type": "object"
+      },
+      "LaunchStage": {
+        "description": "One row of the design pipeline, as the New channel screen draws it.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "status"
+        ],
+        "title": "LaunchStage",
+        "type": "object"
+      },
+      "LaunchSummary": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "niche": {
+            "title": "Niche",
+            "type": "string"
+          },
+          "stages_done": {
+            "title": "Stages Done",
+            "type": "integer"
+          },
+          "stages_total": {
+            "title": "Stages Total",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "niche",
+          "status",
+          "stages_done",
+          "stages_total"
+        ],
+        "title": "LaunchSummary",
+        "type": "object"
+      },
+      "ManualStep": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "detail"
+        ],
+        "title": "ManualStep",
         "type": "object"
       },
       "ModelsResponse": {
@@ -1300,6 +1832,121 @@
           "id"
         ],
         "title": "PendingVideo",
+        "type": "object"
+      },
+      "PendingVideoOut": {
+        "description": "A rendered video that has not been published \u2014 what the Calendar tray drags.\n\nThe tray used to render a demo fixture unconditionally, so a genuinely\nscheduled video's chip looked up its title in a list of seven inventions and\nfound nothing. This is the server-side join the tray needed: completed video\njobs, minus anything a publish job has already uploaded or is uploading.",
+        "properties": {
+          "duration": {
+            "title": "Duration",
+            "type": "string"
+          },
+          "format": {
+            "title": "Format",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ready_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready At"
+          },
+          "scheduled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled At"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "format",
+          "duration"
+        ],
+        "title": "PendingVideoOut",
+        "type": "object"
+      },
+      "PlanIdea": {
+        "properties": {
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "topic": {
+            "title": "Topic",
+            "type": "string"
+          },
+          "why": {
+            "default": "",
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "score"
+        ],
+        "title": "PlanIdea",
+        "type": "object"
+      },
+      "PlanOut": {
+        "properties": {
+          "already_this_week": {
+            "title": "Already This Week",
+            "type": "integer"
+          },
+          "blocked": {
+            "items": {
+              "$ref": "#/components/schemas/BlockerOut"
+            },
+            "title": "Blocked",
+            "type": "array"
+          },
+          "series_id": {
+            "title": "Series Id",
+            "type": "string"
+          },
+          "to_generate": {
+            "items": {
+              "$ref": "#/components/schemas/PlanIdea"
+            },
+            "title": "To Generate",
+            "type": "array"
+          },
+          "week_of": {
+            "title": "Week Of",
+            "type": "string"
+          }
+        },
+        "required": [
+          "series_id",
+          "week_of",
+          "to_generate",
+          "blocked",
+          "already_this_week"
+        ],
+        "title": "PlanOut",
         "type": "object"
       },
       "Playlist": {
@@ -1590,6 +2237,73 @@
         "title": "RerunRequest",
         "type": "object"
       },
+      "RetentionBeat": {
+        "properties": {
+          "at_percent": {
+            "title": "At Percent",
+            "type": "number"
+          },
+          "drop": {
+            "title": "Drop",
+            "type": "number"
+          },
+          "drop_rate": {
+            "title": "Drop Rate",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "retention_end": {
+            "title": "Retention End",
+            "type": "number"
+          },
+          "retention_start": {
+            "title": "Retention Start",
+            "type": "number"
+          },
+          "worst": {
+            "default": false,
+            "title": "Worst",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "at_percent",
+          "label",
+          "retention_start",
+          "retention_end",
+          "drop",
+          "drop_rate"
+        ],
+        "title": "RetentionBeat",
+        "type": "object"
+      },
+      "RetentionOut": {
+        "properties": {
+          "beats": {
+            "items": {
+              "$ref": "#/components/schemas/RetentionBeat"
+            },
+            "title": "Beats",
+            "type": "array"
+          },
+          "curve": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Curve",
+            "type": "array"
+          }
+        },
+        "required": [
+          "curve",
+          "beats"
+        ],
+        "title": "RetentionOut",
+        "type": "object"
+      },
       "ReviewPayload": {
         "description": "The review as it crosses the arq result store and the API.\n\nNamed rather than `dict` because this shape has three consumers that never\nsee each other \u2014 the worker's return value, the persisted snapshot, and next\nweek's diff \u2014 and a silent divergence between them is exactly the failure the\nreview exists to catch elsewhere.",
         "properties": {
@@ -1796,6 +2510,224 @@
           "end_s"
         ],
         "title": "SegmentIn",
+        "type": "object"
+      },
+      "SeriesIn": {
+        "properties": {
+          "auto_publish": {
+            "default": false,
+            "title": "Auto Publish",
+            "type": "boolean"
+          },
+          "long_per_week": {
+            "default": 1,
+            "maximum": 7.0,
+            "minimum": 0.0,
+            "title": "Long Per Week",
+            "type": "integer"
+          },
+          "monthly_budget_usd": {
+            "default": 30.0,
+            "minimum": 0.0,
+            "title": "Monthly Budget Usd",
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "niche": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Niche",
+            "type": "string"
+          },
+          "shorts_per_week": {
+            "default": 3,
+            "maximum": 21.0,
+            "minimum": 0.0,
+            "title": "Shorts Per Week",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SeriesIn",
+        "type": "object"
+      },
+      "SeriesOut": {
+        "properties": {
+          "auto_publish": {
+            "title": "Auto Publish",
+            "type": "boolean"
+          },
+          "backlog_depth": {
+            "default": 0,
+            "title": "Backlog Depth",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "long_per_week": {
+            "title": "Long Per Week",
+            "type": "integer"
+          },
+          "monthly_budget_usd": {
+            "title": "Monthly Budget Usd",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "niche": {
+            "title": "Niche",
+            "type": "string"
+          },
+          "paused": {
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "produced_this_week": {
+            "default": 0,
+            "title": "Produced This Week",
+            "type": "integer"
+          },
+          "shorts_per_week": {
+            "title": "Shorts Per Week",
+            "type": "integer"
+          },
+          "spent_this_month_usd": {
+            "default": 0.0,
+            "title": "Spent This Month Usd",
+            "type": "number"
+          },
+          "spent_today_usd": {
+            "default": 0.0,
+            "title": "Spent Today Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "niche",
+          "monthly_budget_usd",
+          "shorts_per_week",
+          "long_per_week",
+          "auto_publish",
+          "paused"
+        ],
+        "title": "SeriesOut",
+        "type": "object"
+      },
+      "SeriesPatch": {
+        "description": "Partial update. Only the fields present are changed.",
+        "properties": {
+          "auto_publish": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Publish"
+          },
+          "long_per_week": {
+            "anyOf": [
+              {
+                "maximum": 7.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Long Per Week"
+          },
+          "monthly_budget_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Budget Usd"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "niche": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Niche"
+          },
+          "paused": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused"
+          },
+          "shorts_per_week": {
+            "anyOf": [
+              {
+                "maximum": 21.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shorts Per Week"
+          }
+        },
+        "title": "SeriesPatch",
         "type": "object"
       },
       "SetupStatus": {
@@ -2679,6 +3611,70 @@
         "title": "Variant",
         "type": "object"
       },
+      "VideoRow": {
+        "description": "One published video for the Analytics per-video table.",
+        "properties": {
+          "avd_percent": {
+            "title": "Avd Percent",
+            "type": "number"
+          },
+          "avd_seconds": {
+            "title": "Avd Seconds",
+            "type": "number"
+          },
+          "ctr": {
+            "title": "Ctr",
+            "type": "number"
+          },
+          "format": {
+            "title": "Format",
+            "type": "string"
+          },
+          "hook_device": {
+            "title": "Hook Device",
+            "type": "string"
+          },
+          "published_at": {
+            "title": "Published At",
+            "type": "string"
+          },
+          "thumbnail_concept": {
+            "title": "Thumbnail Concept",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "title_strategy": {
+            "title": "Title Strategy",
+            "type": "string"
+          },
+          "video_id": {
+            "title": "Video Id",
+            "type": "string"
+          },
+          "views": {
+            "title": "Views",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "video_id",
+          "title",
+          "published_at",
+          "views",
+          "ctr",
+          "avd_seconds",
+          "avd_percent",
+          "format",
+          "title_strategy",
+          "thumbnail_concept",
+          "hook_device"
+        ],
+        "title": "VideoRow",
+        "type": "object"
+      },
       "Voice": {
         "description": "One narrator, described in the service's own words rather than ours.",
         "properties": {
@@ -2837,9 +3833,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Daily V1 Analytics Daily Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/DailyOut"
                 }
               }
             },
@@ -2914,9 +3908,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Retention V1 Analytics Retention  Video Id  Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/RetentionOut"
                 }
               }
             },
@@ -2999,6 +3991,37 @@
           }
         ],
         "summary": "Shorts",
+        "tags": [
+          "insights"
+        ]
+      }
+    },
+    "/v1/analytics/videos": {
+      "get": {
+        "description": "Every published video with its metrics and provenance, newest first.\n\nThe per-video table on Analytics rendered demo data forever because nothing\nserved the rows \u2014 `Analytics.per_video` was only ever called internally by the\nrefresh. This is the stored join of metrics onto provenance, so it answers\nwithout spending Analytics API quota; `POST /insights/refresh` is what updates\nthe numbers.",
+        "operationId": "analytics_videos_v1_analytics_videos_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/VideoRow"
+                  },
+                  "title": "Response Analytics Videos V1 Analytics Videos Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Analytics Videos",
         "tags": [
           "insights"
         ]
@@ -3281,6 +4304,33 @@
         ]
       }
     },
+    "/v1/calendar/pending": {
+      "get": {
+        "operationId": "pending_videos_v1_calendar_pending_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PendingVideoOut"
+                  },
+                  "title": "Response Pending Videos V1 Calendar Pending Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Pending Videos"
+      }
+    },
     "/v1/calendar/schedule": {
       "post": {
         "description": "A manual drag. Validated, and warned about even when permitted.",
@@ -3462,6 +4512,7 @@
     },
     "/v1/channels/launch": {
       "post": {
+        "description": "Start designing a channel. Returns immediately; poll `GET /launch/{id}`.\n\nThis used to run the whole seven-stage LLM chain inside the request, which\nmeant a 202 that actually blocked for minutes \u2014 past every sane client\ntimeout, with no way to show progress. Now it runs like a job: the record is\nvisible at once, each finished stage is persisted, and the screen polls.",
         "operationId": "launch_v1_channels_launch_post",
         "requestBody": {
           "content": {
@@ -3478,9 +4529,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Launch V1 Channels Launch Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/LaunchOut"
                 }
               }
             },
@@ -3576,9 +4625,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Launch V1 Channels Launch  Launch Id  Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/LaunchOut"
                 }
               }
             },
@@ -3601,6 +4648,37 @@
           }
         ],
         "summary": "Get Launch",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/v1/channels/launches": {
+      "get": {
+        "description": "Every stored launch design, newest first, as one-line summaries.\n\nWhat lets the New channel screen resume a design after a reload \u2014 the manual\nsteps take days, and until launches were persisted the screen could only ever\nshow the design it had just generated.",
+        "operationId": "list_launches_v1_channels_launches_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LaunchSummary"
+                  },
+                  "title": "Response List Launches V1 Channels Launches Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Launches",
         "tags": [
           "channels"
         ]
@@ -3871,9 +4949,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Insights V1 Insights Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/InsightsOut"
                 }
               }
             },
@@ -5449,6 +6525,223 @@
         "summary": "Evaluate Timeline",
         "tags": [
           "repurpose"
+        ]
+      }
+    },
+    "/v1/series": {
+      "get": {
+        "operationId": "list_all_v1_series_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SeriesOut"
+                  },
+                  "title": "Response List All V1 Series Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List All",
+        "tags": [
+          "series"
+        ]
+      },
+      "post": {
+        "operationId": "create_v1_series_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeriesIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeriesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create",
+        "tags": [
+          "series"
+        ]
+      }
+    },
+    "/v1/series/{series_id}": {
+      "delete": {
+        "operationId": "remove_v1_series__series_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "series_id",
+            "required": true,
+            "schema": {
+              "title": "Series Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Remove",
+        "tags": [
+          "series"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_v1_series__series_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "series_id",
+            "required": true,
+            "schema": {
+              "title": "Series Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeriesPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeriesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch",
+        "tags": [
+          "series"
+        ]
+      }
+    },
+    "/v1/series/{series_id}/plan": {
+      "get": {
+        "description": "What this series should generate this week, and what stopped more.\n\n`plan_week` is pure and this endpoint is its production caller: the ledger is\nrebuilt from the jobs table (the record that is actually true \u2014 see\n`repository.series_usage`), the ideas come from the shared backlog, and\n`already_this_week` is what the series has really produced since Monday.",
+        "operationId": "plan_v1_series__series_id__plan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "series_id",
+            "required": true,
+            "schema": {
+              "title": "Series Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Plan",
+        "tags": [
+          "series"
         ]
       }
     },

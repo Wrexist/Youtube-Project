@@ -141,6 +141,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/analytics/videos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Videos
+         * @description Every published video with its metrics and provenance, newest first.
+         *
+         *     The per-video table on Analytics rendered demo data forever because nothing
+         *     served the rows — `Analytics.per_video` was only ever called internally by the
+         *     refresh. This is the stored join of metrics onto provenance, so it answers
+         *     without spending Analytics API quota; `POST /insights/refresh` is what updates
+         *     the numbers.
+         */
+        get: operations["analytics_videos_v1_analytics_videos_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/google": {
         parameters: {
             query?: never;
@@ -269,6 +295,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/calendar/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending Videos */
+        get: operations["pending_videos_v1_calendar_pending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/calendar/schedule": {
         parameters: {
             query?: never;
@@ -352,7 +395,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Launch */
+        /**
+         * Launch
+         * @description Start designing a channel. Returns immediately; poll `GET /launch/{id}`.
+         *
+         *     This used to run the whole seven-stage LLM chain inside the request, which
+         *     meant a 202 that actually blocked for minutes — past every sane client
+         *     timeout, with no way to show progress. Now it runs like a job: the record is
+         *     visible at once, each finished stage is persisted, and the screen polls.
+         */
         post: operations["launch_v1_channels_launch_post"];
         delete?: never;
         options?: never;
@@ -392,6 +443,30 @@ export interface paths {
         };
         /** Get Launch */
         get: operations["get_launch_v1_channels_launch__launch_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/channels/launches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Launches
+         * @description Every stored launch design, newest first, as one-line summaries.
+         *
+         *     What lets the New channel screen resume a design after a reload — the manual
+         *     steps take days, and until launches were persisted the screen could only ever
+         *     show the design it had just generated.
+         */
+        get: operations["list_launches_v1_channels_launches_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1296,6 +1371,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List All */
+        get: operations["list_all_v1_series_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_v1_series_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/series/{series_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove */
+        delete: operations["remove_v1_series__series_id__delete"];
+        options?: never;
+        head?: never;
+        /** Patch */
+        patch: operations["patch_v1_series__series_id__patch"];
+        trace?: never;
+    };
+    "/v1/series/{series_id}/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plan
+         * @description What this series should generate this week, and what stopped more.
+         *
+         *     `plan_week` is pure and this endpoint is its production caller: the ledger is
+         *     rebuilt from the jobs table (the record that is actually true — see
+         *     `repository.series_usage`), the ideas come from the shared backlog, and
+         *     `already_this_week` is what the series has really produced since Monday.
+         */
+        get: operations["plan_v1_series__series_id__plan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/setup": {
         parameters: {
             query?: never;
@@ -1577,6 +1713,13 @@ export interface components {
             /** Why */
             why: string;
         };
+        /** BlockerOut */
+        BlockerOut: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
         /** Brief */
         Brief: {
             /** Cost Usd */
@@ -1716,6 +1859,24 @@ export interface components {
             /** Without It */
             without_it: string;
         };
+        /** DailyDay */
+        DailyDay: {
+            /** Avd Seconds */
+            avd_seconds: number;
+            /** Day */
+            day: string;
+            /** Provisional */
+            provisional: boolean;
+            /** Subscribers Gained */
+            subscribers_gained: number;
+            /** Views */
+            views: number;
+        };
+        /** DailyOut */
+        DailyOut: {
+            /** Days */
+            days: components["schemas"]["DailyDay"][];
+        };
         /** DiagnosticCheck */
         DiagnosticCheck: {
             /** Command */
@@ -1788,6 +1949,34 @@ export interface components {
             value: unknown;
         };
         /**
+         * FindingOut
+         * @description One attribution finding, exactly as `Finding.as_dict` shapes it.
+         */
+        FindingOut: {
+            /** Ci95 */
+            ci95: number[];
+            /** Dimension */
+            dimension: string;
+            /** Lift */
+            lift: number;
+            /** Loser */
+            loser: string;
+            /** Metric */
+            metric: string;
+            /** N Loser */
+            n_loser: number;
+            /** N Winner */
+            n_winner: number;
+            /** P Value */
+            p_value: number;
+            /** Sentence */
+            sentence: string;
+            /** Verdict */
+            verdict: string;
+            /** Winner */
+            winner: string;
+        };
+        /**
          * GrantIn
          * @description Authority to use a clip, as the rights panel submits it.
          */
@@ -1858,6 +2047,17 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** InsightsOut */
+        InsightsOut: {
+            /** Confirmed Count */
+            confirmed_count: number;
+            /** Findings */
+            findings: components["schemas"]["FindingOut"][];
+            /** Skipped */
+            skipped: string[];
+            /** Video Count */
+            video_count: number;
+        };
         /** JobRequest */
         JobRequest: {
             /**
@@ -1871,6 +2071,8 @@ export interface components {
              */
             format: string;
             repurpose?: components["schemas"]["RepurposeInputs"] | null;
+            /** Series Id */
+            series_id?: string | null;
             /** Target Seconds */
             target_seconds?: number | null;
             /** Topic */
@@ -1943,6 +2145,89 @@ export interface components {
          * @enum {string}
          */
         Lane: "own" | "campaign" | "licensed" | "commentary" | "open_licence";
+        /** LaunchBacklogItem */
+        LaunchBacklogItem: {
+            /** Duplicate Of */
+            duplicate_of?: string | null;
+            /** Score */
+            score: number;
+            /** Topic */
+            topic: string;
+        };
+        /** LaunchIdentity */
+        LaunchIdentity: {
+            /** Avatar Concept */
+            avatar_concept: string;
+            /** Banner Concept */
+            banner_concept: string;
+            /** Description */
+            description: string;
+            /** Handle */
+            handle: string;
+            /** Keywords */
+            keywords: string[];
+            /** Keywords String */
+            keywords_string: string;
+            /** Name */
+            name: string;
+            /** Palette */
+            palette: string[];
+            /** Tagline */
+            tagline: string;
+        };
+        /**
+         * LaunchOut
+         * @description A launch design in full — response models rather than a bare dict, so the
+         *     contract package generates real types instead of `Record<string, unknown>`.
+         */
+        LaunchOut: {
+            /** Backlog */
+            backlog: components["schemas"]["LaunchBacklogItem"][];
+            /** Blocked */
+            blocked: boolean;
+            /** Cost Usd */
+            cost_usd: number;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            identity?: components["schemas"]["LaunchIdentity"] | null;
+            /** Manual Steps */
+            manual_steps: components["schemas"]["ManualStep"][];
+            /** Name Options */
+            name_options?: {
+                [key: string]: unknown;
+            } | null;
+            /** Niche */
+            niche: string;
+            /** Positioning */
+            positioning?: {
+                [key: string]: unknown;
+            } | null;
+            /** Problems */
+            problems: components["schemas"]["LaunchProblem"][];
+            /** Series */
+            series?: {
+                [key: string]: unknown;
+            } | null;
+            /** Stages */
+            stages: components["schemas"]["LaunchStage"][];
+            /** Status */
+            status: string;
+            /** Visuals */
+            visuals?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** LaunchProblem */
+        LaunchProblem: {
+            /** Fatal */
+            fatal: boolean;
+            /** Field */
+            field: string;
+            /** Message */
+            message: string;
+        };
         /** LaunchRequest */
         LaunchRequest: {
             /**
@@ -1957,6 +2242,49 @@ export interface components {
             language: string;
             /** Niche */
             niche: string;
+        };
+        /**
+         * LaunchStage
+         * @description One row of the design pipeline, as the New channel screen draws it.
+         */
+        LaunchStage: {
+            /** Error */
+            error?: string | null;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /** Title */
+            title: string;
+        };
+        /** LaunchSummary */
+        LaunchSummary: {
+            /** Id */
+            id: string;
+            /** Niche */
+            niche: string;
+            /** Stages Done */
+            stages_done: number;
+            /** Stages Total */
+            stages_total: number;
+            /** Status */
+            status: string;
+        };
+        /** ManualStep */
+        ManualStep: {
+            /** Detail */
+            detail: string;
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url?: string | null;
         };
         /**
          * ModelsResponse
@@ -2039,6 +2367,54 @@ export interface components {
              * @default
              */
             title: string;
+        };
+        /**
+         * PendingVideoOut
+         * @description A rendered video that has not been published — what the Calendar tray drags.
+         *
+         *     The tray used to render a demo fixture unconditionally, so a genuinely
+         *     scheduled video's chip looked up its title in a list of seven inventions and
+         *     found nothing. This is the server-side join the tray needed: completed video
+         *     jobs, minus anything a publish job has already uploaded or is uploading.
+         */
+        PendingVideoOut: {
+            /** Duration */
+            duration: string;
+            /** Format */
+            format: string;
+            /** Id */
+            id: string;
+            /** Ready At */
+            ready_at?: string | null;
+            /** Scheduled At */
+            scheduled_at?: string | null;
+            /** Title */
+            title: string;
+        };
+        /** PlanIdea */
+        PlanIdea: {
+            /** Score */
+            score: number;
+            /** Topic */
+            topic: string;
+            /**
+             * Why
+             * @default
+             */
+            why: string;
+        };
+        /** PlanOut */
+        PlanOut: {
+            /** Already This Week */
+            already_this_week: number;
+            /** Blocked */
+            blocked: components["schemas"]["BlockerOut"][];
+            /** Series Id */
+            series_id: string;
+            /** To Generate */
+            to_generate: components["schemas"]["PlanIdea"][];
+            /** Week Of */
+            week_of: string;
         };
         /** Playlist */
         Playlist: {
@@ -2225,6 +2601,33 @@ export interface components {
             /** Stage */
             stage: string;
         };
+        /** RetentionBeat */
+        RetentionBeat: {
+            /** At Percent */
+            at_percent: number;
+            /** Drop */
+            drop: number;
+            /** Drop Rate */
+            drop_rate: number;
+            /** Label */
+            label: string;
+            /** Retention End */
+            retention_end: number;
+            /** Retention Start */
+            retention_start: number;
+            /**
+             * Worst
+             * @default false
+             */
+            worst: boolean;
+        };
+        /** RetentionOut */
+        RetentionOut: {
+            /** Beats */
+            beats: components["schemas"]["RetentionBeat"][];
+            /** Curve */
+            curve: number[];
+        };
         /**
          * ReviewPayload
          * @description The review as it crosses the arq result store and the API.
@@ -2319,6 +2722,97 @@ export interface components {
             source_id?: string | null;
             /** Start S */
             start_s: number;
+        };
+        /** SeriesIn */
+        SeriesIn: {
+            /**
+             * Auto Publish
+             * @default false
+             */
+            auto_publish: boolean;
+            /**
+             * Long Per Week
+             * @default 1
+             */
+            long_per_week: number;
+            /**
+             * Monthly Budget Usd
+             * @default 30
+             */
+            monthly_budget_usd: number;
+            /** Name */
+            name: string;
+            /**
+             * Niche
+             * @default
+             */
+            niche: string;
+            /**
+             * Shorts Per Week
+             * @default 3
+             */
+            shorts_per_week: number;
+        };
+        /** SeriesOut */
+        SeriesOut: {
+            /** Auto Publish */
+            auto_publish: boolean;
+            /**
+             * Backlog Depth
+             * @default 0
+             */
+            backlog_depth: number;
+            /** Created At */
+            created_at?: string | null;
+            /** Id */
+            id: string;
+            /** Long Per Week */
+            long_per_week: number;
+            /** Monthly Budget Usd */
+            monthly_budget_usd: number;
+            /** Name */
+            name: string;
+            /** Niche */
+            niche: string;
+            /** Paused */
+            paused: boolean;
+            /**
+             * Produced This Week
+             * @default 0
+             */
+            produced_this_week: number;
+            /** Shorts Per Week */
+            shorts_per_week: number;
+            /**
+             * Spent This Month Usd
+             * @default 0
+             */
+            spent_this_month_usd: number;
+            /**
+             * Spent Today Usd
+             * @default 0
+             */
+            spent_today_usd: number;
+        };
+        /**
+         * SeriesPatch
+         * @description Partial update. Only the fields present are changed.
+         */
+        SeriesPatch: {
+            /** Auto Publish */
+            auto_publish?: boolean | null;
+            /** Long Per Week */
+            long_per_week?: number | null;
+            /** Monthly Budget Usd */
+            monthly_budget_usd?: number | null;
+            /** Name */
+            name?: string | null;
+            /** Niche */
+            niche?: string | null;
+            /** Paused */
+            paused?: boolean | null;
+            /** Shorts Per Week */
+            shorts_per_week?: number | null;
         };
         /** SetupStatus */
         SetupStatus: {
@@ -2665,6 +3159,34 @@ export interface components {
             url: string;
         };
         /**
+         * VideoRow
+         * @description One published video for the Analytics per-video table.
+         */
+        VideoRow: {
+            /** Avd Percent */
+            avd_percent: number;
+            /** Avd Seconds */
+            avd_seconds: number;
+            /** Ctr */
+            ctr: number;
+            /** Format */
+            format: string;
+            /** Hook Device */
+            hook_device: string;
+            /** Published At */
+            published_at: string;
+            /** Thumbnail Concept */
+            thumbnail_concept: string;
+            /** Title */
+            title: string;
+            /** Title Strategy */
+            title_strategy: string;
+            /** Video Id */
+            video_id: string;
+            /** Views */
+            views: number;
+        };
+        /**
          * Voice
          * @description One narrator, described in the service's own words rather than ours.
          */
@@ -2765,9 +3287,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["DailyOut"];
                 };
             };
             /** @description Validation Error */
@@ -2818,9 +3338,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["RetentionOut"];
                 };
             };
             /** @description Validation Error */
@@ -2863,6 +3381,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analytics_videos_v1_analytics_videos_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoRow"][];
                 };
             };
         };
@@ -3045,6 +3583,26 @@ export interface operations {
             };
         };
     };
+    pending_videos_v1_calendar_pending_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingVideoOut"][];
+                };
+            };
+        };
+    };
     schedule_one_v1_calendar_schedule_post: {
         parameters: {
             query?: never;
@@ -3187,9 +3745,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LaunchOut"];
                 };
             };
             /** @description Validation Error */
@@ -3255,9 +3811,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LaunchOut"];
                 };
             };
             /** @description Validation Error */
@@ -3267,6 +3821,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_launches_v1_channels_launches_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchSummary"][];
                 };
             };
         };
@@ -3451,9 +4025,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["InsightsOut"];
                 };
             };
         };
@@ -4474,6 +5046,154 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_all_v1_series_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesOut"][];
+                };
+            };
+        };
+    };
+    create_v1_series_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeriesIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_v1_series__series_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                series_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_v1_series__series_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                series_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SeriesPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plan_v1_series__series_id__plan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                series_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanOut"];
                 };
             };
             /** @description Validation Error */

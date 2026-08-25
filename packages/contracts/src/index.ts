@@ -118,6 +118,36 @@ export type Spend = Ok<paths["/v1/spend"]["get"]>;
 
 /** Last Monday's review. `null` until one has been stored. */
 export type Review = components["schemas"]["ReviewPayload"];
+
+/** A standing series config, and the weekly plan the run planner derives from it. */
+export type Series = components["schemas"]["SeriesOut"];
+export type SeriesRequest = components["schemas"]["SeriesIn"];
+export type SeriesPatch = components["schemas"]["SeriesPatch"];
+export type SeriesPlan = Ok<paths["/v1/series/{series_id}/plan"]["get"]>;
+export type SeriesBlocker = SeriesPlan["blocked"][number];
+
+/** A channel-launch design: the async job the New channel screen polls. */
+export type Launch = Ok<paths["/v1/channels/launch/{launch_id}"]["get"]>;
+export type LaunchRequest = components["schemas"]["LaunchRequest"];
+export type LaunchSummary = Ok<paths["/v1/channels/launches"]["get"]>[number];
+// Qualified: both `api/channels.py` and `api/publishing.py` define an
+// `ApplyRequest`, so the generator disambiguates by module path.
+export type LaunchApplyRequest = components["schemas"]["engine__api__channels__ApplyRequest"];
+
+/** Rendered but unpublished — what the Calendar tray drags onto slots.
+ *  `PendingVideoOut`, because plain `PendingVideo` is the *request* shape
+ *  `POST /v1/calendar/auto` takes. */
+export type PendingVideos = Ok<paths["/v1/calendar/pending"]["get"]>;
+export type PendingVideoOut = components["schemas"]["PendingVideoOut"];
+
+/** Every published video with metrics and provenance — the Analytics table. */
+export type AnalyticsVideos = Ok<paths["/v1/analytics/videos"]["get"]>;
+export type AnalyticsVideo = AnalyticsVideos[number];
+
+/** The daily channel curve behind the Analytics tiles. */
+export type AnalyticsDaily = Ok<paths["/v1/analytics/daily"]["get"]>;
+/** One video's retention curve mapped onto its script beats. */
+export type Retention = Ok<paths["/v1/analytics/retention/{video_id}"]["get"]>;
 export type ReviewChange = Review["changes"][number];
 
 // ── things FastAPI types as `object` ────────────────────────────────────────

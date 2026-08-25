@@ -55,8 +55,31 @@ def _channel() -> Analytics:
     return Analytics(creds)
 
 
+class FindingOut(BaseModel):
+    """One attribution finding, exactly as `Finding.as_dict` shapes it."""
+
+    dimension: str
+    metric: str
+    winner: str
+    loser: str
+    verdict: str
+    lift: float
+    p_value: float
+    n_winner: int
+    n_loser: int
+    ci95: list[float]
+    sentence: str
+
+
+class InsightsOut(BaseModel):
+    findings: list[FindingOut]
+    confirmed_count: int
+    skipped: list[str]
+    video_count: int
+
+
 @router.get("/insights")
-async def insights() -> dict:
+async def insights() -> InsightsOut:
     """Findings, each carrying its verdict and sample size.
 
     Suggestive findings are returned so the user can see them; only confirmed ones
@@ -64,12 +87,12 @@ async def insights() -> dict:
     """
     records = await current_records()
     report = analyze(list(records.values()))
-    return {
-        "findings": [f.as_dict() for f in report.findings],
-        "confirmed_count": len(report.confirmed),
-        "skipped": report.skipped,
-        "video_count": len(records),
-    }
+    return InsightsOut(
+        findings=[FindingOut(**f.as_dict()) for f in report.findings],
+        confirmed_count=len(report.confirmed),
+        skipped=report.skipped,
+        video_count=len(records),
+    )
 
 
 @router.post("/insights/refresh")
@@ -91,6 +114,53 @@ async def refresh_insights() -> dict:
         updated += 1
 
     return {"pulled": len(rows), "matched": updated, "unmatched": len(rows) - updated}
+
+
+class VideoRow(BaseModel):
+    """One published video for the Analytics per-video table."""
+
+    video_id: str
+    title: str
+    published_at: str
+    views: int
+    ctr: float
+    avd_seconds: float
+    avd_percent: float
+    format: str
+    title_strategy: str
+    thumbnail_concept: str
+    hook_device: str
+
+
+@router.get("/analytics/videos")
+async def analytics_videos() -> list[VideoRow]:
+    """Every published video with its metrics and provenance, newest first.
+
+    The per-video table on Analytics rendered demo data forever because nothing
+    served the rows — `Analytics.per_video` was only ever called internally by the
+    refresh. This is the stored join of metrics onto provenance, so it answers
+    without spending Analytics API quota; `POST /insights/refresh` is what updates
+    the numbers.
+    """
+    records = await current_records()
+    rows = [
+        VideoRow(
+            video_id=r.video_id,
+            title=r.title,
+            published_at=r.published_at,
+            views=r.views,
+            ctr=r.ctr,
+            avd_seconds=r.avd_seconds,
+            avd_percent=r.avd_percent,
+            format=r.format,
+            title_strategy=r.title_strategy,
+            thumbnail_concept=r.thumbnail_concept,
+            hook_device=r.hook_device,
+        )
+        for r in records.values()
+    ]
+    rows.sort(key=lambda r: r.published_at, reverse=True)
+    return rows
 
 
 class SpendDay(BaseModel):
@@ -173,38 +243,68 @@ async def run_review() -> dict:
     return (await weekly.run()).as_dict()
 
 
+class DailyDay(BaseModel):
+    day: str
+    views: int
+    avd_seconds: float
+    subscribers_gained: int
+    #: The last two days are always incomplete. Presenting them as final makes
+    #: every trend look like it is collapsing.
+    provisional: bool
+
+
+class DailyOut(BaseModel):
+    days: list[DailyDay]
+
+
 @router.get("/analytics/daily")
-async def daily(days: int = 28) -> dict:
+async def daily(days: int = 28) -> DailyOut:
     rows = await _channel().daily(days=days)
-    return {
-        "days": [
-            {
-                "day": row.day.isoformat(),
-                "views": row.views,
-                "avd_seconds": row.avd_seconds,
-                "subscribers_gained": row.subscribers_gained,
-                # The last two days are always incomplete. Presenting them as final
-                # makes every trend look like it is collapsing.
-                "provisional": row.is_provisional,
-            }
+    return DailyOut(
+        days=[
+            DailyDay(
+                day=row.day.isoformat(),
+                views=row.views,
+                avd_seconds=row.avd_seconds,
+                subscribers_gained=row.subscribers_gained,
+                provisional=row.is_provisional,
+            )
             for row in rows
         ]
-    }
+    )
+
+
+class RetentionBeat(BaseModel):
+    at_percent: float
+    label: str
+    retention_start: float
+    retention_end: float
+    drop: float
+    drop_rate: float
+    worst: bool = False
+
+
+class RetentionOut(BaseModel):
+    curve: list[float]
+    beats: list[RetentionBeat]
 
 
 @router.get("/analytics/retention/{video_id}")
-async def retention(video_id: str) -> dict:
+async def retention(video_id: str) -> RetentionOut:
     """The retention curve with script beats located on it."""
     curve = await _channel().retention(video_id)
     record = (await current_records()).get(video_id)
     beats = record.beats if record else []
 
-    return {
-        "curve": curve,
-        "beats": map_retention_to_beats(
-            curve, beats, duration_s=record.avd_seconds if record else 0
-        ),
-    }
+    return RetentionOut(
+        curve=curve,
+        beats=[
+            RetentionBeat(**b)
+            for b in map_retention_to_beats(
+                curve, beats, duration_s=record.avd_seconds if record else 0
+            )
+        ],
+    )
 
 
 @router.get("/analytics/audience")
