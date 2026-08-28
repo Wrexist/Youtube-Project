@@ -44,3 +44,12 @@ scripts/studio-launch.sh
 # Written by setup.ps1 to interrogate the Python interpreters on the machine, and
 # deleted again when it finishes. Only survives a setup that died partway.
 studio-python-probe.py
+
+# MoviePy writes its intermediate audio beside the output rather than in a temp
+# directory, named after the clip it came from. A render that raises — which the
+# repurpose tests do deliberately — leaves one behind, in the repo root or in
+# `apps/engine/` depending on where pytest was started from. They are never worth
+# committing, and an untracked file with a random name in `git status` is how a
+# real change gets lost in the noise.
+*TEMP_MPY_*.mp4
+*TEMP_MPY_*.mp3
