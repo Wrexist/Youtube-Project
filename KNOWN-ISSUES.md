@@ -45,6 +45,13 @@ resumable-upload chunk loop and the `308 Resume Incomplete` handling are the par
 most likely to be subtly wrong, because they are the parts that cannot be reasoned
 about without a real response.
 
+**Narrowed, not closed.** `tests/test_youtube_simulated.py` drives the whole path —
+refresh, resumable session, chunked PUTs, `308` resume, the four publish stages of
+`PUBLISH_WORKFLOW` — against a `respx` simulation of Google that holds its own copy
+of the uploaded bytes and refuses anything non-contiguous. It found five real
+defects; see §4.12. It proves the protocol, not the endpoint: no Google server has
+still ever answered this code.
+
 **To fix:** create a Google Cloud project, enable *YouTube Data API v3* and *YouTube
 Analytics API*, create an OAuth 2.0 Client ID (Desktop or Web), put the id and secret
 in `.env`. Approval can take days, so start it before you need it.
@@ -325,6 +332,115 @@ Two independent breakages, one release:
 
 The pin is now `anthropic>=1,<2` because the code is written against 1.x in both
 places; a 0.x resolve would break the conftest import.
+
+### 4.12 Five defects in the YouTube client, found by simulating Google
+§1.1 says the resumable chunk loop and the `308` handling "cannot be reasoned about
+without a real response". We still have no credentials, so `tests/
+test_youtube_simulated.py` builds the response instead: a `respx` stand-in for
+`oauth2.googleapis.com` and `www.googleapis.com` that keeps its own copy of the
+bytes it has persisted, answers `308` with a `Range` header that is the only truth
+about how much arrived, and refuses — with Google's 400 — any chunk that does not
+continue what it holds. Reading the code found none of these. Running it against a
+server that does not agree with us found all five.
+
+* **A revoked channel burned 1,600 units per publish attempt.** `upload()` calls
+  `ledger.reserve()` first, which is right — Google charges when the session opens.
+  But `await self._headers()` sat *between* the reservation and the `try` that
+  refunds it, and `_headers()` is a network call: an expired access token detours
+  through `refresh()`, and a refresh that comes back `invalid_grant` raises
+  `ChannelDisconnected` from there. So a channel whose consent had been withdrawn —
+  the single most likely reason to be refreshing at all — booked a full upload's
+  quota against a request Google never received. Six attempts, and the day's uploads
+  were gone for uploads that could not have happened. The refresh is inside the
+  `try` now.
+* **A `Range` that went backwards ended the upload.** `_resume_offset`'s docstring
+  says the server's `Range` "is authoritative and may confirm less than we sent, so
+  it is the only thing worth believing"; the loop then acted on it only when it
+  moved *forward* and re-sent from its own offset otherwise. A server that drops a
+  buffered chunk therefore got a chunk starting past its data, which Google answers
+  with a hard 400 — an unrecoverable end to a recoverable upload, after the 1,600
+  units were spent. It now rewinds to whatever the server says it has, and counts
+  the rewind against `MAX_CHUNK_RETRIES` so it cannot oscillate forever.
+* **`thumbnails.set` sent no `uploadType`.** Required on every `/upload/` URI.
+  `videos.insert` passes `resumable`; this passed nothing, so the 50 units bought a
+  400 and the published video kept its auto-generated frame. Now `media`.
+* **`captions.insert` sent `multipart/form-data`.** It was built with httpx's
+  `files=`, and Google's media-upload protocol refuses that flavour by name — "Media
+  type 'multipart/form-data' is not supported. Valid media types:
+  [multipart/related]" — and also wanted the `uploadType=multipart` this call
+  likewise omitted. No caption track this repository could have uploaded would have
+  been accepted, at 400 units an attempt. `_multipart_related` builds the body by
+  hand: metadata part first, media part second, identified by position rather than
+  by a `name` field form-data would have added.
+* **The upload progress callback never reached 1.0.** The final chunk answers 200
+  and returns before reporting, so a four-chunk upload finished at 0.90. Cosmetic on
+  a 3KB file; on a forty-minute upload the Create screen looks stalled at the exact
+  moment it succeeded.
+
+What this still does not prove is anything about Google's actual behaviour — see
+§1.1, which stays open. The simulation is faithful to the documented protocol and to
+nothing else, so a header Google requires that neither the docs nor we thought of is
+exactly as invisible as it was before.
+
+### 4.13 Four defects in the TikTok path, found by simulating TikTok
+The same exercise as 4.12, against the other unproven API. §5.5 calls TikTok
+"connectable but unproven": every piece of it had unit tests, and each of those
+tests stubbed out the half of the system the *other* file was testing —
+`test_tiktok_reliability.py` mocks the transport under one provider function,
+`test_tiktok_account.py` mocks `tiktok.refresh` under the repository. Nothing ran
+the two together. `tests/test_tiktok_simulated.py` removes both stubs and drives
+the whole path — endpoint, repository, encryption, provider — against a `respx`
+stand-in for `open.tiktokapis.com` that is faithful to TikTok's annoyances rather
+than to a tidy REST API.
+
+* **The OAuth token endpoint's error body crashed the client.** TikTok has *two*
+  error shapes and we knew about one. The Display API nests it —
+  `{"error": {"code": "access_token_invalid"}}` — and `_unwrap` read it that way,
+  correctly, at HTTP 200. But `/v2/oauth/token/` speaks plain OAuth 2.0:
+  `{"error": "invalid_grant", "error_description": "Refresh token is invalid or
+  expired."}`, where `error` is a **string**. `"invalid_grant".get("code")` is an
+  `AttributeError` — not `TikTokUnavailable`, not `TikTokAuthExpired` — so every
+  `except` clause guarding this path missed it. The most ordinary failure this
+  integration has, a refresh token that died after its year, produced a 500 and a
+  traceback instead of "reconnect the account". `_error_in` now knows there are two
+  shapes and is the only place that does; `invalid_grant` and `access_denied` join
+  `_AUTH_ERRORS`, while `invalid_client` deliberately does not — wrong keys in
+  `.env` are a configuration fault and reconnecting cannot fix them.
+* **An outage while refreshing the token was a 500, one line from where it was a
+  502.** `POST /discover` wrapped the sweep in handlers for both exception types,
+  but wrapped `repository.tiktok_access_token()` in a handler for
+  `TikTokAuthExpired` only — and acquiring that token is itself a call to TikTok.
+  So a 503 during the refresh escaped unhandled, while the identical 503 four lines
+  later came back as a 502 with a sentence. Worse than a wrong status code: §5.5
+  records that the web app's `get<T>()` returns `null` on any non-2xx, so the 500
+  rendered as "the engine is not running".
+* **The rights chip on the card contradicted the guard that enforces it.**
+  `clip_sources` selected grants `.order_by(created_at.desc())` and collected them
+  into a dict — which keeps whatever it sees *last*, so descending order left the
+  **oldest** grant standing. Grants append rather than replace (that is how "were we
+  allowed to publish this, at the time" stays answerable), so the oldest is
+  precisely the superseded one. A clip whose permission had been withdrawn came back
+  from the repository as `cleared: true` while `record_asset` refused its media, and
+  because `api.clips` re-reads the grant itself through `latest_grant`, the card
+  disagreed with its own contents: a green chip beside a fatal "revoked" problem.
+  Now ordered ascending, tie-broken on `id`, matching `grants_for` and
+  `latest_grant`.
+* **A clip's fit score depended on how many other clips were swept with it.**
+  `_pooled_suggestions` runs one autocomplete sweep per seed caption and pooled the
+  results without deduplicating, while `fit.score_clip` counts matches rather than
+  distinct ones. Four captions about the same niche return largely the same phrases,
+  so each was counted four times. Measured: the same clip scored 0.305 swept alone
+  and 0.417 swept with three others, and its card claimed "12 YouTube autocomplete
+  queries match this" where three did. `upsert_clip_sources` writes the new score
+  over the stored one on every pass and the grid sorts by it, so the whole screen
+  re-ranked itself for a reason that had nothing to do with the clips. Pooled
+  through a dict now.
+
+What this does not prove is anything about TikTok's actual behaviour. §5.5 stays as
+it is: the app still needs review before credentials exist, the error codes in
+`_AUTH_ERRORS` are transcribed from documentation rather than observed, and the
+cursor semantics are simulated the way the docs describe them and no other way. The
+test file ends with the full list, next to the code that would have to change.
 
 ---
 

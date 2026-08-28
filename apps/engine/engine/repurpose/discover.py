@@ -105,6 +105,15 @@ async def _pooled_suggestions(clips: list[tiktok.Clip]) -> list[str]:
     subject matter — a three-word caption sweeps to noise. Failures are dropped
     rather than raised: demand scoring at zero is a worse ranking, not a broken
     discovery pass.
+
+    **Deduplicated.** Seeds drawn from four captions about the same niche return
+    largely the same phrases, and `fit.score_clip` counts matches rather than
+    distinct ones — so pooling them raw counted every shared phrase once per seed.
+    Measured: the same clip scored 0.305 swept alone and 0.417 swept with three
+    others, and its card claimed "12 YouTube autocomplete queries match this" where
+    three did. That is a score that moves with batch size rather than with demand,
+    and `upsert_clip_sources` writes it over the stored one on every pass — so the
+    grid re-ranked itself for a reason that had nothing to do with the clips.
     """
     seeds = [c.caption.strip() for c in clips if len(c.caption.strip()) > 15]
     seeds = sorted(seeds, key=len, reverse=True)[:_SWEEP_SEEDS]
@@ -116,10 +125,10 @@ async def _pooled_suggestions(clips: list[tiktok.Clip]) -> list[str]:
         return_exceptions=True,
     )
 
-    pooled: list[str] = []
+    pooled: dict[str, None] = {}
     for result in gathered:
         if isinstance(result, list):
-            pooled.extend(result)
+            pooled.update(dict.fromkeys(result))
         else:
             logger.debug("autocomplete sweep failed during discovery: {}", result)
-    return pooled
+    return list(pooled)

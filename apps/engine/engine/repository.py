@@ -1408,13 +1408,22 @@ async def clip_sources(
             .scalars()
             .all()
         )
+        # Ascending, so the *last* row written for a source is the one left standing
+        # in the dict — the same rule `grants_for` and `latest_grant` follow.
+        #
+        # This used to order descending, which inverted it: the dict comprehension
+        # keeps whatever it sees last, so the oldest grant won. Grants append rather
+        # than replace, so that is precisely the superseded one. A revoked clip came
+        # back from here with `cleared: True` while `record_asset` refused its media
+        # — and `api.clips` re-reads the grant itself through `latest_grant`, so the
+        # card contradicted itself: a fatal "revoked" problem next to a green chip.
         grants = {
             g.source_id: g
             for g in (
                 await db.execute(
                     select(ClipGrant)
                     .where(ClipGrant.source_id.in_([r.id for r in rows]))
-                    .order_by(ClipGrant.created_at.desc())
+                    .order_by(ClipGrant.created_at, ClipGrant.id)
                 )
             )
             .scalars()

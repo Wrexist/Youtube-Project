@@ -339,6 +339,12 @@ async def discover(body: DiscoverRequest) -> Discovered:
         # Not an error response: the screen renders this as "connect your account",
         # and a 4xx would make an ordinary un-connected install look broken.
         return Discovered(clips=[], based_on=topics, configured=True, connected=False)
+    except tiktok.TikTokUnavailable as exc:
+        # Caught separately, and *after* the subclass above: acquiring the token is
+        # itself a call to TikTok, so a 429 or a 5xx while refreshing lands here.
+        # Without this it escaped as an unhandled 500 — the same outage reported as
+        # a 502 with a sentence when it happens one line later, inside the sweep.
+        raise HTTPException(502, str(exc)) from exc
 
     try:
         await discovery.discover_own(

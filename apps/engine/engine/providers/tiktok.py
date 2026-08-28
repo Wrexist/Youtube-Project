@@ -21,10 +21,13 @@ recorded through `repurpose/rights.py`.
 Five things this has to get right, and each one is a way the integration silently
 stops working rather than failing loudly:
 
-1. **TikTok answers 200 with an error body.** `{"error": {"code": "access_token_
-   invalid", ...}}` arrives with HTTP 200, so `raise_for_status()` sees nothing
-   wrong. Every response goes through `_unwrap`, which is the only place that
-   decides whether a call succeeded.
+1. **TikTok answers 200 with an error body**, in either of *two* shapes.
+   `{"error": {"code": "access_token_invalid", ...}}` from the Display API and
+   `{"error": "invalid_grant", "error_description": ...}` from the OAuth token
+   endpoint both arrive with HTTP 200, so `raise_for_status()` sees nothing wrong.
+   Every response goes through `_unwrap`, which is the only place that decides
+   whether a call succeeded, and `_error_in`, which is the only place that knows
+   there are two shapes.
 2. **Access tokens last 24 hours.** Without refresh the connection works on the
    day you set it up and is dead by the next sweep — the failure mode that looks
    like "the feature stopped working" a day after anyone tested it.
@@ -113,6 +116,13 @@ REFRESH_MARGIN = timedelta(minutes=5)
 #: swallowed, so the screen can say *reconnect* instead of showing an empty grid.
 #: Not exhaustive — `_unwrap` also treats any 401 as an auth failure, which is the
 #: backstop for a code not on this list.
+#:
+#: The first group is the Display API's vocabulary; the last two are the OAuth
+#: token endpoint's, which speaks plain OAuth 2.0 error names instead.
+#: `invalid_grant` is what a dead refresh token comes back as, and it is the single
+#: most likely error this integration will ever see in production. `invalid_client`
+#: is deliberately *not* here: wrong credentials in `.env` are a configuration fault
+#: and reconnecting would not fix them.
 _AUTH_ERRORS = frozenset(
     {
         "access_token_invalid",
@@ -121,6 +131,8 @@ _AUTH_ERRORS = frozenset(
         "refresh_token_expired",
         "scope_not_authorized",
         "scope_permission_missed",
+        "invalid_grant",
+        "access_denied",
     }
 )
 
@@ -223,6 +235,33 @@ def authorize_url(redirect_uri: str, state: str) -> str:
 # ── the transport ───────────────────────────────────────────────────────────
 
 
+def _error_in(payload: dict) -> tuple[str, str]:
+    """The error code and message, from either shape TikTok uses.
+
+    **There are two, and they are not interchangeable.** The Display API nests the
+    error in an object:
+
+        {"data": {...}, "error": {"code": "access_token_invalid", "message": "..."}}
+
+    The OAuth token endpoint returns plain OAuth 2.0 instead, where `error` is a
+    *string* and the human-readable part lives in a sibling field:
+
+        {"error": "invalid_grant", "error_description": "Refresh token is invalid"}
+
+    Reading the second shape as if it were the first is `"invalid_grant".get(...)`,
+    an `AttributeError` — which is neither of this module's exception types, so
+    every caller's `except TikTokUnavailable` misses it. A dead refresh token, the
+    most ordinary failure this integration has, therefore surfaced as a 500 in the
+    browser tab instead of a "reconnect the account" the operator could act on.
+    """
+    raw = payload.get("error")
+    if isinstance(raw, dict):
+        return str(raw.get("code") or ""), str(raw.get("message") or "")
+    if isinstance(raw, str):
+        return raw, str(payload.get("error_description") or "")
+    return "", ""
+
+
 def _unwrap(response: httpx.Response) -> dict:
     """The only place that decides whether a TikTok call succeeded.
 
@@ -238,8 +277,12 @@ def _unwrap(response: httpx.Response) -> dict:
             f"TikTok returned {response.status_code} with a body that is not JSON"
         ) from exc
 
-    error = payload.get("error") or {}
-    code = str(error.get("code") or "")
+    if not isinstance(payload, dict):
+        raise TikTokUnavailable(
+            f"TikTok returned {response.status_code} with a body that is not an object"
+        )
+
+    code, message = _error_in(payload)
     # "ok" is success; the field is absent on some endpoints, which is also success.
     failed = bool(code) and code != "ok"
 
@@ -250,8 +293,7 @@ def _unwrap(response: httpx.Response) -> dict:
         )
     if failed or response.status_code >= 400:
         raise TikTokUnavailable(
-            f"TikTok error {code or response.status_code}: "
-            f"{error.get('message') or response.text[:200]}"
+            f"TikTok error {code or response.status_code}: {message or response.text[:200]}"
         )
     return payload
 
