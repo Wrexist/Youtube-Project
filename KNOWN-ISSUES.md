@@ -582,6 +582,9 @@ now on the Setup checklist and neither detectable from here:
   under the desktop platform. Studio runs on the operator's own machine, so its
   callback is `http://localhost:8080/...` — an app created as Web can never
   accept it, and the mismatch surfaces as this same one word.
+* **The key belongs to a Sandbox and the sign-in does not, or the reverse.** A
+  sandbox is a separate configuration carrying its own client key; test users
+  registered on one do not apply to the other.
 
 The checklist is now open by default rather than folded away, and the client key
 and redirect URI both copy, because the comparison it exists for is

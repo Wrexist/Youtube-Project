@@ -856,12 +856,31 @@ function TikTokConnection() {
               <CopyLine value="http://localhost:8080/v1/repurpose/auth/tiktok/callback" />
             </li>
             <li>
+              <span className="font-semibold">
+                Is the key from a Sandbox, when the app is in production — or the
+                other way round?
+              </span>{" "}
+              A sandbox is a separate configuration with its own client key. Test
+              Users added to a sandbox do not apply to the production app, and a
+              production key will not authorise against a sandbox. Whichever one
+              your test account is registered on, use <em>that</em> key.
+            </li>
+            <li>
               <span className="font-semibold">Is that the client key, not the app ID?</span>{" "}
               They sit next to each other on the credentials page and are easy to
               transpose. This is the key Studio is sending — it is a public
               identifier that travels in the URL, so compare it against the app&apos;s
               own page:
               <CopyLine value={status.client_key_hint} />
+              {/* The count is here so a truncated paste is visible. Deliberately
+                  not a rule that refuses a key: TikTok's are around this length
+                  today, but that is an observation about today's keys, and
+                  refusing a valid future one would be worse than the error page
+                  it replaces. */}
+              <span className="mt-1 block text-[11px] text-[var(--color-faint)]">
+                {status.client_key_hint.length} characters — if that is shorter than
+                the value on TikTok&apos;s page, the paste was truncated.
+              </span>
             </li>
           </ol>
         </details>
