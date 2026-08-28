@@ -442,6 +442,41 @@ it is: the app still needs review before credentials exist, the error codes in
 cursor semantics are simulated the way the docs describe them and no other way. The
 test file ends with the full list, next to the code that would have to change.
 
+### 4.14 Three gaps the simulations named but did not close
+Each was written down as a known limit when 4.12 and 4.13 landed, and each was a
+small fix once someone looked at it rather than a research problem.
+
+* **An access token expired mid-upload.** `_headers()` was resolved once, before
+  the chunk loop. A token lasts an hour and a 2GB master on a domestic upstream
+  does not fit inside one, so every chunk after the hour mark went up with a dead
+  credential — a 401, which the loop does not retry, on an upload whose 1,600
+  units were already spent. The headers are re-derived per chunk now, which
+  refreshes only when the token is actually within 60s of expiry.
+* **Chunk PUTs carried no `Authorization` at all.** The resumable protocol says
+  the unguessable session URI is the authorisation, which is true as documented —
+  but Google's own client library sends the header anyway, and a stricter tenancy
+  would be entitled to require it. If it ever is required the failure is a 401 on
+  chunk one, which is an expensive way to find out something that costs nothing
+  to prevent.
+* **A grant could be recorded and enforced but never withdrawn.** The rights model
+  had `revoked_at` from the beginning, `record_asset` refused media without a live
+  grant, and the card knew how to draw a revocation — and no endpoint set one. The
+  only route was writing to the repository by hand, which is not a route: a
+  creator who changes their mind is the most ordinary rights event there is.
+  `POST /v1/repurpose/clips/{id}/revoke` appends a revoked copy rather than
+  mutating the standing grant, for the same reason `record_grant` appends — the
+  old row is what answers "were we allowed to publish that, at the time" — and the
+  Repurpose card grew a two-press Revoke control beside it.
+
+One thing found on the way, in `Grant.as_dict`: it serialised its timestamps with
+a bare `.isoformat()`, while every *comparison* in that module goes through
+`_aware`. So the same revocation left the API as `…+00:00` when it was still in
+memory and as `…` with no offset once it had been through SQLite — and
+`new Date("2026-08-28T09:43:20")` is parsed as **local** time by every browser
+while the offset form is parsed as UTC. The same event rendered hours apart
+depending only on whether it had been persisted yet. Postgres returns aware
+datetimes and hides it, which is the same reason `_aware` exists at all.
+
 ---
 
 ## 5. Known-imperfect, working as intended for now

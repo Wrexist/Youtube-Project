@@ -1297,6 +1297,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/repurpose/clips/{source_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Grant
+         * @description Withdraw permission to use a clip, from now on.
+         *
+         *     The system could record a grant and enforce one, but an operator had no way to
+         *     take one back — a creator who changes their mind, a licence that ends early, a
+         *     campaign that turns out not to have covered what we thought. The only route was
+         *     writing to the repository by hand, which is not a route.
+         *
+         *     Appends a revoked copy of the standing grant rather than mutating it, for the
+         *     same reason `record_grant` appends: the old row is what answers "were we
+         *     allowed to publish that, at the time we published it". Mutating would erase
+         *     exactly the evidence a rights question needs, and the question always arrives
+         *     after the fact.
+         *
+         *     Revoking twice is not an error — it is someone making sure. The second call
+         *     finds the standing grant already revoked and returns it unchanged, so the
+         *     answer to "is this clip revoked" is the same either way.
+         */
+        post: operations["revoke_grant_v1_repurpose_clips__source_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/repurpose/clips/{source_id}/select": {
         parameters: {
             query?: never;
@@ -4943,6 +4978,37 @@ export interface operations {
                 "application/json": components["schemas"]["GrantIn"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_grant_v1_repurpose_clips__source_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

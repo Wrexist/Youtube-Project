@@ -501,6 +501,17 @@ export const getClips = (channelKey = "", status = "discovered") =>
 export const recordGrant = (sourceId: string, body: ClipGrantRequest) =>
   post<ClipGrant>(`/v1/repurpose/clips/${encodeURIComponent(sourceId)}/grant`, body);
 
+/**
+ * Withdraw permission to use a clip, from now on.
+ *
+ * The counterpart to `recordGrant`, and it was missing: rights could be recorded
+ * and enforced, but a creator changing their mind had no route through the app
+ * at all. Appends a revocation rather than deleting the grant, so "were we
+ * allowed to publish that, at the time" stays answerable.
+ */
+export const revokeClipGrant = (sourceId: string) =>
+  post<ClipGrant>(`/v1/repurpose/clips/${encodeURIComponent(sourceId)}/revoke`);
+
 export const dismissClip = (sourceId: string) =>
   post<void>(`/v1/repurpose/clips/${encodeURIComponent(sourceId)}/dismiss`);
 

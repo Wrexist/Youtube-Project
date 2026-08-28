@@ -6,7 +6,18 @@ import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
 
 const saveGrant = vi.hoisted(() => vi.fn());
 const findClips = vi.hoisted(() => vi.fn());
-vi.mock("@/app/actions", () => ({ saveGrant, findClips }));
+const revokeClip = vi.hoisted(() => vi.fn());
+// Adding a clip mounts the episode builder, which imports these two.
+const previewEpisode = vi.hoisted(() => vi.fn());
+const buildEpisode = vi.hoisted(() => vi.fn());
+vi.mock("@/app/actions", () => ({
+  saveGrant,
+  findClips,
+  revokeClip,
+  previewEpisode,
+  buildEpisode,
+}));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 beforeEach(() => {
   saveGrant.mockReset();
@@ -16,7 +27,29 @@ beforeEach(() => {
     ok: true,
     data: { found: 3, configured: true, connected: true },
   });
+  revokeClip.mockReset();
+  revokeClip.mockResolvedValue({ ok: true, data: {} });
+  previewEpisode.mockReset();
+  previewEpisode.mockResolvedValue({ ok: true, data: null });
+  buildEpisode.mockReset();
+  buildEpisode.mockResolvedValue({ ok: true, data: null });
 });
+
+/** One live clip with a clean grant — the only state the revoke control appears in. */
+function clearedClip(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "clip-1",
+    handle: "@someone",
+    caption: "a clip we are allowed to use",
+    url: "https://tiktok.example/v/1",
+    duration_s: 24,
+    views: 1000,
+    fit_score: 0.8,
+    cleared: true,
+    grant: { lane: "own", cleared: true, problems: [] },
+    ...overrides,
+  } as unknown as NonNullable<Parameters<typeof RepurposeView>[0]["clips"]>[number];
+}
 
 /**
  * The screen's whole job is refusing to let a clip become a video too early, so
@@ -66,6 +99,51 @@ describe("rights gating", () => {
     fireEvent.click(add);
 
     expect(screen.getByText(/from 1 clip/i)).toBeInTheDocument();
+  });
+
+  it("offers no way to revoke a clip that has no permission to withdraw", () => {
+    renderView([clearedClip({ cleared: false, grant: null })]);
+
+    expect(screen.queryByRole("button", { name: /revoke/i })).not.toBeInTheDocument();
+  });
+
+  it("takes two presses to revoke, and the second one says so", async () => {
+    // The second press is the confirmation. A modal for this would be ceremony;
+    // an unguarded button next to "Add to episode" would be pressed by accident.
+    renderView([clearedClip()]);
+
+    const revoke = screen.getByRole("button", { name: /^revoke$/i });
+    fireEvent.click(revoke);
+
+    expect(revokeClip).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /really revoke/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /really revoke/i }));
+    await waitFor(() => expect(revokeClip).toHaveBeenCalledWith("clip-1"));
+  });
+
+  it("says so when the revocation is refused, rather than looking like it worked", async () => {
+    revokeClip.mockResolvedValue({ ok: false, error: "the engine did not answer" });
+    renderView([clearedClip()]);
+
+    fireEvent.click(screen.getByRole("button", { name: /^revoke$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /really revoke/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/did not answer/i);
+  });
+
+  it("drops a revoked clip from the episode it was already in", async () => {
+    renderView([clearedClip()]);
+
+    fireEvent.click(screen.getByRole("button", { name: /add to episode/i }));
+    expect(screen.getByText(/from 1 clip/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^revoke$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /really revoke/i }));
+
+    // Building with a clip whose permission was just withdrawn is the exact
+    // thing the rights gate exists to prevent.
+    await waitFor(() => expect(screen.queryByText(/from 1 clip/i)).not.toBeInTheDocument());
   });
 
   it("marks rights state with a symbol as well as a colour", () => {

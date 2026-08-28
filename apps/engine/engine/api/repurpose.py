@@ -12,11 +12,13 @@ gate reads it back to decide whether the finished video may publish.
 from __future__ import annotations
 
 import secrets
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from engine import repository
@@ -262,6 +264,47 @@ async def record_grant(source_id: str, body: GrantIn) -> GrantOut:
 
     out = _grant_out(grant)
     assert out is not None  # a grant was just constructed
+    out.id = grant_id
+    return out
+
+
+@router.post("/clips/{source_id}/revoke", dependencies=_gated)
+async def revoke_grant(source_id: str) -> GrantOut:
+    """Withdraw permission to use a clip, from now on.
+
+    The system could record a grant and enforce one, but an operator had no way to
+    take one back — a creator who changes their mind, a licence that ends early, a
+    campaign that turns out not to have covered what we thought. The only route was
+    writing to the repository by hand, which is not a route.
+
+    Appends a revoked copy of the standing grant rather than mutating it, for the
+    same reason `record_grant` appends: the old row is what answers "were we
+    allowed to publish that, at the time we published it". Mutating would erase
+    exactly the evidence a rights question needs, and the question always arrives
+    after the fact.
+
+    Revoking twice is not an error — it is someone making sure. The second call
+    finds the standing grant already revoked and returns it unchanged, so the
+    answer to "is this clip revoked" is the same either way.
+    """
+    grant = await repository.latest_grant(source_id)
+    if grant is None:
+        raise HTTPException(404, f"no grant recorded for clip {source_id!r}")
+
+    if grant.revoked():
+        out = _grant_out(grant)
+        assert out is not None
+        return out
+
+    revoked = replace(grant, revoked_at=datetime.now(UTC))
+    try:
+        grant_id = await repository.record_grant(source_id, revoked)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    logger.info("clip {} revoked; its media is no longer usable", source_id)
+    out = _grant_out(revoked)
+    assert out is not None
     out.id = grant_id
     return out
 

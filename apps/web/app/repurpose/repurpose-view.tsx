@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import type { Clip, ClipGrantRequest } from "@studio/contracts";
 import { Button, Card, Empty } from "@/components/ui";
-import { findClips, saveGrant } from "@/app/actions";
+import { findClips, revokeClip, saveGrant } from "@/app/actions";
 import { EpisodeBuilder } from "./episode-builder";
 import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
 
@@ -31,6 +32,66 @@ const LANES = [
     blurb: "A funded clip programme. Enrolment is the permission — and it pays per view.",
   },
 ] as const;
+
+/**
+ * Withdraw permission to use a clip.
+ *
+ * Two presses rather than a confirm dialog: the second press *is* the
+ * confirmation, and it says what it will do. A modal for a reversible-on-paper,
+ * irreversible-in-practice action is ceremony — this stays inline, on the card
+ * it affects, and reverts on its own if you walk away from it.
+ *
+ * Deliberately quiet until hovered. Revoking is rare and consequential; a
+ * permanently loud control next to "Add to episode" would be pressed by accident.
+ */
+function RevokeButton({ clipId, onRevoked }: { clipId: string; onRevoked: () => void }) {
+  const router = useRouter();
+  const [armed, setArmed] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  // Disarm if the operator moves on without pressing again.
+  useEffect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => setArmed(false), 5000);
+    return () => clearTimeout(timer);
+  }, [armed]);
+
+  if (error) {
+    return (
+      <span role="alert" className="text-[12px] text-[var(--color-bad)]">
+        {error}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      title="The clip stays on the record; its media stops being usable."
+      onClick={() => {
+        if (!armed) {
+          setArmed(true);
+          return;
+        }
+        startTransition(async () => {
+          const result = await revokeClip(clipId);
+          if (result.ok) {
+            onRevoked();
+            router.refresh();
+          } else {
+            setError(result.error ?? "Could not revoke.");
+          }
+        });
+      }}
+      className="shrink-0 text-[12px] font-semibold transition-colors duration-150 disabled:opacity-40"
+      style={{ color: armed ? "var(--color-bad)" : "var(--color-faint)" }}
+    >
+      {armed ? "Really revoke?" : "Revoke"}
+    </button>
+  );
+}
 
 /** How a rights state reads at a glance. Never colour alone — each carries a mark
  *  and a word, per the accessibility rule in docs/UI-DESIGN.md. */
@@ -150,7 +211,7 @@ export function RepurposeView({
                   {` · fit ${Math.round(clip.fit * 100)}`}
                 </p>
               </button>
-              <div className="border-t border-[var(--color-line)] px-4 py-2.5">
+              <div className="flex items-center justify-between gap-3 border-t border-[var(--color-line)] px-4 py-2.5">
                 {/* Disabled-and-explained rather than absent: the control is what
                     tells you what the screen is for, and a button that silently
                     does nothing is the thing queue/page.tsx already rules out. */}
@@ -173,6 +234,19 @@ export function RepurposeView({
                 >
                   {isSelected ? "Remove from episode" : "Add to episode"}
                 </button>
+
+                {/* Only where there is a permission to withdraw. Two presses,
+                    because it is not undoable from here — the grant stays on the
+                    record but the clip stops being usable, and a creator who
+                    changed their mind is not a mis-click to recover from. */}
+                {clip.cleared && live && (
+                  <RevokeButton
+                    clipId={clip.id}
+                    onRevoked={() =>
+                      setSelected((current) => current.filter((id) => id !== clip.id))
+                    }
+                  />
+                )}
               </div>
               </Card>
             </article>

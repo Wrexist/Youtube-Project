@@ -245,14 +245,34 @@ class Grant:
         return not any(p.fatal for p in self.problems(platform=platform, now=now))
 
     def as_dict(self) -> dict:
+        """The grant as JSON, with every timestamp an unambiguous UTC instant.
+
+        Through `_aware` rather than `.isoformat()` directly, for the same reason
+        the comparisons above use it — and it was missing here, which made this
+        the *serialising* half of the same SQLite bug. A grant held in memory
+        carried an aware `revoked_at` and left as `…+00:00`; the identical grant
+        read back from SQLite carried a naive one and left as `…` with no offset.
+
+        That is not cosmetic. `new Date("2026-08-28T09:43:20")` is parsed as
+        **local** time by every browser, while the `+00:00` form is parsed as UTC
+        — so the same revocation rendered hours apart on the rights card
+        depending only on whether it had been through the database yet. Postgres
+        returns aware datetimes and hides it, which is the same reason `_aware`
+        exists at all: the failure is reserved for the default configuration.
+        """
+
+        def moment(value: datetime | None) -> str | None:
+            coerced = _aware(value)
+            return coerced.isoformat() if coerced else None
+
         return {
             "lane": self.lane.value,
             "grantor": self.grantor,
             "evidence_kind": self.evidence_kind,
             "evidence_ref": self.evidence_ref,
-            "granted_at": self.granted_at.isoformat() if self.granted_at else None,
-            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
-            "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
+            "granted_at": moment(self.granted_at),
+            "expires_at": moment(self.expires_at),
+            "revoked_at": moment(self.revoked_at),
             "platforms": sorted(self.platforms),
             "rules": self.rules,
             "needs_attribution": self.needs_attribution,

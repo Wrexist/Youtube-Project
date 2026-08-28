@@ -6394,6 +6394,54 @@
         ]
       }
     },
+    "/v1/repurpose/clips/{source_id}/revoke": {
+      "post": {
+        "description": "Withdraw permission to use a clip, from now on.\n\nThe system could record a grant and enforce one, but an operator had no way to\ntake one back \u2014 a creator who changes their mind, a licence that ends early, a\ncampaign that turns out not to have covered what we thought. The only route was\nwriting to the repository by hand, which is not a route.\n\nAppends a revoked copy of the standing grant rather than mutating it, for the\nsame reason `record_grant` appends: the old row is what answers \"were we\nallowed to publish that, at the time we published it\". Mutating would erase\nexactly the evidence a rights question needs, and the question always arrives\nafter the fact.\n\nRevoking twice is not an error \u2014 it is someone making sure. The second call\nfinds the standing grant already revoked and returns it unchanged, so the\nanswer to \"is this clip revoked\" is the same either way.",
+        "operationId": "revoke_grant_v1_repurpose_clips__source_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Grant",
+        "tags": [
+          "repurpose"
+        ]
+      }
+    },
     "/v1/repurpose/clips/{source_id}/select": {
       "post": {
         "operationId": "select_v1_repurpose_clips__source_id__select_post",

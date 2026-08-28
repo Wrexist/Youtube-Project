@@ -287,6 +287,65 @@ async def test_revoked_consent_surfaces_as_the_disconnect_the_api_maps_to_409():
 
 
 @respx.mock
+async def test_every_chunk_carries_the_authorization_header(video, client):
+    """The chunk PUTs used to send no credential at all.
+
+    The resumable protocol says the unguessable session URI is the
+    authorisation, and that is true as documented — but Google's own client
+    library sends the header on every chunk, and a stricter tenancy would be
+    entitled to require it. If it ever is required, the failure is a 401 on
+    chunk one of an upload whose 1,600 units are already spent, which is a bad
+    way to find out. Sending it costs nothing.
+    """
+    respx.post(youtube.TOKEN_URL).mock(return_value=token_response())
+    sim = ResumableUploadSim()
+    mount(sim)
+
+    await client.upload(video, title="t", description="d", tags=[])
+
+    assert len(sim.puts) == 4
+    for request in respx.calls:
+        if request.request.method == "PUT":
+            assert request.request.headers.get("authorization", "").startswith("Bearer ")
+
+
+@respx.mock
+async def test_a_token_expiring_mid_upload_is_refreshed_and_the_upload_continues(
+    video, client, monkeypatch
+):
+    """An access token lasts an hour; a large upload does not fit inside one.
+
+    `_headers()` was called once, before the chunk loop, so a 2GB master on a
+    domestic upstream sent every chunk after the hour mark with a dead token.
+    That is a 401, which the loop does not retry, on an upload already charged
+    1,600 units. Here the token is expired from under the client after the first
+    chunk: the upload must refresh and finish, not die.
+    """
+    token = respx.post(youtube.TOKEN_URL).mock(return_value=token_response(access_token="ya29.new"))
+    sim = ResumableUploadSim()
+
+    original = sim.put_chunk
+
+    def expire_after_first(request: httpx.Request) -> httpx.Response:
+        response = original(request)
+        # Age the credential the way an hour of uploading would.
+        client.creds.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        return response
+
+    respx.route(method="POST", url__startswith=youtube.UPLOAD).mock(side_effect=sim.open_session)
+    respx.route(method="PUT", url__startswith=youtube.UPLOAD).mock(side_effect=expire_after_first)
+
+    video_id = await client.upload(video, title="t", description="d", tags=[])
+
+    assert video_id == "sim-video-1"
+    assert bytes(sim.stored) == video.read_bytes(), "the upload completed intact"
+    # Once per chunk after the first, because each one re-expires it.
+    assert token.call_count >= 1
+    later = [c for c in respx.calls if c.request.method == "PUT"][1:]
+    assert all(c.request.headers["authorization"] == "Bearer ya29.new" for c in later)
+
+
+@respx.mock
 async def test_a_dead_refresh_token_does_not_book_the_uploads_1600_units(video, client):
     """The reservation is made before the token is refreshed, so it has to come back.
 

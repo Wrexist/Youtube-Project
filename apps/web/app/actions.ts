@@ -45,6 +45,7 @@ import {
   setAllRoutes,
   setRoute,
   recordGrant,
+  revokeClipGrant,
   dismissClip,
   selectClip,
   evaluateTimeline,
@@ -608,6 +609,25 @@ export async function saveGrant(
       error: problems?.length ? "This grant is not usable as recorded." : message(error),
       blockers: problems,
     };
+  }
+}
+
+/**
+ * Withdraw permission to use a clip.
+ *
+ * Distinct from `rejectClip`, which says "not for this episode". This says the
+ * permission itself is gone — a creator who changed their mind, a licence that
+ * ended early — and it is the one that stops the media being fetched at all.
+ * The engine appends the revocation rather than deleting the grant, so what we
+ * were allowed to do last month is still on the record.
+ */
+export async function revokeClip(sourceId: string): Promise<ActionResult<ClipGrant>> {
+  try {
+    const data = await revokeClipGrant(sourceId);
+    revalidatePath("/repurpose");
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: message(error) };
   }
 }
 

@@ -129,6 +129,85 @@ async def test_a_recorded_grant_clears_the_clip(database):
     assert stored.lane == "own"
 
 
+# ── revoking ────────────────────────────────────────────────────────────────
+#
+# The system could record permission and enforce it, and gave an operator no way
+# to take it back: the only route was writing to the repository by hand. A
+# creator who changes their mind is the most ordinary rights event there is.
+
+
+async def test_revoking_withdraws_permission_and_the_clip_stops_being_cleared(database):
+    source_id = await _seed()
+    await api.record_grant(source_id, _grant(lane="own"))
+    assert (await _clips()).clips[0].grant.cleared is True
+
+    revoked = await api.revoke_grant(source_id)
+
+    assert revoked.cleared is False
+    assert revoked.revoked_at is not None
+    assert (await _clips()).clips[0].grant.cleared is False
+
+
+async def test_revoking_appends_rather_than_erasing_the_original_grant(database):
+    """The old row answers "were we allowed to publish that, when we published it".
+
+    Mutating the standing grant would erase exactly the evidence a rights
+    question needs, and a rights question always arrives after the fact.
+    """
+    source_id = await _seed()
+    await api.record_grant(source_id, _grant(lane="own"))
+
+    await api.revoke_grant(source_id)
+
+    from sqlalchemy import func, select
+
+    from engine.db import session
+    from engine.tables import ClipGrant
+
+    grants = await repository.grants_for([source_id])
+    assert grants[source_id].revoked() is True
+
+    # Both rows survive: the grant and its withdrawal.
+    async with session() as db:
+        count = await db.scalar(
+            select(func.count()).select_from(ClipGrant).where(ClipGrant.source_id == source_id)
+        )
+    assert count == 2
+
+
+async def test_revoking_twice_is_someone_making_sure_not_an_error(database):
+    source_id = await _seed()
+    await api.record_grant(source_id, _grant(lane="own"))
+    first = await api.revoke_grant(source_id)
+
+    second = await api.revoke_grant(source_id)
+
+    assert second.cleared is False
+    assert second.revoked_at == first.revoked_at, "the standing revocation is returned unchanged"
+
+
+async def test_revoking_a_clip_with_no_grant_is_404(database):
+    source_id = await _seed()
+
+    with pytest.raises(HTTPException) as raised:
+        await api.revoke_grant(source_id)
+
+    assert raised.value.status_code == 404
+
+
+async def test_a_revoked_clips_media_can_no_longer_be_recorded(database):
+    """The invariant the whole feature rests on: no live grant, no stored media."""
+    source_id = await _seed()
+    await api.record_grant(source_id, _grant(lane="own"))
+    await api.revoke_grant(source_id)
+
+    with pytest.raises(PermissionError):
+        await repository.record_asset(
+            source_id,
+            {"storage_key": "clips/x.mp4", "sha256": "0" * 64, "duration_s": 4.0},
+        )
+
+
 async def test_evaluate_reports_both_verdicts_separately(database):
     """A licensed-but-lazy edit must not read as a rights problem."""
     report = await api.evaluate_timeline(

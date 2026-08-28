@@ -528,10 +528,28 @@ class YouTube:
                     # every other job's progress stream.
                     chunk = await asyncio.to_thread(_read_at, fh, offset, CHUNK)
                     end = offset + len(chunk) - 1
+                    # Re-derived per chunk rather than captured once before the
+                    # loop. Two reasons, and the second is the one that bites:
+                    #
+                    # An access token lasts an hour. A 2GB master on a domestic
+                    # upstream takes longer than that, so a long upload outlived
+                    # its own credential — every chunk after the hour mark got a
+                    # 401, which is not retried, on an upload whose 1,600 units
+                    # were already spent. `_headers()` refreshes when the token is
+                    # within 60s of expiry, so asking it again each chunk keeps a
+                    # multi-hour upload authorised for nothing when it is not.
+                    #
+                    # And the chunks carried no `Authorization` at all: the
+                    # resumable protocol says the unguessable session URI is the
+                    # authorisation, which is true, but Google's own client sends
+                    # the header anyway and a stricter tenancy would be entitled
+                    # to require it. Sending it costs nothing and removes the
+                    # question.
                     resp = await client.put(
                         session_url,
                         content=chunk,
                         headers={
+                            **(await self._headers()),
                             "Content-Length": str(len(chunk)),
                             "Content-Range": f"bytes {offset}-{end}/{size}",
                         },
