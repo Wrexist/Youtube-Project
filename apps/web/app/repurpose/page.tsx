@@ -23,9 +23,25 @@ import { RepurposeView } from "./repurpose-view";
  * Falls back to `demo.ts` when the engine is unreachable, like every other screen,
  * and says so with a `LiveBadge`. See KNOWN-ISSUES §5.5.
  */
-export default async function RepurposePage() {
+export default async function RepurposePage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const clips = await getClips("main");
   const live = clips !== null;
+
+  // The TikTok round trip comes back here with its outcome in the query string.
+  // Read on the server and passed down rather than read with `useSearchParams`
+  // in the view: that hook forces a client-side bailout, and Next refuses to
+  // prerender a page using it outside a Suspense boundary — which fails the
+  // build rather than degrading, so it is not a trade worth making for two
+  // strings that the server already has.
+  const params = await searchParams;
+  const one = (key: string) => {
+    const value = params[key];
+    return (Array.isArray(value) ? value[0] : value) ?? null;
+  };
 
   return (
     <>
@@ -43,6 +59,8 @@ export default async function RepurposePage() {
           clips={live ? clips.clips : null}
           demoClips={REPURPOSE_CLIPS}
           demoReport={REPURPOSE_REPORT}
+          tiktokOutcome={one("tiktok")}
+          tiktokError={one("tiktok_error")}
         />
       </Page>
     </>

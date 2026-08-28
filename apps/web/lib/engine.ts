@@ -599,6 +599,14 @@ export const getRetention = (videoId: string) =>
  * Through `send` rather than `get`, even though it is a GET: `get` swallows every
  * failure into `null`, and the whole value of this call when it fails is the
  * 409's message naming the variable to set. Same reasoning as `beginYouTubeAuth`.
+ *
+ * `returnTo` is the screen the browser comes back to. The engine allowlists it —
+ * it ends up in a `Location` header, and reflecting an arbitrary path there is an
+ * open redirect. Connecting from Repurpose and landing on Setup is a small thing
+ * that reads as the app losing your place.
  */
-export const beginTikTokAuth = () =>
-  send<{ url: string }>("GET", "/v1/repurpose/auth/tiktok");
+export const beginTikTokAuth = (returnTo: "setup" | "repurpose" = "setup") =>
+  send<{ url: string }>(
+    "GET",
+    `/v1/repurpose/auth/tiktok?return_to=${encodeURIComponent(returnTo)}`,
+  );

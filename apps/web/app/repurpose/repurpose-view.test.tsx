@@ -432,7 +432,10 @@ describe("sweeping", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/not set up/i);
   });
 
-  it("distinguishes 'nobody signed in' from 'not set up'", async () => {
+  it("offers the connection itself when the keys are set but nobody signed in", async () => {
+    // Distinct from "not set up", which needs a trip to Setup to paste keys.
+    // Here the only thing missing is one press, so the press is offered here
+    // rather than described as an errand on another screen.
     findClips.mockResolvedValue({
       ok: true,
       data: { found: 0, configured: true, connected: false },
@@ -443,9 +446,53 @@ describe("sweeping", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /find clips/i }));
 
-    const note = await screen.findByRole("status");
-    expect(note).toHaveTextContent(/no tiktok account is connected/i);
-    expect(note).not.toHaveTextContent(/not set up/i);
+    expect(await screen.findByRole("button", { name: /connect tiktok/i })).toBeEnabled();
+    expect(screen.getByRole("status")).not.toHaveTextContent(/not set up/i);
+  });
+
+  it("still sends you to Setup when the keys themselves are missing", async () => {
+    // The one case that genuinely cannot be resolved from this screen.
+    findClips.mockResolvedValue({
+      ok: true,
+      data: { found: 0, configured: false, connected: false },
+    });
+    render(
+      <RepurposeView clips={[]} demoClips={REPURPOSE_CLIPS} demoReport={REPURPOSE_REPORT} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /find clips/i }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(/not set up yet/i);
+    expect(screen.queryByRole("button", { name: /connect tiktok/i })).not.toBeInTheDocument();
+  });
+
+  it("says so on the way back from a refused sign-in", async () => {
+    // The callback redirects here with the reason in the query string, which the
+    // server component reads and hands down. Landing on a screen that says
+    // nothing is how "did that work?" goes unanswered.
+    render(
+      <RepurposeView
+        clips={[]}
+        demoClips={REPURPOSE_CLIPS}
+        demoReport={REPURPOSE_REPORT}
+        tiktokError="you declined the request"
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(/you declined the request/i);
+  });
+
+  it("confirms a successful connection on the way back", async () => {
+    render(
+      <RepurposeView
+        clips={[]}
+        demoClips={REPURPOSE_CLIPS}
+        demoReport={REPURPOSE_REPORT}
+        tiktokOutcome="connected"
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(/tiktok connected/i);
   });
 
   it("says a connected-but-empty account is connected", async () => {

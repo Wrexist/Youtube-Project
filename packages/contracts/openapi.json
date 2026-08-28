@@ -6088,6 +6088,16 @@
               "title": "Redirect Uri",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "return_to",
+            "required": false,
+            "schema": {
+              "default": "setup",
+              "title": "Return To",
+              "type": "string"
+            }
           }
         ],
         "responses": {

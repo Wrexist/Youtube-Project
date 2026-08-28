@@ -54,7 +54,9 @@ regardless of the code it carries.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
+import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -212,8 +214,47 @@ def configured() -> bool:
     return bool(settings.tiktok_client_key and settings.tiktok_client_secret)
 
 
-def authorize_url(redirect_uri: str, state: str) -> str:
-    """Where the browser goes to grant Lane A access."""
+#: PKCE verifier alphabet and length, from RFC 7636 §4.1 — the unreserved
+#: characters, 43 to 128 of them. `token_urlsafe` emits exactly this alphabet
+#: (it adds `-` and `_`), so no filtering is needed; 64 bytes of entropy lands
+#: comfortably inside the range at 86 characters.
+_VERIFIER_BYTES = 64
+
+
+def code_verifier() -> str:
+    """A fresh PKCE verifier. One per sign-in attempt, never reused."""
+    return secrets.token_urlsafe(_VERIFIER_BYTES)
+
+
+def code_challenge(verifier: str) -> str:
+    """The challenge TikTok expects for a verifier — **hex**, not base64url.
+
+    This is where TikTok departs from RFC 7636, and it departs silently: the RFC
+    says `BASE64URL(SHA256(verifier))` and every other provider we talk to means
+    that, so the obvious implementation is accepted at the authorize step and then
+    fails at the token exchange with a flat `invalid_grant` that names nothing.
+    TikTok's own Login Kit documentation is explicit — "You must use hex encoding
+    of SHA256 to generate the code challenge from the code verifier" — and their
+    example is `CryptoJS.SHA256(code_verifier).toString(CryptoJS.enc.Hex)`.
+
+    `code_challenge_method` is still sent as `S256`, which is the *hash* name and
+    is the only value TikTok accepts. The encoding is not part of that name, which
+    is exactly why this is easy to get wrong.
+    """
+    return hashlib.sha256(verifier.encode("ascii")).hexdigest()
+
+
+def authorize_url(redirect_uri: str, state: str, verifier: str) -> str:
+    """Where the browser goes to grant Lane A access.
+
+    `verifier` is the PKCE code verifier for this attempt; the caller keeps it
+    and hands it back to `exchange_code`. It is not optional: TikTok refuses the
+    authorize request outright without a `code_challenge`, on a page that says
+    "Something went wrong" and lists the missing parameter in small print. That
+    was the state of this integration until someone tried it against the real
+    API — the simulated tests could not have found it, because a fixture answers
+    whatever it is asked.
+    """
     if not configured():
         raise TikTokUnavailable("TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET are not set")
 
@@ -227,6 +268,8 @@ def authorize_url(redirect_uri: str, state: str) -> str:
                 "response_type": "code",
                 "redirect_uri": redirect_uri,
                 "state": state,
+                "code_challenge": code_challenge(verifier),
+                "code_challenge_method": "S256",
             }
         )
     )
@@ -380,8 +423,14 @@ def _tokens_from(payload: dict) -> Tokens:
     )
 
 
-async def exchange_code(code: str, redirect_uri: str) -> Tokens:
-    """Trade an authorisation code for tokens."""
+async def exchange_code(code: str, redirect_uri: str, verifier: str) -> Tokens:
+    """Trade an authorisation code for tokens.
+
+    `verifier` must be the same one whose challenge went out with the authorize
+    request. TikTok recomputes the hash and refuses the exchange if it disagrees
+    — which is the whole point of PKCE, and also means a mismatch here fails with
+    a bare `invalid_grant` rather than anything that names the cause.
+    """
     if not configured():
         raise TikTokUnavailable("TikTok credentials are not configured")
 
@@ -397,6 +446,7 @@ async def exchange_code(code: str, redirect_uri: str) -> Tokens:
                 "code": code,
                 "grant_type": "authorization_code",
                 "redirect_uri": redirect_uri,
+                "code_verifier": verifier,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )

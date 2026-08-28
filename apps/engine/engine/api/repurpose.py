@@ -416,7 +416,7 @@ async def discover(body: DiscoverRequest) -> Discovered:
 
 
 @router.get("/auth/tiktok", dependencies=_gated)
-async def begin_tiktok_auth(redirect_uri: str = "") -> dict:
+async def begin_tiktok_auth(redirect_uri: str = "", return_to: str = "setup") -> dict:
     """Where the browser goes to connect a TikTok account for Lane A.
 
     Returns the URL rather than redirecting, for the reason `beginYouTubeAuth`
@@ -437,9 +437,12 @@ async def begin_tiktok_auth(redirect_uri: str = "") -> dict:
 
     redirect_uri = redirect_uri or _default_redirect()
     state = secrets.token_urlsafe(24)
-    _PENDING_STATES[state] = (datetime.now(UTC), redirect_uri)
+    # The PKCE verifier is generated here and never leaves the engine: only its
+    # hash travels to TikTok, and only this process can complete the exchange.
+    verifier = tiktok.code_verifier()
+    _PENDING_STATES[state] = (datetime.now(UTC), redirect_uri, verifier, return_to)
     _expire_states()
-    return {"url": tiktok.authorize_url(redirect_uri, state)}
+    return {"url": tiktok.authorize_url(redirect_uri, state, verifier)}
 
 
 @router.get("/auth/tiktok/callback")  # no [Depends] — see the module comment above
@@ -456,28 +459,34 @@ async def tiktok_callback(
     JSON is not an answer to "did that work". The outcome rides in the query
     string so the screen can say which.
     """
-    if error:
-        return _back(f"tiktok_error={quote(error_description or error)}")
-
     pending = _PENDING_STATES.pop(state, None)
     _expire_states()
+    # Read before the error branch so a refusal still lands on the screen the
+    # operator started from. Unknown state falls back to Setup.
+    return_to = pending[3] if pending else "setup"
+
+    if error:
+        return _back(f"tiktok_error={quote(error_description or error)}", return_to)
+
     if pending is None:
         # Unknown or already-used state. Refused rather than accepted, because a
         # code arriving without one is exactly the CSRF the state exists to stop.
-        return _back("tiktok_error=" + quote("that sign-in link has expired — try again"))
+        return _back(
+            "tiktok_error=" + quote("that sign-in link has expired — try again"), return_to
+        )
 
-    _, redirect_uri = pending
+    _, redirect_uri, verifier, _ = pending
     if not code:
-        return _back("tiktok_error=" + quote("TikTok returned no authorisation code"))
+        return _back("tiktok_error=" + quote("TikTok returned no authorisation code"), return_to)
 
     try:
-        tokens = await tiktok.exchange_code(code, redirect_uri)
+        tokens = await tiktok.exchange_code(code, redirect_uri, verifier)
         handle = await tiktok.creator_handle(tokens.access_token)
         await repository.save_tiktok_account(tokens, handle=handle)
     except tiktok.TikTokUnavailable as exc:
-        return _back("tiktok_error=" + quote(str(exc)))
+        return _back("tiktok_error=" + quote(str(exc)), return_to)
 
-    return _back("tiktok=connected")
+    return _back("tiktok=connected", return_to)
 
 
 @router.get("/auth/tiktok/status", dependencies=_gated)
@@ -500,19 +509,25 @@ async def disconnect_tiktok() -> None:
         raise HTTPException(404, "no TikTok account is connected")
 
 
-#: In-flight OAuth states, with the redirect URI each was issued for.
+#: In-flight OAuth states: when it was issued, the redirect URI it was issued
+#: for, and its PKCE code verifier.
 #:
 #: In-process rather than a table: they live for one round trip measured in
 #: seconds, an engine restart mid-sign-in is a retry rather than a data loss, and
 #: a table would need its own sweeper. Bounded by `_expire_states` so a stream of
 #: abandoned sign-ins cannot grow it without limit.
-_PENDING_STATES: dict[str, tuple[datetime, str]] = {}
+#:
+#: The verifier belongs here rather than anywhere durable for the same reason it
+#: exists at all: it is the secret half of the PKCE pair, it is worthless after
+#: one exchange, and keeping it in memory means a restart loses nothing but an
+#: in-flight sign-in the operator can simply start again.
+_PENDING_STATES: dict[str, tuple[datetime, str, str, str]] = {}
 _STATE_TTL = timedelta(minutes=10)
 
 
 def _expire_states() -> None:
     cutoff = datetime.now(UTC) - _STATE_TTL
-    for key in [k for k, (issued, _) in _PENDING_STATES.items() if issued < cutoff]:
+    for key in [k for k, (issued, *_) in _PENDING_STATES.items() if issued < cutoff]:
         _PENDING_STATES.pop(key, None)
 
 
@@ -524,10 +539,25 @@ def _default_redirect() -> str:
     return f"{base}/v1/repurpose/auth/tiktok/callback"
 
 
-def _back(query: str) -> RedirectResponse:
+#: Screens a sign-in may return to. An allowlist rather than "any path", because
+#: this value arrives from a query string and lands in a `Location` header —
+#: reflecting it unchecked is an open redirect, which is worth more to a
+#: phisher than the account being connected.
+_RETURN_TO = {"setup", "repurpose"}
+
+
+def _back(query: str, return_to: str = "setup") -> RedirectResponse:
+    """Send the browser back to the screen the sign-in started from.
+
+    Defaults to Setup, which is where this flow used to always land. Connecting
+    from the Repurpose screen and being dropped on Setup is a small thing that
+    reads as the app losing your place — and Repurpose is where the button that
+    needs the account actually lives.
+    """
     from engine.settings import get_settings
 
-    return RedirectResponse(f"{get_settings().web_url}/setup?{query}", status_code=303)
+    screen = return_to if return_to in _RETURN_TO else "setup"
+    return RedirectResponse(f"{get_settings().web_url}/{screen}?{query}", status_code=303)
 
 
 def _channel_topics(count: int = 12) -> list[str]:

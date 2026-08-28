@@ -348,7 +348,7 @@ async def test_a_callback_with_an_unknown_state_is_refused(tiktok_configured):
 async def test_a_state_cannot_be_replayed(database, tiktok_configured, monkeypatch):
     from engine.providers import tiktok as provider
 
-    async def fake_exchange(_code, _redirect):
+    async def fake_exchange(_code, _redirect, _verifier):
         return provider.Tokens(access_token="at", refresh_token="rt")
 
     async def fake_handle(_token):

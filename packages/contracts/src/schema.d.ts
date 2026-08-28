@@ -4801,6 +4801,7 @@ export interface operations {
         parameters: {
             query?: {
                 redirect_uri?: string;
+                return_to?: string;
             };
             header?: never;
             path?: never;

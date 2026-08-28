@@ -395,7 +395,7 @@ async def test_a_token_response_is_parsed_with_expiry(monkeypatch):
         ),
     )
 
-    tokens = await tiktok.exchange_code("code", "https://example.test/cb")
+    tokens = await tiktok.exchange_code("code", "https://example.test/cb", "verifier")
 
     assert tokens.access_token == "at"
     assert tokens.open_id == "oid"
@@ -408,7 +408,7 @@ async def test_tokens_nested_under_data_are_also_accepted(monkeypatch):
     away from the cause."""
     _transport(monkeypatch, lambda _r: _ok({"data": {"access_token": "at", "expires_in": 100}}))
 
-    tokens = await tiktok.exchange_code("code", "https://example.test/cb")
+    tokens = await tiktok.exchange_code("code", "https://example.test/cb", "verifier")
 
     assert tokens.access_token == "at"
 
@@ -456,8 +456,69 @@ async def test_no_token_means_no_call(monkeypatch):
 
 
 def test_the_authorize_url_carries_the_state_and_scopes():
-    url = tiktok.authorize_url("https://example.test/cb", "st4te")
+    url = tiktok.authorize_url("https://example.test/cb", "st4te", "verifier")
 
     assert "state=st4te" in url
     assert "user.info.basic" in url
     assert "video.list" in url
+
+
+# ── PKCE ────────────────────────────────────────────────────────────────────
+#
+# TikTok refuses the authorize request outright without a `code_challenge`. The
+# integration shipped without one and every simulated test passed, because a
+# fixture answers whatever it is asked — the real authorize page is what said no,
+# on a screen reading "Something went wrong" with `code_challenge` in small print.
+
+
+def test_the_authorize_url_carries_the_pkce_challenge():
+    url = tiktok.authorize_url("https://example.test/cb", "st4te", "a-verifier")
+
+    assert f"code_challenge={tiktok.code_challenge('a-verifier')}" in url
+    # S256 names the hash, and is the only method TikTok accepts.
+    assert "code_challenge_method=S256" in url
+
+
+def test_the_challenge_is_hex_encoded_not_base64url():
+    """The one detail that fails *after* the user has already said yes.
+
+    RFC 7636 says `BASE64URL(SHA256(verifier))` and every other provider in this
+    repo means that, so the obvious implementation sails through the authorize
+    step and dies at the token exchange with a bare `invalid_grant`. TikTok's own
+    documentation is explicit: "You must use hex encoding of SHA256".
+    """
+    import base64
+    import hashlib
+
+    verifier = "the-quick-brown-fox-jumps-over-the-lazy-dog-0123456789"
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+
+    challenge = tiktok.code_challenge(verifier)
+
+    assert challenge == digest.hex()
+    assert challenge != base64.urlsafe_b64encode(digest).decode().rstrip("=")
+    assert len(challenge) == 64 and all(c in "0123456789abcdef" for c in challenge)
+
+
+def test_a_verifier_is_fresh_every_time_and_within_the_rfc_length():
+    first, second = tiktok.code_verifier(), tiktok.code_verifier()
+
+    assert first != second, "reusing a verifier defeats the point of PKCE"
+    for verifier in (first, second):
+        assert 43 <= len(verifier) <= 128
+        # RFC 7636 §4.1's unreserved set. A character outside it is rejected by
+        # some servers and silently mangled in a query string by others.
+        assert all(c.isalnum() or c in "-._~" for c in verifier)
+
+
+async def test_the_exchange_sends_the_verifier_back(monkeypatch):
+    """PKCE is only worth anything if the second half actually happens."""
+    calls = _transport(
+        monkeypatch,
+        lambda _r: _ok({"access_token": "at", "expires_in": 100}),
+    )
+
+    await tiktok.exchange_code("code", "https://example.test/cb", "the-verifier")
+
+    body = calls[0].content.decode()
+    assert "code_verifier=the-verifier" in body

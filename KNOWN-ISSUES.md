@@ -442,6 +442,43 @@ it is: the app still needs review before credentials exist, the error codes in
 cursor semantics are simulated the way the docs describe them and no other way. The
 test file ends with the full list, next to the code that would have to change.
 
+### 4.15 TikTok sign-in never worked: PKCE was missing entirely
+**The first defect in this file found by a person using the product**, and the
+clearest possible demonstration of what §4.13 said a simulation cannot prove.
+
+Pressing Connect landed on TikTok's own page reading *"Something went wrong —
+We couldn't log in with TikTok"*, with one item in the small print: `code_challenge`.
+TikTok requires PKCE on the authorize request and `authorize_url` never sent it.
+Every simulated test passed throughout, because a fixture answers whatever it is
+asked — the parameter TikTok wanted was one nobody had thought to send, so nobody
+had thought to assert it either. That is exactly the failure mode §4.13's closing
+paragraph named, arriving on first contact rather than in a test.
+
+Two things had to be right, and only one of them is guessable:
+
+* `authorize_url` now sends `code_challenge` and `code_challenge_method=S256`,
+  and `exchange_code` sends the matching `code_verifier`. The verifier is
+  generated per sign-in, kept in `_PENDING_STATES` beside the CSRF state, and
+  never leaves the engine — only its hash goes to TikTok.
+* **The challenge is hex-encoded, not base64url.** RFC 7636 §4.2 says
+  `BASE64URL(SHA256(verifier))` and every other provider in this repo means that,
+  so the obvious implementation is *accepted at the authorize step* and then dies
+  at the token exchange with a bare `invalid_grant` naming nothing. TikTok's own
+  Login Kit documentation is explicit — "You must use hex encoding of SHA256" —
+  and their example is `CryptoJS.SHA256(code_verifier).toString(CryptoJS.enc.Hex)`.
+  `code_challenge_method` is still `S256`, because that names the *hash* and not
+  the encoding, which is precisely why this is easy to get wrong. A test pins the
+  hex form and asserts it differs from the base64url one, so a well-meaning
+  "correction" to the spec fails loudly.
+
+The flow around it was tightened at the same time, because the reason to connect
+TikTok is on the Repurpose screen and the only button that could was on Setup.
+A sweep that finds nobody signed in now offers the connection in place, the
+round trip returns to the screen it started from (`return_to`, allowlisted —
+it reaches a `Location` header, and reflecting an arbitrary path there is an open
+redirect), and both outcomes are stated on arrival instead of leaving "did that
+work?" to be inferred from an empty grid.
+
 ### 4.14 Three gaps the simulations named but did not close
 Each was written down as a known limit when 4.12 and 4.13 landed, and each was a
 small fix once someone looked at it rather than a research problem.

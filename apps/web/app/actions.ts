@@ -746,9 +746,11 @@ export async function tiktokStatus(): Promise<ActionResult<TikTokStatus>> {
  * Returns the URL for the browser to navigate to. A Server Action following the
  * redirect would authorise the server rather than the person at the keyboard.
  */
-export async function startTikTokConnection(): Promise<ActionResult<{ url: string }>> {
+export async function startTikTokConnection(
+  returnTo: "setup" | "repurpose" = "setup",
+): Promise<ActionResult<{ url: string }>> {
   try {
-    return { ok: true, data: await beginTikTokAuth() };
+    return { ok: true, data: await beginTikTokAuth(returnTo) };
   } catch (error) {
     return { ok: false, error: message(error) };
   }

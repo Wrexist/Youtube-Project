@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Clip, ClipGrantRequest } from "@studio/contracts";
 import { Button, Card, Empty } from "@/components/ui";
-import { findClips, revokeClip, saveGrant } from "@/app/actions";
+import { findClips, revokeClip, saveGrant, startTikTokConnection } from "@/app/actions";
 import { EpisodeBuilder } from "./episode-builder";
 import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
 
@@ -126,10 +126,16 @@ export function RepurposeView({
   clips,
   demoClips,
   demoReport,
+  tiktokOutcome = null,
+  tiktokError = null,
 }: {
   clips: Clip[] | null;
   demoClips: DemoClip[];
   demoReport: Report;
+  /** `"connected"` when the TikTok round trip just succeeded, from the server. */
+  tiktokOutcome?: string | null;
+  /** TikTok's own words when it refused. */
+  tiktokError?: string | null;
 }) {
   const live = clips !== null;
   // One shape for both paths, so the card markup below has no idea which it got.
@@ -169,7 +175,7 @@ export function RepurposeView({
         title="No candidates yet"
         hint="Discovery sweeps your connected TikTok account and scores each post against this channel."
       >
-        <Sweep live={live} />
+        <Sweep live={live} outcome={tiktokOutcome} failure={tiktokError} />
       </Empty>
     );
   }
@@ -179,7 +185,7 @@ export function RepurposeView({
       {/* Secondary, and placed above the grid it refills. The screen's primary
           action is building an episode; re-sweeping is maintenance. */}
       <div className="flex justify-end">
-        <Sweep live={live} />
+        <Sweep live={live} outcome={tiktokOutcome} failure={tiktokError} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -297,9 +303,50 @@ export function RepurposeView({
  * and clips found. Collapsing those into an empty grid is how "it shows nothing"
  * becomes a question nobody can answer.
  */
-function Sweep({ live }: { live: boolean }) {
+function Sweep({
+  live,
+  outcome,
+  failure,
+}: {
+  live: boolean;
+  outcome: string | null;
+  failure: string | null;
+}) {
   const [sweeping, setSweeping] = useState(false);
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [needsConnect, setNeedsConnect] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+
+  // What the OAuth round trip left in the query string, handed down by the
+  // server component. Derived during render rather than copied into state by an
+  // effect: it is a pure function of the props, and `setState` in an effect is
+  // both a cascading render and the thing this repo's lint config rejects. The
+  // sweep's own note takes precedence once there is one, so pressing Find clips
+  // replaces the arrival message instead of arguing with it.
+  const arrival: { text: string; bad?: boolean } | null = failure
+    ? { text: failure, bad: true }
+    : outcome === "connected"
+      ? { text: "TikTok connected. Press Find clips to sweep your posts." }
+      : null;
+  const shown = note ?? arrival;
+  const showConnect = needsConnect && outcome !== "connected";
+
+  function connect() {
+    setConnecting(true);
+    setNote(null);
+    // `repurpose`, so the round trip comes back here rather than to Setup —
+    // this is the screen with the button that needed the account.
+    startTikTokConnection("repurpose").then((result) => {
+      if (!result.ok || !result.data?.url) {
+        setConnecting(false);
+        setNote({ text: result.error ?? "Could not start the connection.", bad: true });
+        return;
+      }
+      // A full navigation, not a fetch: the consent page has to be loaded by the
+      // browser, or it would be the server signing in rather than the person.
+      window.location.href = result.data.url;
+    });
+  }
 
   async function run() {
     setSweeping(true);
@@ -315,7 +362,11 @@ function Sweep({ live }: { live: boolean }) {
     if (!configured) {
       setNote({ text: "TikTok is not set up yet — add the keys in Setup.", bad: true });
     } else if (!connected) {
-      setNote({ text: "No TikTok account is connected — connect one in Setup.", bad: true });
+      // Not "go to Setup". The keys are already there, so the only thing left is
+      // one press, and sending someone to another screen to make it is the kind
+      // of small friction that turns a working feature into an unused one.
+      setNeedsConnect(true);
+      setNote(null);
     } else if (found === 0) {
       setNote({ text: "Connected, but that account has no posts to work from." });
     } else {
@@ -325,21 +376,34 @@ function Sweep({ live }: { live: boolean }) {
 
   return (
     <div className="flex flex-col items-end gap-2">
-      <Button
-        variant="ghost"
-        onClick={run}
-        disabled={!live || sweeping}
-        title={live ? undefined : "Sweeping needs the engine running"}
-      >
-        {sweeping ? "Sweeping…" : "Find clips"}
-      </Button>
-      {note && (
+      <div className="flex items-center gap-2">
+        {showConnect && (
+          <Button onClick={connect} disabled={connecting}>
+            {connecting ? "Opening TikTok…" : "Connect TikTok"}
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          onClick={run}
+          disabled={!live || sweeping || connecting}
+          title={live ? undefined : "Sweeping needs the engine running"}
+        >
+          {sweeping ? "Sweeping…" : "Find clips"}
+        </Button>
+      </div>
+      {showConnect && !shown && (
+        <p role="status" className="max-w-[42ch] text-right text-[12px] text-[var(--color-muted)]">
+          The keys are set — this opens TikTok&apos;s consent page. Studio reads your
+          own posts and stores only an encrypted refresh token.
+        </p>
+      )}
+      {shown && (
         <p
           role="status"
           className="text-[12px]"
-          style={{ color: note.bad ? "var(--color-bad)" : "var(--color-muted)" }}
+          style={{ color: shown.bad ? "var(--color-bad)" : "var(--color-muted)" }}
         >
-          {note.text}
+          {shown.text}
         </p>
       )}
     </div>
