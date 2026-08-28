@@ -157,6 +157,32 @@ The vocabulary: **levels** (triangular XP ladder, named Newcomer → Mogul),
 on Series cards (cadence as filled ticks), and **celebrations** (render
 complete). Anything new joins this list only if it passes all four rules.
 
+## Connecting an account
+
+Four rules, from the two round trips this app has (Google's and TikTok's). They
+are not aesthetics — each one exists because its opposite shipped and broke.
+
+1. **The screen never moves.** Consent opens in a popup and the answer comes back
+   to the window that opened it. The person is mid-task; sending them away and
+   returning them to a fresh page load loses their place and, worse, looks
+   identical whether it worked or not.
+2. **Say what is happening while it happens.** The popup can end up behind the
+   app window. A button that goes disabled and silent is a button people press
+   again. "Waiting for Google… Approve it in the Google window. Closing that
+   window cancels" is three facts and a way out.
+3. **Cancelling is not an error.** Closing the consent window without finishing
+   means nothing happened, and it should read that way — no red, no alert role.
+4. **Every failure names the thing to go and change.** Providers answer with one
+   word on a blank page: `client_key`, `access_denied`. Neither is true — the
+   first usually means the account is not a test user, the second usually means
+   the Cloud project is still in Testing. What the screen must show is which
+   console page to open and what to press there. Anything the app can check
+   before the browser leaves, it checks first.
+
+The mechanics — popup geometry, the `/connected` handoff page, and the three
+independent ways the outcome gets home — are in `apps/web/lib/consent.ts`, which
+documents why each exists. KNOWN-ISSUES §4.17 is the history.
+
 ## Responsive
 
 Desktop-first — this is a production tool. But **approval must work on a phone**: the Queue and the approve/publish action collapse to a clean mobile view. That's the only mobile requirement.

@@ -2,10 +2,16 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Card, Button } from "@/components/ui";
-import { saveCredentials, connectYouTube, startTikTokConnection, tiktokStatus } from "@/app/actions";
-import { openConsentWindow } from "@/lib/consent";
+import {
+  saveCredentials,
+  connectYouTube,
+  startTikTokConnection,
+  tiktokStatus,
+  youtubeConnected,
+} from "@/app/actions";
+import { openConsentWindow, type ConsentOutcome } from "@/lib/consent";
 import type { SetupStatus, CredentialStatus, TikTokStatus } from "@studio/contracts";
 
 /**
@@ -29,6 +35,12 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [pending, startTransition] = useTransition();
+  // The consent round trip, while it is happening and once it is done. Held here
+  // rather than read back out of the URL because the popup means there is no
+  // navigation to read from — the window with this component in it never left.
+  const [waiting, setWaiting] = useState(false);
+  const [outcome, setOutcome] = useState<ConsentOutcome | null>(null);
+  const router = useRouter();
 
   const params = useSearchParams();
   // Google sends the operator back here after consent. Without something saying
@@ -54,6 +66,17 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
   }, [setup.credentials]);
 
   const dirty = Object.keys(drafts).length > 0;
+
+  // Two ways the same outcome can arrive, and the screen must not care which.
+  // The popup reports through `outcome`; the no-popup fallback reports through
+  // the query string, exactly as it did before there was a popup at all.
+  const connectedNow = justConnected || outcome?.status === "connected";
+  const failure =
+    outcome?.status === "failed"
+      ? { code: outcome.reason, fromEngine: outcome.fromEngine }
+      : connectError
+        ? { code: connectError, fromEngine: connectErrorFromEngine }
+        : null;
 
   /**
    * One edit to one field.
@@ -92,28 +115,53 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
     });
   }
 
-  function connect() {
+  /**
+   * Connect a YouTube channel without leaving this screen.
+   *
+   * Consent happens in a popup and the answer comes back to this component, so
+   * nothing here navigates: the card above updates in place, the way connecting
+   * an account does in every integration people have used before this one.
+   *
+   * Not wrapped in `startTransition`. The await below spans however long someone
+   * takes to read Google's consent screen, and a transition held open that long
+   * would keep Save disabled for the duration.
+   */
+  async function connect() {
     setError(null);
+    setOutcome(null);
     // Opened before the await, or the browser treats it as an unrequested popup.
-    const tab = openConsentWindow();
-    startTransition(async () => {
-      const result = await connectYouTube();
-      if (!result.ok || !result.data) {
-        tab.abandon();
-        setError(result.error ?? "Could not start the YouTube connection.");
-        return;
-      }
-      // A real tab, not this window. Google's consent page has to be loaded by
-      // the person's own browser, signed in as themselves — and Studio is often
-      // launched as an app-mode window with no address bar, which is both the
-      // wrong session and a page they cannot read an error out of.
-      tab.send(result.data.url);
-    });
+    const session = openConsentWindow("studio-youtube");
+    setWaiting(true);
+
+    const result = await connectYouTube();
+    if (!result.ok || !result.data) {
+      session.abandon();
+      setWaiting(false);
+      setError(result.error ?? "Could not start the YouTube connection.");
+      return;
+    }
+    // A window of its own, not this one. Google's consent page has to be loaded
+    // by the person's own browser, signed in as themselves — and Studio is often
+    // launched as an app-mode window with no address bar, which is both the
+    // wrong session and a page they cannot read an error out of.
+    session.send(result.data.url);
+
+    const settled = await session.settled(youtubeConnected);
+    setWaiting(false);
+    // `redirected` means this window is on its way to Google. Saying anything
+    // would be a flash of text on a page that is already leaving.
+    if (settled.status === "redirected") return;
+    setOutcome(settled);
+    // The channel list and `can_publish` come from the server component above
+    // this one, so a successful connection has to ask for them again. `refresh`
+    // re-renders the tree with fresh data and keeps this component's state,
+    // which is the entire reason the outcome lives in state rather than a URL.
+    if (settled.status === "connected") router.refresh();
   }
 
   return (
     <>
-      <Status setup={setup} justConnected={justConnected} />
+      <Status setup={setup} justConnected={connectedNow} />
 
       {error && (
         <div
@@ -124,7 +172,16 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
         </div>
       )}
 
-      {connectError && <ConnectError code={connectError} fromEngine={connectErrorFromEngine} />}
+      {failure && <ConnectError code={failure.code} fromEngine={failure.fromEngine} />}
+
+      {/* Closed the window without finishing. Not an error — nothing happened —
+          but silence after pressing Connect reads as the button being broken. */}
+      {outcome?.status === "abandoned" && (
+        <p role="status" className="mb-6 text-[13px] text-[var(--color-muted)]">
+          The sign-in window closed before the connection finished. Nothing was
+          changed; press Connect again whenever you like.
+        </p>
+      )}
 
       {tiktokConnected && (
         <p
@@ -169,6 +226,7 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
               <YouTubeConnection
                 setup={setup}
                 pending={pending}
+                waiting={waiting}
                 onConnect={connect}
               />
             </>
@@ -616,10 +674,12 @@ function CopyLine({ value }: { value: string }) {
 function YouTubeConnection({
   setup,
   pending,
+  waiting,
   onConnect,
 }: {
   setup: SetupStatus;
   pending: boolean;
+  waiting: boolean;
   onConnect: () => void;
 }) {
   return (
@@ -632,14 +692,25 @@ function YouTubeConnection({
             ? "Opens Google's consent page. Studio asks for upload and analytics access to the channel you pick, and stores only a refresh token, encrypted."
             : "Save the client ID and secret above first — the consent page cannot be built without them."}
       </p>
-      <div className="mt-3">
+      <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button
           variant={setup.can_publish ? "ghost" : "primary"}
           onClick={onConnect}
-          disabled={!setup.can_connect || pending}
+          disabled={!setup.can_connect || pending || waiting}
         >
-          {setup.can_publish ? "Reconnect" : "Connect YouTube"}
+          {waiting
+            ? "Waiting for Google…"
+            : setup.can_publish
+              ? "Reconnect"
+              : "Connect YouTube"}
         </Button>
+        {/* Said out loud because the popup can end up behind this window, and a
+            disabled button with nothing next to it looks like a hang. */}
+        {waiting && (
+          <p aria-live="polite" className="text-[12px] text-[var(--color-muted)]">
+            Approve it in the Google window. Closing that window cancels.
+          </p>
+        )}
       </div>
     </Card>
   );
@@ -660,6 +731,7 @@ function YouTubeConnection({
 function TikTokConnection() {
   const [status, setStatus] = useState<TikTokStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -675,21 +747,40 @@ function TikTokConnection() {
   const connected = Boolean(status?.account?.connected);
   const configured = Boolean(status?.configured);
 
-  function connect() {
-    const tab = openConsentWindow();
+  async function connect() {
+    const session = openConsentWindow("studio-tiktok");
     setBusy(true);
     setError(null);
-    startTikTokConnection().then((result) => {
-      if (!result.ok || !result.data?.url) {
-        tab.abandon();
-        setBusy(false);
-        setError(result.error ?? "Could not start the TikTok connection.");
-        return;
-      }
-      // A real tab, for the same reason the YouTube flow uses one.
-      tab.send(result.data.url);
+
+    const result = await startTikTokConnection();
+    if (!result.ok || !result.data?.url) {
+      session.abandon();
       setBusy(false);
-    });
+      // The engine refuses before the trip when it can already tell the
+      // credentials are wrong, and that message is more use than TikTok's.
+      setError(result.error ?? "Could not start the TikTok connection.");
+      return;
+    }
+    // A window of its own, for the same reason the YouTube flow uses one.
+    session.send(result.data.url);
+    setBusy(false);
+    setWaiting(true);
+
+    const settled = await session.settled(tiktokConnectedNow);
+    setWaiting(false);
+    if (settled.status === "redirected") return;
+    if (settled.status === "failed") {
+      setError(settled.reason);
+      return;
+    }
+    if (settled.status === "abandoned") {
+      setError("The TikTok window closed before it finished. Nothing was changed.");
+      return;
+    }
+    // Connected. Read the account back rather than assuming, so the card names
+    // the handle that actually got stored.
+    const fresh = await tiktokStatus();
+    if (fresh.ok) setStatus(fresh.data ?? null);
   }
 
   return (
@@ -699,7 +790,7 @@ function TikTokConnection() {
         {connected
           ? `Connected as ${status?.account?.handle || "your account"}. Studio can list your own posts and nothing else — TikTok's API does not offer other creators' videos.`
           : configured
-            ? "Opens TikTok's consent page in a new tab. Studio asks to read your own posts, and stores only a refresh token, encrypted."
+            ? "Opens TikTok's consent page in its own window, so this screen stays where it is. Studio asks to read your own posts, and stores only a refresh token, encrypted."
             : "Save the client key and secret above first — the consent page cannot be built without them."}
       </p>
 
@@ -760,15 +851,32 @@ function TikTokConnection() {
         </details>
       )}
       {error && <p className="mt-2 text-[12px] text-[var(--color-bad)]">{error}</p>}
-      <div className="mt-3">
+      <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button
           variant={connected ? "ghost" : "primary"}
           onClick={connect}
-          disabled={!configured || busy}
+          disabled={!configured || busy || waiting}
         >
-          {connected ? "Reconnect" : "Connect TikTok"}
+          {waiting ? "Waiting for TikTok…" : connected ? "Reconnect" : "Connect TikTok"}
         </Button>
+        {waiting && (
+          <p aria-live="polite" className="text-[12px] text-[var(--color-muted)]">
+            Approve it in the TikTok window. Closing that window cancels.
+          </p>
+        )}
       </div>
     </Card>
   );
+}
+
+/**
+ * Whether TikTok has landed yet, for the poll that runs while consent is open.
+ *
+ * Separate from the status fetch above because it answers one question and
+ * throws nothing: a poll that rejects mid-flow would otherwise have to be
+ * wrapped in a try at every call site.
+ */
+async function tiktokConnectedNow(): Promise<boolean> {
+  const result = await tiktokStatus();
+  return Boolean(result.ok && result.data?.account?.connected);
 }

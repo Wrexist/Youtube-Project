@@ -513,6 +513,67 @@ on the same unhelpful page, and one the app was in a position to catch first.
   the URL is assigned into the already-open tab when it arrives, and a blocked
   window falls back to navigating in place rather than doing nothing.
 
+### 4.17 `noopener` made the new tab impossible, and the outcome never came back
+Two problems from 4.16's fix, one a defect and one a design that stopped short.
+
+**`window.open` returned `null` every time.** The feature string was
+`"noopener,noreferrer"`, and returning `null` is *what `noopener` means* — the
+whole point of the flag is to withhold the handle. It is not a mistake you notice
+by looking, because the window still opens. So the handle was always null, and
+both branches of `send` were wrong at once: the blank window was orphaned on
+screen with nothing ever assigned into it, and every consent URL fell through to
+the "popup was blocked" path, which navigates the app's own window. The visible
+symptom was an abandoned `about:blank` tab sitting next to a consent page in
+exactly the window the fix existed to avoid using. `lib/consent.test.ts` asserts
+the absence of that one word.
+
+**The window that opened consent never heard the result.** The engine's callback
+redirected to `/setup?connected=1`, which was right when consent had replaced the
+app's own window and wrong the moment it did not: the redirect landed in the new
+window, which became a second full copy of Studio, while the window the operator
+was actually looking at — the one with the button they pressed — sat unchanged
+until they reloaded it by hand.
+
+The shape every large integration converged on, and what each part is for:
+
+* **A popup, sized and centred on the window it came from**, rather than a tab.
+  The app stays visible behind it, so the screen they started from is still there.
+  Centred with `screenLeft`/`screenTop`, which is the current monitor rather than
+  the primary one.
+* **A handoff page, `/connected`, that nobody is meant to see.** Both callbacks
+  redirect there; it posts the outcome to `window.opener` and closes itself. Two
+  hundred milliseconds, no chrome.
+* **Three independent ways to learn the outcome**, because each alone fails on
+  some real browser: the `postMessage`, which is instant and carries the reason; a
+  poll of the engine, which is the *only* signal that survives
+  Cross-Origin-Opener-Policy severing `window.opener` — increasingly the default,
+  and the reason a message-only implementation hangs on a spinner while the
+  connection it is waiting for has already succeeded; and watching for the window
+  closing, which catches someone giving up. The close-watch carries a 2.5s grace
+  period, because `/connected` closes itself the moment it has posted, which can
+  be *before* a poll issued a moment earlier comes back — without it a successful
+  connection is reported as abandoned.
+* **The no-popup path is unchanged.** When there is no opener to tell — the popup
+  was blocked, or the browser severed the link — `/connected` forwards to exactly
+  the URL the callback used to redirect to, query string and all. The Setup
+  screen's handling of `access_denied` is several paragraphs of hard-won wording
+  and the fallback is where a person most needs it; rewriting that contract to
+  suit the popup would have meant maintaining the explanation twice.
+* **`return_to` is an allowlist**, checked in `api/oauth_return.py`. It arrives
+  from a query string and lands in a `Location` header, and reflecting it
+  unchecked is an open redirect — worth more to a phisher than the account being
+  connected, since the victim walks through a real consent screen first.
+
+Both screens now report progress while consent is open ("Waiting for Google…",
+"Approve it in the Google window. Closing that window cancels") and settle in
+place, without a navigation. Closing the window without finishing is reported as
+what it is — nothing happened — rather than as an error.
+
+Not fixed by any of this: TikTok still answers `client_key` on this install. The
+request is well-formed, the pre-flight passes and the engine logs the exact URL,
+which leaves the app's registration on TikTok's side — see 4.16 and the checklist
+on the Setup card.
+
 ### 4.14 Three gaps the simulations named but did not close
 Each was written down as a known limit when 4.12 and 4.13 landed, and each was a
 small fix once someone looked at it rather than a research problem.
@@ -626,6 +687,7 @@ right. Per screen, as of today:
 | Analytics | live per section, each with its own badge: monetisation, spend and the weekly review as before; the tiles read `GET /v1/analytics/daily`; findings read `GET /v1/insights`; the retention map and Short-cut panel anchor to the newest published video via `GET /v1/analytics/retention/{id}` and `/analytics/shorts/{id}`; the per-video table reads the new `GET /v1/analytics/videos`. Sections without live data (no channel, nothing published) fall back to the demo fixture and say so — the numbers need a connected channel to be real |
 | Series | **live.** `GET/POST/PATCH/DELETE /v1/series` exist and the screen uses all four; each active card's warning line is the run planner's own verdict from `GET /v1/series/{id}/plan` — the first production caller `plan_week` has ever had. "New series" is a real form; Pause/Resume/Remove are back and wired |
 | New channel | **live.** "Design it" calls `POST /v1/channels/launch`, which now runs as a background task the screen polls (it used to run seven LLM stages inside one request); progress renders as a pipeline; finished designs are persisted and resumable from the input screen; "Create series" materialises the launch's series plan through the series endpoints; "Apply description & keywords" calls `/launch/apply` and surfaces its 409s verbatim |
+| Connected | no data at all, and nothing to fall back to. It is the OAuth handoff page (§4.17): it reads its outcome from the query string the engine's callback put there, hands it to the window that opened the popup, and closes. Visible only when a browser refuses `close()` |
 | Repurpose | **live end to end.** "Find clips" runs a sweep, and clips, grants and the episode builder all read and write the engine; "Build episode" starts the `repurpose` workflow and links to the running job. Until the sweep button existed the screen said "nothing has been swept in yet" above no control that swept anything, which left the whole TikTok path unreachable from the UI while every part of it worked. Two honest limits remain: the pre-check shows a *real* rights verdict but only a projection of originality, because narration, cuts and audio are decided while it builds — the card says so; and the standalone originality card lower down is still the `demo.ts` fixture, labelled "example report", since it describes no particular episode. Falls back to `demo.ts` wholesale when the engine is unreachable, with every write disabled and carrying its reason. TikTok itself is **connectable but unproven**: OAuth, token refresh, pagination and error handling are all implemented and unit-tested against mocked responses, and none of it has been run against TikTok — the app needs review before credentials exist. §1.1's argument, for a second API |
 
 The disabled "New series"/"Create series" buttons this section used to document —

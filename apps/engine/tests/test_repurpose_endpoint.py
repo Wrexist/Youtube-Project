@@ -342,7 +342,7 @@ async def test_a_callback_with_an_unknown_state_is_refused(tiktok_configured):
     response = await api.tiktok_callback(code="abc", state="never-issued")
 
     assert response.status_code == 303
-    assert "tiktok_error" in response.headers["location"]
+    assert "provider=tiktok&status=error" in response.headers["location"]
 
 
 async def test_a_state_cannot_be_replayed(database, tiktok_configured, monkeypatch):
@@ -363,8 +363,8 @@ async def test_a_state_cannot_be_replayed(database, tiktok_configured, monkeypat
     first = await api.tiktok_callback(code="abc", state=state)
     second = await api.tiktok_callback(code="abc", state=state)
 
-    assert "tiktok=connected" in first.headers["location"]
-    assert "tiktok_error" in second.headers["location"]
+    assert "provider=tiktok&status=ok" in first.headers["location"]
+    assert "provider=tiktok&status=error" in second.headers["location"]
 
 
 async def test_a_denied_consent_comes_back_as_a_readable_error(tiktok_configured):

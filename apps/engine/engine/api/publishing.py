@@ -6,14 +6,14 @@ import secrets
 import time
 from datetime import UTC, datetime
 from typing import Literal
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse
 from loguru import logger
 from pydantic import AwareDatetime, BaseModel, Field
 
 from engine import repository
+from engine.api.oauth_return import consent_return
 from engine.auth import require_token
 from engine.providers import youtube
 from engine.quota import ledger, quota_day
@@ -249,10 +249,10 @@ async def finish_auth(
     # code. Overwhelmingly `access_denied`, which does not mean the operator declined
     # — it means the Cloud project is still in Testing and the account that just
     # signed in is not one of its test users. That distinction is the whole fix, so
-    # it is handed to the Setup screen, where the button they pressed is, rather than
-    # rendered as a bare error by the API.
+    # it is handed back to the window the operator pressed the button in, rather
+    # than rendered as a bare error by the API.
     if error:
-        return RedirectResponse(f"{web}/setup?connect_error={quote(error)}")
+        return consent_return("youtube", ok=False, reason=error)
 
     # Opened by hand rather than arrived at — someone following the redirect URI out
     # of the setup instructions to see what is there. FastAPI's own answer to the
@@ -294,18 +294,17 @@ async def finish_auth(
         # to be complete. Both, rather than either.
         logger.opt(exception=True).error("connecting a channel failed")
         reason = str(exc).strip() or type(exc).__name__
-        # Back to the Setup screen, the same as Google's own refusal above, and
-        # for the same reason: that is where the button they pressed lives. A
-        # bare error page at an API address is a dead end with no way back.
-        # `connect_error_source=engine` so the screen does not have to infer it.
-        # It was inferring it from whether the value contained a space, which is
-        # wrong for exactly the case this branch exists to report: `str(exc)` is
-        # empty for a bare `ConnectError`, so `reason` becomes the class name —
-        # one word, indistinguishable from one of Google's own error codes, and
-        # rendered under "that is Google's own error code", which it is not.
-        return RedirectResponse(
-            f"{web}/setup?connect_error={quote(reason)}&connect_error_source=engine"
-        )
+        # Back to the window the operator pressed the button in, the same as
+        # Google's own refusal above and for the same reason: that is where the
+        # button lives. A bare error page at an API address is a dead end with no
+        # way back. `source="engine"` so the screen does not have to infer whose
+        # failure it is. It was inferring it from whether the value contained a
+        # space, which is wrong for exactly the case this branch exists to
+        # report: `str(exc)` is empty for a bare `ConnectError`, so `reason`
+        # becomes the class name — one word, indistinguishable from one of
+        # Google's own error codes, and rendered under "that is Google's own
+        # error code", which it is not.
+        return consent_return("youtube", ok=False, reason=reason, source="engine")
     # Back to the screen that sent them, not to the calendar. Connecting a channel
     # is the last step of setup, and landing on an unrelated screen left someone
     # with no confirmation that the thing they just did had worked.
@@ -314,7 +313,7 @@ async def finish_auth(
     # every install that is not the developer's laptop: behind docker compose, on a
     # LAN address, or on any port but 3000, Google returned the operator to a page
     # that does not exist and the connection looked like it had failed.
-    return RedirectResponse(f"{get_settings().web_url.rstrip('/')}/setup?connected=1")
+    return consent_return("youtube", ok=True)
 
 
 @router.get("/channels", dependencies=_gated)

@@ -19,6 +19,7 @@ import { cookies } from "next/headers";
 import {
   EngineError,
   beginYouTubeAuth,
+  getSetup,
   cancelJob,
   createJob,
   refineBrief,
@@ -507,6 +508,27 @@ export async function connectYouTube(): Promise<ActionResult<{ url: string }>> {
           ? error.message
           : "Could not reach the engine — YouTube was not connected.",
     };
+  }
+}
+
+/**
+ * Whether a channel is connected yet, asked repeatedly while consent is open.
+ *
+ * The one signal in the connect flow that does not depend on the popup being
+ * able to talk to the window that opened it. Browsers increasingly sever that
+ * link (Cross-Origin-Opener-Policy), and when they do, a flow built only on
+ * `postMessage` hangs on a spinner that never resolves while the connection
+ * itself succeeded. Asking the engine sidesteps the question entirely.
+ *
+ * Deliberately narrow: it returns one boolean, not the setup status, so that
+ * polling it every second cannot become a way to read credentials on a timer.
+ */
+export async function youtubeConnected(): Promise<boolean> {
+  try {
+    const setup = await getSetup();
+    return Boolean(setup?.can_publish);
+  } catch {
+    return false;
   }
 }
 

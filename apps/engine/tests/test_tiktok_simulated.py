@@ -291,7 +291,7 @@ async def test_connecting_an_account_stores_an_encrypted_token_it_never_returns(
     state = next(iter(api._PENDING_STATES))
     response = await api.tiktok_callback(code="auth-code-1", state=state)
 
-    assert "tiktok=connected" in response.headers["location"]
+    assert "provider=tiktok&status=ok" in response.headers["location"]
 
     form = dict(httpx.QueryParams(token_route.calls.last.request.content.decode()))
     assert form["grant_type"] == "authorization_code"
@@ -323,7 +323,7 @@ async def test_a_refused_authorisation_code_comes_back_as_a_sentence_not_a_trace
     response = await api.tiktok_callback(code="stale-code", state=state)
 
     assert response.status_code == 303
-    assert "tiktok_error" in response.headers["location"]
+    assert "provider=tiktok&status=error" in response.headers["location"]
     assert await repository.load_tiktok_account() is None
 
 

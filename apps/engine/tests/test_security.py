@@ -396,7 +396,7 @@ def test_a_replayed_callback_is_refused_the_second_time(callback):
         params={"code": "4/real-code", "state": "issued"},
         follow_redirects=False,
     )
-    assert first.status_code in (302, 307), first.text
+    assert first.status_code in (302, 303, 307), first.text
     assert publishing.CHANNELS["default"].access_token == "tok"
 
     second = client.get(
@@ -408,13 +408,16 @@ def test_a_replayed_callback_is_refused_the_second_time(callback):
     assert exchanges == ["4/real-code"], "the replay was exchanged a second time"
 
 
-def test_googles_refusal_lands_on_setup_rather_than_an_api_error(callback):
-    """`error=access_denied` is a redirect back to the screen with the button on it.
+def test_googles_refusal_goes_back_to_the_app_rather_than_an_api_error(callback):
+    """`error=access_denied` is a redirect back to the window with the button in it.
 
     The name is a lie in the commonest case — it means the Cloud project is still in
     Testing and the signed-in account is not one of its test users — so the fix has
     to be shown next to Connect YouTube, not rendered as a bare API error on an
     otherwise blank page. Observed in the wild twice before this existed.
+
+    Via `/connected`, which hands the reason to the window that opened the popup;
+    that window is where Connect YouTube lives and where the explanation belongs.
     """
     client, exchanges = callback
     response = client.get(
@@ -422,8 +425,9 @@ def test_googles_refusal_lands_on_setup_rather_than_an_api_error(callback):
         params={"error": "access_denied"},
         follow_redirects=False,
     )
-    assert response.status_code in (302, 307), response.text
-    assert "/setup?connect_error=access_denied" in response.headers["location"]
+    assert response.status_code in (302, 303, 307), response.text
+    assert "/connected?provider=youtube&status=error" in response.headers["location"]
+    assert "reason=access_denied" in response.headers["location"]
     assert exchanges == [], "a refusal must not reach the token exchange"
 
 

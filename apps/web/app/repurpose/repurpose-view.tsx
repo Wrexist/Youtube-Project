@@ -4,7 +4,13 @@ import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Clip, ClipGrantRequest } from "@studio/contracts";
 import { Button, Card, Empty } from "@/components/ui";
-import { findClips, revokeClip, saveGrant, startTikTokConnection } from "@/app/actions";
+import {
+  findClips,
+  revokeClip,
+  saveGrant,
+  startTikTokConnection,
+  tiktokStatus,
+} from "@/app/actions";
 import { openConsentWindow } from "@/lib/consent";
 import { EpisodeBuilder } from "./episode-builder";
 import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
@@ -296,6 +302,18 @@ export function RepurposeView({
 }
 
 /**
+ * Whether TikTok has landed yet, for the poll that runs while consent is open.
+ *
+ * The one signal that survives a browser severing `window.opener`, which is why
+ * the connect flow does not rely on the popup being able to talk back. See
+ * `lib/consent.ts`.
+ */
+async function tiktokConnectedNow(): Promise<boolean> {
+  const result = await tiktokStatus();
+  return Boolean(result.ok && result.data?.account?.connected);
+}
+
+/**
  * Run a sweep, and say which kind of nothing came back.
  *
  * Four outcomes, four different next steps, and the reason the engine reports
@@ -317,6 +335,10 @@ function Sweep({
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
   const [needsConnect, setNeedsConnect] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  // Set when the popup reports success. Distinct from `outcome`, which is the
+  // same fact arriving the other way — through a page load, on the fallback path
+  // where the popup was blocked.
+  const [connected, setConnected] = useState(false);
 
   // What the OAuth round trip left in the query string, handed down by the
   // server component. Derived during render rather than copied into state by an
@@ -330,28 +352,44 @@ function Sweep({
       ? { text: "TikTok connected. Press Find clips to sweep your posts." }
       : null;
   const shown = note ?? arrival;
-  const showConnect = needsConnect && outcome !== "connected";
+  const showConnect = needsConnect && outcome !== "connected" && !connected;
 
-  function connect() {
+  async function connect() {
     // Opened synchronously, before the await: a `window.open` that happens after
     // one is a popup the browser blocks. See lib/consent.ts.
-    const tab = openConsentWindow();
+    const session = openConsentWindow("studio-tiktok");
     setConnecting(true);
     setNote(null);
-    // `repurpose`, so the round trip comes back here rather than to Setup —
-    // this is the screen with the button that needed the account.
-    startTikTokConnection("repurpose").then((result) => {
-      if (!result.ok || !result.data?.url) {
-        tab.abandon();
-        setConnecting(false);
-        setNote({ text: result.error ?? "Could not start the connection.", bad: true });
-        return;
-      }
-      tab.send(result.data.url);
-      // The app's own window stays where it is, so this screen is still here
-      // when the tab comes back. Re-enabled so a refused sign-in can be retried
-      // without a reload.
+    // `repurpose`, so that if the popup is blocked and the round trip has to
+    // navigate instead, it comes back here rather than to Setup — this is the
+    // screen with the button that needed the account.
+    const result = await startTikTokConnection("repurpose");
+    if (!result.ok || !result.data?.url) {
+      session.abandon();
       setConnecting(false);
+      setNote({ text: result.error ?? "Could not start the connection.", bad: true });
+      return;
+    }
+    session.send(result.data.url);
+
+    // This screen never moves, so the answer comes back to it. Before the popup,
+    // the only way to find out was the query string on a fresh page load, which
+    // meant the sweep button people were about to press was one render away from
+    // a component that had just been remounted.
+    const settled = await session.settled(tiktokConnectedNow);
+    setConnecting(false);
+    if (settled.status === "redirected") return;
+    if (settled.status === "connected") {
+      setConnected(true);
+      setNote({ text: "TikTok connected. Press Find clips to sweep your posts." });
+      return;
+    }
+    setNote({
+      text:
+        settled.status === "failed"
+          ? settled.reason
+          : "The TikTok window closed before it finished. Nothing was changed.",
+      bad: true,
     });
   }
 
@@ -386,7 +424,7 @@ function Sweep({
       <div className="flex items-center gap-2">
         {showConnect && (
           <Button onClick={connect} disabled={connecting}>
-            {connecting ? "Opening TikTok…" : "Connect TikTok"}
+            {connecting ? "Waiting for TikTok…" : "Connect TikTok"}
           </Button>
         )}
         <Button

@@ -14,7 +14,6 @@ from __future__ import annotations
 import secrets
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
@@ -22,6 +21,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from engine import repository
+from engine.api.oauth_return import consent_return
 from engine.auth import require_token
 from engine.providers import tiktok
 from engine.repurpose.gate import Corpus, Timeline, TimelineSegment, evaluate
@@ -463,10 +463,11 @@ async def tiktok_callback(
 ) -> RedirectResponse:
     """Where TikTok sends the browser back.
 
-    Always redirects to the Setup screen rather than returning JSON: the thing at
-    the other end of this is a browser tab a person is looking at, and a page of
-    JSON is not an answer to "did that work". The outcome rides in the query
-    string so the screen can say which.
+    Always redirects rather than returning JSON: the thing at the other end of
+    this is a window a person is looking at, and a page of JSON is not an answer
+    to "did that work". The outcome rides in the query string of the handoff
+    page — see `api/oauth_return.py` for why that page rather than the screen
+    the sign-in started from.
     """
     pending = _PENDING_STATES.pop(state, None)
     _expire_states()
@@ -475,27 +476,37 @@ async def tiktok_callback(
     return_to = pending[3] if pending else "setup"
 
     if error:
-        return _back(f"tiktok_error={quote(error_description or error)}", return_to)
+        # TikTok's own refusal. Reported as the provider's, not ours: the two read
+        # completely differently and the screen renders them differently.
+        return _done(ok=False, reason=error_description or error, return_to=return_to)
 
     if pending is None:
         # Unknown or already-used state. Refused rather than accepted, because a
         # code arriving without one is exactly the CSRF the state exists to stop.
-        return _back(
-            "tiktok_error=" + quote("that sign-in link has expired — try again"), return_to
+        return _done(
+            ok=False,
+            reason="that sign-in link has expired — try again",
+            source="engine",
+            return_to=return_to,
         )
 
     _, redirect_uri, verifier, _ = pending
     if not code:
-        return _back("tiktok_error=" + quote("TikTok returned no authorisation code"), return_to)
+        return _done(
+            ok=False,
+            reason="TikTok returned no authorisation code",
+            source="engine",
+            return_to=return_to,
+        )
 
     try:
         tokens = await tiktok.exchange_code(code, redirect_uri, verifier)
         handle = await tiktok.creator_handle(tokens.access_token)
         await repository.save_tiktok_account(tokens, handle=handle)
     except tiktok.TikTokUnavailable as exc:
-        return _back("tiktok_error=" + quote(str(exc)), return_to)
+        return _done(ok=False, reason=str(exc), source="engine", return_to=return_to)
 
-    return _back("tiktok=connected", return_to)
+    return _done(ok=True, return_to=return_to)
 
 
 @router.get("/auth/tiktok/status", dependencies=_gated)
@@ -550,25 +561,18 @@ def _default_redirect() -> str:
     return f"{base}/v1/repurpose/auth/tiktok/callback"
 
 
-#: Screens a sign-in may return to. An allowlist rather than "any path", because
-#: this value arrives from a query string and lands in a `Location` header —
-#: reflecting it unchecked is an open redirect, which is worth more to a
-#: phisher than the account being connected.
-_RETURN_TO = {"setup", "repurpose"}
+def _done(
+    *, ok: bool, reason: str = "", source: str = "", return_to: str = "setup"
+) -> RedirectResponse:
+    """Hand the outcome to the window that started the sign-in.
 
-
-def _back(query: str, return_to: str = "setup") -> RedirectResponse:
-    """Send the browser back to the screen the sign-in started from.
-
-    Defaults to Setup, which is where this flow used to always land. Connecting
-    from the Repurpose screen and being dropped on Setup is a small thing that
-    reads as the app losing your place — and Repurpose is where the button that
-    needs the account actually lives.
+    `return_to` is carried through so that, when there is no such window and the
+    handoff page has to forward instead, it forwards to the screen the operator
+    pressed the button on. Connecting from Repurpose and being dropped on Setup
+    is a small thing that reads as the app losing your place — and Repurpose is
+    where the button that needs the account actually lives.
     """
-    from engine.settings import get_settings
-
-    screen = return_to if return_to in _RETURN_TO else "setup"
-    return RedirectResponse(f"{get_settings().web_url}/{screen}?{query}", status_code=303)
+    return consent_return("tiktok", ok=ok, reason=reason, source=source, return_to=return_to)
 
 
 def _channel_topics(count: int = 12) -> list[str]:
