@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Header, Page, Card } from "@/components/ui";
 import { LiveBadge } from "@/components/live-badge";
+import { Thumb } from "@/components/thumb";
 import { fileUrl, getJobs } from "@/lib/engine";
 import { QUEUE, REVIEW_QUEUE } from "@/lib/demo";
 import type { JobSummary } from "@studio/contracts";
@@ -96,14 +97,7 @@ function JobRow({ job }: { job: JobSummary }) {
             job.status === "running" ? "skeleton" : "bg-[var(--color-raised)]"
           }`}
         >
-          {job.thumbnail_keys?.[0] && (
-            // eslint-disable-next-line @next/next/no-img-element -- served by the engine, not Next's optimiser
-            <img
-              src={fileUrl(job.thumbnail_keys[0])}
-              alt=""
-              className="h-full w-full object-cover"
-            />
-          )}
+          {job.thumbnail_keys?.[0] && <Thumb src={fileUrl(job.thumbnail_keys[0])} />}
         </div>
 
         <div className="min-w-0 flex-1">

@@ -114,13 +114,40 @@ class LLM:
             )
         return key
 
+    def _required_credential(self, default: str, env_name: str) -> str:
+        """Like `_credential`, for providers that cannot work without a key at all.
+
+        `_credential` returns an empty string when nothing is configured, which is
+        deliberate for `_openai_compatible`: a local gateway on `base_url` with no
+        auth is a supported setup, and that transport sends no header when the key
+        is empty. Anthropic and Gemini have no such mode — an empty key is simply a
+        missing one.
+
+        It has to raise *here* rather than being left to the provider, because what
+        the provider does with it is not a `ProviderUnavailable`. The anthropic 1.x
+        SDK raises a bare `TypeError` from its constructor ("Could not resolve
+        authentication method"), which is not what any caller catches: every stage,
+        and `api/ideas.py`'s backlog top-up, handles `ProviderUnavailable` and lets
+        anything else escape. So a fresh install with no key turned a *degradable*
+        situation — show the stored backlog, skip the top-up — into a 500 that the
+        web app's `get()` then flattened into "the engine is not running".
+        """
+        key = self._credential(default)
+        if not key:
+            raise ProviderUnavailable(
+                f"{self.spec.key()} needs ${env_name}, which is unset or empty. "
+                f"Add it to .env, or route this task to a local model on the Models "
+                f"screen."
+            )
+        return key
+
     # ── transports ──────────────────────────────────────────────────────────
 
     async def _anthropic(self, prompt: str, system: str | None, max_tokens: int, temp: float):
         from anthropic import AsyncAnthropic
 
         client = AsyncAnthropic(
-            api_key=self._credential(self.settings.anthropic_api_key),
+            api_key=self._required_credential(self.settings.anthropic_api_key, "ANTHROPIC_API_KEY"),
             base_url=self.spec.base_url or None,
         )
         kwargs: dict[str, Any] = {
@@ -200,7 +227,11 @@ class LLM:
                 # logs, into `httpx`'s own INFO line, into any traceback that quotes
                 # `request.url`. The header form is documented for generateContent and
                 # keeps the key out of every one of those.
-                headers={"x-goog-api-key": self._credential(self.settings.gemini_api_key)},
+                headers={
+                    "x-goog-api-key": self._required_credential(
+                        self.settings.gemini_api_key, "GEMINI_API_KEY"
+                    )
+                },
                 json=body,
             )
         if resp.status_code >= 400:

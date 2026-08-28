@@ -117,7 +117,15 @@ app.include_router(style_router, dependencies=_gated)
 app.include_router(thumbnails_router, dependencies=_gated)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    # Both spellings of "this machine". The browser treats them as different
+    # origins, so an allowlist naming only `localhost` silently broke every
+    # browser-side call for anyone who typed `127.0.0.1:3000` — and "silently" is
+    # the problem: `lib/engine.ts:get()` returns null on any failure, so a blocked
+    # request is indistinguishable from a stopped engine. The whole app looked
+    # like it was running without a backend. Server Components were unaffected
+    # (no browser, no CORS), which is what made it look like a data bug rather
+    # than an origin one.
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

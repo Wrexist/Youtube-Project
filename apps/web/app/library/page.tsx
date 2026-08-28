@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Header, Page, Card } from "@/components/ui";
 import { LiveBadge } from "@/components/live-badge";
+import { Thumb } from "@/components/thumb";
 import { fileUrl, getJobs } from "@/lib/engine";
 import { LIBRARY } from "@/lib/demo";
 
@@ -53,12 +54,7 @@ export default async function LibraryPage() {
                     >
                       <div className="relative aspect-video overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-raised)] transition-colors duration-150 group-hover:border-[var(--color-line-hover)]">
                         {video.thumbnail_keys?.[0] && (
-                          // eslint-disable-next-line @next/next/no-img-element -- the engine serves these, not Next's optimiser
-                          <img
-                            src={fileUrl(video.thumbnail_keys[0])}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
+                          <Thumb src={fileUrl(video.thumbnail_keys[0])} />
                         )}
                       </div>
                       <h3 className="mt-2.5 line-clamp-2 text-[14px] leading-snug font-semibold">

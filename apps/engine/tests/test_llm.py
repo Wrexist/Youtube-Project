@@ -539,6 +539,66 @@ class TestAnthropic:
         assert (await LLM(spec("anthropic")).complete("hi")).text == "answer"
 
 
+# ── a missing key is ProviderUnavailable, never a raw provider exception ────
+#
+# Found by running the app rather than by reading it. With no key configured the
+# anthropic 1.x SDK raises `TypeError: Could not resolve authentication method`
+# from its own constructor — and nothing catches `TypeError`. Every stage and
+# `api/ideas.py`'s backlog top-up catch `ProviderUnavailable` and degrade; the
+# TypeError escaped all of them, so `GET /v1/ideas/backlog` answered 500 on a
+# keyless install instead of returning the ideas already in the database, and the
+# web app's null-on-failure `get()` then rendered that as "engine unreachable".
+
+
+class TestMissingCredentials:
+    async def test_anthropic_without_a_key_is_provider_unavailable(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+        get_settings.cache_clear()
+        with pytest.raises(ProviderUnavailable, match="ANTHROPIC_API_KEY"):
+            await LLM(spec("anthropic")).complete("hi")
+        get_settings.cache_clear()
+
+    async def test_gemini_without_a_key_is_provider_unavailable(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "")
+        get_settings.cache_clear()
+        with pytest.raises(ProviderUnavailable, match="GEMINI_API_KEY"):
+            await LLM(spec("gemini")).complete("hi")
+        get_settings.cache_clear()
+
+    async def test_the_message_says_how_to_fix_it(self, monkeypatch):
+        """An unactionable failure on a fresh install is the worst kind."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+        get_settings.cache_clear()
+        with pytest.raises(ProviderUnavailable) as err:
+            await LLM(spec("anthropic")).complete("hi")
+        assert ".env" in str(err.value)
+        assert "local model" in str(err.value)
+        get_settings.cache_clear()
+
+    @respx.mock
+    async def test_an_openai_compatible_gateway_may_still_have_no_key(self, monkeypatch):
+        """The deliberate exception: a local gateway on base_url with no auth.
+
+        `_openai_compatible` sends no Authorization header when the key is empty,
+        which is a supported setup — so it must NOT be tightened the same way.
+        """
+        monkeypatch.setenv("OPENAI_API_KEY", "")
+        get_settings.cache_clear()
+        route = respx.post("http://gateway.local/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                },
+            )
+        )
+        completion = await LLM(spec("openai", base_url="http://gateway.local/v1")).complete("hi")
+        assert completion.text == "ok"
+        assert "authorization" not in {k.lower() for k in route.calls.last.request.headers}
+        get_settings.cache_clear()
+
+
 # ── LLM.json — the retry loop ───────────────────────────────────────────────
 
 
