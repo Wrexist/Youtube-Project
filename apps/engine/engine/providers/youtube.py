@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -463,13 +464,20 @@ class YouTube:
             "videos.insert", channel_id=self.creds.channel_id, note=title[:60]
         )
 
-        headers = {
-            **(await self._headers()),
-            "Content-Type": "application/json; charset=UTF-8",
-            "X-Upload-Content-Length": str(size),
-            "X-Upload-Content-Type": "video/mp4",
-        }
         try:
+            # `_headers()` is inside the `try` because it is a network call of its
+            # own: an expired access token detours through `refresh()`, and a
+            # revoked grant raises `ChannelDisconnected` from there. That raise used
+            # to happen between `reserve()` and this block, so a channel whose
+            # consent had been withdrawn booked 1,600 units per publish attempt
+            # against a request Google never received — six of those and the day's
+            # uploads were gone for uploads that could not have happened.
+            headers = {
+                **(await self._headers()),
+                "Content-Type": "application/json; charset=UTF-8",
+                "X-Upload-Content-Length": str(size),
+                "X-Upload-Content-Type": "video/mp4",
+            }
             async with httpx.AsyncClient(timeout=60.0) as client:
                 init = await client.post(
                     UPLOAD,
@@ -530,6 +538,13 @@ class YouTube:
                     )
 
                     if resp.status_code in (200, 201):
+                        # Report completion before returning. The final chunk answers
+                        # 200 and leaves the loop, so without this the last progress
+                        # anyone saw was the second-to-last chunk — a four-chunk
+                        # upload finished at 0.90 and a long one looks stalled at the
+                        # exact moment it succeeded.
+                        if on_progress:
+                            await on_progress(1.0, "uploaded")
                         return resp.json()["id"]
 
                     if resp.status_code == 308:  # incomplete; continue
@@ -541,10 +556,25 @@ class YouTube:
                                 await on_progress(offset / size, "uploading")
                             continue
 
-                        # A 308 that confirmed nothing. Re-sending is correct, but
-                        # a server that keeps confirming nothing has to hit the same
-                        # ceiling as a 503 — otherwise the loop spins on one chunk
-                        # for as long as the API keeps answering.
+                        if moved < offset:
+                            # The server holds *less* than we believed. `Range` is
+                            # authoritative in both directions and this is the
+                            # direction that was ignored: carrying on from our own
+                            # offset sends a chunk that does not continue the
+                            # server's data, which Google answers with a 400 — an
+                            # unrecoverable end to an upload that was recoverable,
+                            # with the 1,600 units already spent.
+                            logger.warning(
+                                "server rewound the upload from byte {} to {}; resending",
+                                offset,
+                                moved,
+                            )
+                            offset = moved
+
+                        # A 308 that confirmed nothing new. Re-sending is correct,
+                        # but a server that keeps confirming nothing has to hit the
+                        # same ceiling as a 503 — otherwise the loop spins on one
+                        # chunk for as long as the API keeps answering.
                         attempts += 1
                         if attempts > MAX_CHUNK_RETRIES:
                             raise YouTubeError(
@@ -584,7 +614,11 @@ class YouTube:
             "POST",
             "https://www.googleapis.com/upload/youtube/v3/thumbnails/set",
             "thumbnails.set",
-            params={"videoId": video_id},
+            # `uploadType` is required on every `/upload/` URI, and it was missing
+            # here — `videos.insert` passes `resumable` and this passed nothing, so
+            # the 50 units bought a 400 and the video kept its auto-generated frame.
+            # `media` is the form for a bare body with no metadata part.
+            params={"videoId": video_id, "uploadType": "media"},
             content=image.read_bytes(),
             headers={"Content-Type": "image/jpeg"},
         )
@@ -596,16 +630,25 @@ class YouTube:
         meta = {
             "snippet": {"videoId": video_id, "language": language, "name": name, "isDraft": False}
         }
-        files = {
-            "metadata": (None, json.dumps(meta), "application/json"),
-            "file": ("captions.srt", srt.read_bytes(), "application/octet-stream"),
-        }
+        # `application/octet-stream` is one of the media types captions.insert
+        # documents; a caption file has no registered type of its own.
+        body, content_type = _multipart_related(
+            json.dumps(meta), srt.read_bytes(), "application/octet-stream"
+        )
         await self._call(
             "POST",
             "https://www.googleapis.com/upload/youtube/v3/captions",
             "captions.insert",
-            params={"part": "snippet"},
-            files=files,
+            # Both of these were missing. `uploadType` is required on every
+            # `/upload/` URI, and the body was built with httpx's `files=`, which
+            # emits `multipart/form-data` — the one multipart flavour Google's media
+            # upload protocol refuses, by name: "Media type 'multipart/form-data' is
+            # not supported. Valid media types: [multipart/related]". So no caption
+            # track this repository could have uploaded would have been accepted,
+            # and each attempt cost 400 units.
+            params={"part": "snippet", "uploadType": "multipart"},
+            content=body,
+            headers={"Content-Type": content_type},
         )
 
     async def playlists(self, limit: int = 50) -> list[PlaylistData]:
@@ -741,6 +784,40 @@ def _parse_iso8601_duration(value: str) -> float | None:
     days, hours, minutes, seconds = (float(g or 0) for g in match.groups())
     total = days * 86400 + hours * 3600 + minutes * 60 + seconds
     return total or None
+
+
+def _multipart_related(metadata_json: str, media: bytes, media_type: str) -> tuple[bytes, str]:
+    """A `multipart/related` body — metadata part first, media part second.
+
+    Built by hand rather than with httpx's `files=`, which emits
+    `multipart/form-data`. Google's media-upload protocol takes exactly one
+    multipart flavour and names the other in its refusal:
+
+        Media type 'multipart/form-data' is not supported.
+        Valid media types: [multipart/related]
+
+    Order matters as much as the type: the metadata part must come first, and the
+    parts are identified by position, not by a `name` field — which is the other
+    thing form-data would have got wrong.
+
+    Returns the body and the `Content-Type` that describes it, since the boundary
+    has to appear in both.
+    """
+    boundary = f"studio-{uuid.uuid4().hex}"
+    marker = f"--{boundary}".encode()
+    parts = [
+        marker,
+        b"\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n",
+        metadata_json.encode("utf-8"),
+        b"\r\n",
+        marker,
+        f"\r\nContent-Type: {media_type}\r\n\r\n".encode(),
+        media,
+        b"\r\n",
+        marker,
+        b"--\r\n",
+    ]
+    return b"".join(parts), f'multipart/related; boundary="{boundary}"'
 
 
 def _read_at(fh, offset: int, size: int) -> bytes:
