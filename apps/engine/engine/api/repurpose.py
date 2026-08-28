@@ -164,6 +164,14 @@ class TikTokStatusOut(BaseModel):
 
     configured: bool
     account: TikTokAccountOut | None
+    #: Why these credentials cannot work, when that is knowable without asking
+    #: TikTok. Null when nothing is obviously wrong — which is not a promise that
+    #: TikTok will accept them.
+    problem: str | None = None
+    #: The first two characters and the length of the configured client key, so
+    #: it can be compared against the app's page on developers.tiktok.com. Never
+    #: the key itself: this reaches a browser and a screenshot.
+    client_key_hint: str = ""
 
 
 class SignalOut(BaseModel):
@@ -428,12 +436,13 @@ async def begin_tiktok_auth(redirect_uri: str = "", return_to: str = "setup") ->
     walks a victim through a link that connects the *attacker's* TikTok to the
     victim's install, and every clip swept afterwards is the attacker's.
     """
-    if not tiktok.configured():
-        raise HTTPException(
-            409,
-            "TikTok is not configured. Set TIKTOK_CLIENT_KEY and "
-            "TIKTOK_CLIENT_SECRET in .env, then restart the engine.",
-        )
+    # Checked here rather than left to TikTok. Their authorize page reports a bad
+    # key as `client_key` in small print and cannot say how it is bad — and by
+    # then the browser has left the app, so nothing on this side gets to explain
+    # either. Everything catchable is caught before the trip.
+    problem = tiktok.credential_problem()
+    if problem:
+        raise HTTPException(409, f"{problem} Then restart the engine.")
 
     redirect_uri = redirect_uri or _default_redirect()
     state = secrets.token_urlsafe(24)
@@ -500,6 +509,8 @@ async def tiktok_status() -> TikTokStatusOut:
     return TikTokStatusOut(
         configured=tiktok.configured(),
         account=TikTokAccountOut(**account) if account else None,
+        problem=tiktok.credential_problem(),
+        client_key_hint=tiktok.credential_hint(),
     )
 
 

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, Button } from "@/components/ui";
 import { saveCredentials, connectYouTube, startTikTokConnection, tiktokStatus } from "@/app/actions";
+import { openConsentWindow } from "@/lib/consent";
 import type { SetupStatus, CredentialStatus, TikTokStatus } from "@studio/contracts";
 
 /**
@@ -93,15 +94,20 @@ export function SetupView({ setup }: { setup: SetupStatus }) {
 
   function connect() {
     setError(null);
+    // Opened before the await, or the browser treats it as an unrequested popup.
+    const tab = openConsentWindow();
     startTransition(async () => {
       const result = await connectYouTube();
       if (!result.ok || !result.data) {
+        tab.abandon();
         setError(result.error ?? "Could not start the YouTube connection.");
         return;
       }
-      // A full navigation, not a fetch. Google's consent page has to be loaded by
-      // the person's own browser, signed in as themselves.
-      window.location.href = result.data.url;
+      // A real tab, not this window. Google's consent page has to be loaded by
+      // the person's own browser, signed in as themselves — and Studio is often
+      // launched as an app-mode window with no address bar, which is both the
+      // wrong session and a page they cannot read an error out of.
+      tab.send(result.data.url);
     });
   }
 
@@ -670,17 +676,19 @@ function TikTokConnection() {
   const configured = Boolean(status?.configured);
 
   function connect() {
+    const tab = openConsentWindow();
     setBusy(true);
     setError(null);
     startTikTokConnection().then((result) => {
       if (!result.ok || !result.data?.url) {
+        tab.abandon();
         setBusy(false);
         setError(result.error ?? "Could not start the TikTok connection.");
         return;
       }
-      // A full navigation, not a fetch — the consent page has to be loaded by
-      // the browser, for the same reason the YouTube flow does it this way.
-      window.location.href = result.data.url;
+      // A real tab, for the same reason the YouTube flow uses one.
+      tab.send(result.data.url);
+      setBusy(false);
     });
   }
 
@@ -691,9 +699,26 @@ function TikTokConnection() {
         {connected
           ? `Connected as ${status?.account?.handle || "your account"}. Studio can list your own posts and nothing else — TikTok's API does not offer other creators' videos.`
           : configured
-            ? "Opens TikTok's consent page. Studio asks to read your own posts, and stores only a refresh token, encrypted."
+            ? "Opens TikTok's consent page in a new tab. Studio asks to read your own posts, and stores only a refresh token, encrypted."
             : "Save the client key and secret above first — the consent page cannot be built without them."}
       </p>
+
+      {/* What the engine can tell about these credentials without asking TikTok.
+          TikTok's own answer to a bad key is the word `client_key` on an
+          otherwise blank page, by which point the browser has left the app — so
+          anything knowable is worth saying here, before the trip. */}
+      {status?.problem && (
+        <p className="mt-2 max-w-[70ch] text-[12px] leading-relaxed text-[var(--color-warn)]">
+          {status.problem}
+        </p>
+      )}
+      {configured && !connected && status?.client_key_hint && (
+        <p className="mono mt-2 text-[11px] text-[var(--color-faint)]">
+          Using client key {status.client_key_hint} — check it matches the app on
+          developers.tiktok.com. TikTok reports a mismatch only as
+          &ldquo;client_key&rdquo;.
+        </p>
+      )}
       {error && <p className="mt-2 text-[12px] text-[var(--color-bad)]">{error}</p>}
       <div className="mt-3">
         <Button

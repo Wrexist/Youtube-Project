@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { Clip, ClipGrantRequest } from "@studio/contracts";
 import { Button, Card, Empty } from "@/components/ui";
 import { findClips, revokeClip, saveGrant, startTikTokConnection } from "@/app/actions";
+import { openConsentWindow } from "@/lib/consent";
 import { EpisodeBuilder } from "./episode-builder";
 import { REPURPOSE_CLIPS, REPURPOSE_REPORT } from "@/lib/demo";
 
@@ -332,19 +333,25 @@ function Sweep({
   const showConnect = needsConnect && outcome !== "connected";
 
   function connect() {
+    // Opened synchronously, before the await: a `window.open` that happens after
+    // one is a popup the browser blocks. See lib/consent.ts.
+    const tab = openConsentWindow();
     setConnecting(true);
     setNote(null);
     // `repurpose`, so the round trip comes back here rather than to Setup —
     // this is the screen with the button that needed the account.
     startTikTokConnection("repurpose").then((result) => {
       if (!result.ok || !result.data?.url) {
+        tab.abandon();
         setConnecting(false);
         setNote({ text: result.error ?? "Could not start the connection.", bad: true });
         return;
       }
-      // A full navigation, not a fetch: the consent page has to be loaded by the
-      // browser, or it would be the server signing in rather than the person.
-      window.location.href = result.data.url;
+      tab.send(result.data.url);
+      // The app's own window stays where it is, so this screen is still here
+      // when the tab comes back. Re-enabled so a refused sign-in can be retried
+      // without a reload.
+      setConnecting(false);
     });
   }
 

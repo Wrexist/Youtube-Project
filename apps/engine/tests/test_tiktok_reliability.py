@@ -23,12 +23,11 @@ import pytest
 
 from engine.providers import tiktok
 from engine.providers.tiktok import TikTokAuthExpired, TikTokUnavailable
+from engine.settings import get_settings
 
 
 @pytest.fixture(autouse=True)
 def _credentials(monkeypatch):
-    from engine.settings import get_settings
-
     monkeypatch.setenv("TIKTOK_CLIENT_KEY", "key")
     monkeypatch.setenv("TIKTOK_CLIENT_SECRET", "secret")
     get_settings.cache_clear()
@@ -509,6 +508,87 @@ def test_a_verifier_is_fresh_every_time_and_within_the_rfc_length():
         # RFC 7636 §4.1's unreserved set. A character outside it is rejected by
         # some servers and silently mangled in a query string by others.
         assert all(c.isalnum() or c in "-._~" for c in verifier)
+
+
+# ── credentials, checked before the browser leaves ──────────────────────────
+#
+# TikTok answers a bad key with the word `client_key` on an otherwise blank
+# page — no indication of *how* it is bad, and by then the browser has left the
+# app, so nothing on our side gets to explain either. Everything knowable is
+# worth knowing before the trip.
+
+
+def _creds(monkeypatch, key: str, secret: str) -> None:
+    """Point `Settings` at these credentials, cache cleared either side."""
+    get_settings.cache_clear()
+    monkeypatch.setenv("TIKTOK_CLIENT_KEY", key)
+    monkeypatch.setenv("TIKTOK_CLIENT_SECRET", secret)
+
+
+class TestCredentialPreflight:
+    """`get_settings` is imported at the top of this class's helpers on purpose:
+    every test here reads it back to prove what the engine actually holds."""
+
+    def test_a_placeholder_left_in_env_is_caught(self, monkeypatch):
+        """`configured()` only asks whether the string is non-empty, so the
+        prompt shipped in .env.example sails through to TikTok."""
+        _creds(monkeypatch, "your_client_key_here", "a-real-looking-secret")
+
+        problem = tiktok.credential_problem()
+
+        assert problem and "placeholder" in problem
+        get_settings.cache_clear()
+
+    def test_the_same_value_in_both_fields_is_caught(self, monkeypatch):
+        """One pasted over the other — they are two different strings."""
+        _creds(monkeypatch, "awsomekey123", "awsomekey123")
+
+        problem = tiktok.credential_problem()
+
+        assert problem and "same value" in problem
+        get_settings.cache_clear()
+
+    def test_a_missing_half_names_both_variables(self, monkeypatch):
+        _creds(monkeypatch, "awsomekey123", "")
+
+        problem = tiktok.credential_problem()
+
+        assert problem
+        assert "TIKTOK_CLIENT_KEY" in problem and "TIKTOK_CLIENT_SECRET" in problem
+        get_settings.cache_clear()
+
+    def test_plausible_credentials_are_not_second_guessed(self, monkeypatch):
+        """The check names only unambiguous faults.
+
+        TikTok's keys currently start `aw` and run about twenty characters, but
+        that is an observation about today's keys rather than a documented
+        contract — refusing a *valid* future key would be worse than the error
+        page this replaces.
+        """
+        _creds(monkeypatch, "aw8s7d6f5g4h3j2k1l", "sk-9z8y7x6w5v4u3t2s1r")
+
+        assert tiktok.credential_problem() is None
+        get_settings.cache_clear()
+
+    def test_whitespace_around_a_pasted_key_does_not_survive(self, monkeypatch):
+        """The invisible one. A trailing newline from a copy-paste is fatal at
+        TikTok and identical on screen to the value that works."""
+        _creds(monkeypatch, "  aw8s7d6f5g4h3j2k1l\n", "sk-9z8y7x6w5v4u3t2s1r  ")
+
+        assert get_settings().tiktok_client_key == "aw8s7d6f5g4h3j2k1l"
+        assert get_settings().tiktok_client_secret == "sk-9z8y7x6w5v4u3t2s1r"
+        get_settings.cache_clear()
+
+    def test_the_hint_identifies_the_key_without_exposing_it(self, monkeypatch):
+        """It reaches a browser and a screenshot, so it carries two characters
+        and a length — enough to spot the wrong field or a truncated copy."""
+        _creds(monkeypatch, "aw8s7d6f5g4h3j2k1l", "secret")
+
+        hint = tiktok.credential_hint()
+
+        assert hint == "aw… (18 characters)"
+        assert "8s7d6f5g4h3j2k1l" not in hint
+        get_settings.cache_clear()
 
 
 async def test_the_exchange_sends_the_verifier_back(monkeypatch):

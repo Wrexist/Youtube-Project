@@ -41,6 +41,12 @@ class Settings(BaseSettings):
         env_file=(".env", "../../.env"),
         env_prefix="STUDIO_",
         extra="ignore",
+        # Credentials arrive by copy-and-paste, and a trailing space or a stray
+        # newline is invisible in an editor and fatal at the other end. The
+        # provider does not say "your key has a space on the end" — TikTok
+        # answers `client_key`, Google answers `invalid_client`, and the operator
+        # is left comparing a value that looks identical to the one that works.
+        str_strip_whitespace=True,
     )
 
     env: Literal["development", "production"] = "development"

@@ -479,6 +479,40 @@ it reaches a `Location` header, and reflecting an arbitrary path there is an ope
 redirect), and both outcomes are stated on arrival instead of leaving "did that
 work?" to be inferred from an empty grid.
 
+### 4.16 The consent page opened in the wrong window, and a bad key said nothing
+The follow-on from 4.15. With PKCE in place TikTok stopped complaining about
+`code_challenge` and started complaining about `client_key` — a different fault,
+on the same unhelpful page, and one the app was in a position to catch first.
+
+* **Credentials are stripped.** `Settings` now sets `str_strip_whitespace`. A key
+  pasted with a trailing newline is invisible in an editor and fatal at the other
+  end, and no provider says so: TikTok answers `client_key`, Google answers
+  `invalid_client`, and the operator is left comparing two values that look
+  identical.
+* **The obvious faults are named before the browser leaves.**
+  `tiktok.credential_problem()` refuses a placeholder still sitting in `.env`,
+  the same string in both fields, and a missing half — the three that are
+  unambiguous. Deliberately *not* a format check on the key: TikTok's keys
+  currently start `aw` and run about twenty characters, but that is an
+  observation about today's keys rather than a documented contract, and refusing
+  a valid future key would be worse than the error page it replaces.
+  `configured()` was the only gate before, and it asks nothing except whether the
+  string is non-empty.
+* **The Setup card shows which key is configured** — first two characters and a
+  length, never the value, since it reaches a browser and a screenshot. That is
+  enough to spot the three things that actually happen: the wrong field pasted, a
+  truncated copy, a key from a different app.
+* **Consent opens in a real tab.** Every OAuth start used
+  `window.location.href`, which navigates whatever window the app is in — and
+  Studio is commonly launched through its desktop shortcut as an app-mode window
+  with no address bar. The consent page then loads somewhere the operator cannot
+  read a URL from, cannot copy an error out of, and which may not carry the
+  browser session they are actually signed in with. `lib/consent.ts` opens the
+  tab **synchronously on click**, before the server action is awaited, because a
+  `window.open` after an `await` is precisely the shape a popup blocker stops;
+  the URL is assigned into the already-open tab when it arrives, and a blocked
+  window falls back to navigating in place rather than doing nothing.
+
 ### 4.14 Three gaps the simulations named but did not close
 Each was written down as a known limit when 4.12 and 4.13 landed, and each was a
 small fix once someone looked at it rather than a research problem.

@@ -214,6 +214,75 @@ def configured() -> bool:
     return bool(settings.tiktok_client_key and settings.tiktok_client_secret)
 
 
+#: Values that are present, non-empty, and still not a key. `.env.example` ships
+#: with prompts in these shapes, and `configured()` — which only asks whether the
+#: string is non-empty — waves every one of them through to TikTok, which answers
+#: `client_key` on a page that cannot say which of the two credentials it meant.
+_PLACEHOLDERS = frozenset(
+    {
+        "your_client_key_here",
+        "your_client_secret_here",
+        "your-client-key",
+        "your-client-secret",
+        "changeme",
+        "change-me",
+        "xxx",
+        "todo",
+    }
+)
+
+
+def credential_problem() -> str | None:
+    """Why TikTok will refuse these credentials, before the browser is sent there.
+
+    TikTok's authorize page reports a bad key as `client_key` in small print on
+    an otherwise blank error screen, with no indication of *how* it is bad — and
+    by then the operator has left the app, so the app cannot tell them anything
+    either. Everything catchable is worth catching on this side of that trip.
+
+    Deliberately not a format check on the key itself. TikTok's keys currently
+    start `aw` and run about twenty characters, but that is an observation about
+    today's keys rather than a documented contract, and a validator that refuses
+    a *valid* future key is worse than the error page it replaces. Only the three
+    faults that are unambiguous are named here.
+    """
+    settings = get_settings()
+    key = settings.tiktok_client_key
+    secret = settings.tiktok_client_secret
+
+    if not key or not secret:
+        return (
+            "TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET are not both set in .env. "
+            "Both come from the same app on developers.tiktok.com."
+        )
+    if key.lower() in _PLACEHOLDERS or secret.lower() in _PLACEHOLDERS:
+        return (
+            "TIKTOK_CLIENT_KEY or TIKTOK_CLIENT_SECRET is still the placeholder "
+            "from .env.example. Replace both with the values from your app on "
+            "developers.tiktok.com."
+        )
+    if key == secret:
+        return (
+            "TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET are the same value — one "
+            "of them has been pasted over the other. They are two different "
+            "strings on the app's credentials page."
+        )
+    return None
+
+
+def credential_hint() -> str:
+    """Enough of the configured key to compare against TikTok's page, and no more.
+
+    Two characters and a length. That is sufficient to spot the three things that
+    actually go wrong — the wrong field pasted, a truncated copy, a value from a
+    different app — without putting a credential on a screen or in a log.
+    """
+    key = get_settings().tiktok_client_key
+    if not key:
+        return "not set"
+    return f"{key[:2]}… ({len(key)} characters)"
+
+
 #: PKCE verifier alphabet and length, from RFC 7636 §4.1 — the unreserved
 #: characters, 43 to 128 of them. `token_urlsafe` emits exactly this alphabet
 #: (it adds `-` and `_`), so no filtering is needed; 64 bytes of entropy lands

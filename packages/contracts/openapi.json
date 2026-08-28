@@ -3425,9 +3425,25 @@
               }
             ]
           },
+          "client_key_hint": {
+            "default": "",
+            "title": "Client Key Hint",
+            "type": "string"
+          },
           "configured": {
             "title": "Configured",
             "type": "boolean"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
           }
         },
         "required": [

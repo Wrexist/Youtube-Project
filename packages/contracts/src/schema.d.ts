@@ -3099,8 +3099,15 @@ export interface components {
          */
         TikTokStatusOut: {
             account: components["schemas"]["TikTokAccountOut"] | null;
+            /**
+             * Client Key Hint
+             * @default
+             */
+            client_key_hint: string;
             /** Configured */
             configured: boolean;
+            /** Problem */
+            problem?: string | null;
         };
         /** TimelineIn */
         TimelineIn: {
