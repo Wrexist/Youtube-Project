@@ -571,8 +571,23 @@ what it is — nothing happened — rather than as an error.
 
 Not fixed by any of this: TikTok still answers `client_key` on this install. The
 request is well-formed, the pre-flight passes and the engine logs the exact URL,
-which leaves the app's registration on TikTok's side — see 4.16 and the checklist
-on the Setup card.
+which leaves the app's registration on TikTok's side. Two documented causes, both
+now on the Setup checklist and neither detectable from here:
+
+* **The signing-in account is not a Test User.** An unaudited app is in
+  development mode and only listed test accounts can authorise it. This is the
+  usual answer.
+* **The app is registered as *Web* rather than *Desktop*.** TikTok requires
+  `https` for a web app's redirect URI and permits `http://localhost:PORT` only
+  under the desktop platform. Studio runs on the operator's own machine, so its
+  callback is `http://localhost:8080/...` — an app created as Web can never
+  accept it, and the mismatch surfaces as this same one word.
+
+The checklist is now open by default rather than folded away, and the client key
+and redirect URI both copy, because the comparison it exists for is
+character-by-character and retyping it is how a transposition survives three
+attempts. The Repurpose screen links to it: that is where the button that needs
+the account lives, and it had nowhere to put four paragraphs.
 
 ### 4.14 Three gaps the simulations named but did not close
 Each was written down as a known limit when 4.12 and 4.13 landed, and each was a

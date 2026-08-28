@@ -640,6 +640,20 @@ function GoogleCloudSteps() {
   );
 }
 
+/** The one page every item on the TikTok checklist is fixed on. */
+function PortalLink() {
+  return (
+    <a
+      href="https://developers.tiktok.com/"
+      target="_blank"
+      rel="noreferrer noopener"
+      className="whitespace-nowrap text-[var(--color-ink)] underline decoration-[var(--color-line-hover)] underline-offset-4"
+    >
+      developers.tiktok.com
+    </a>
+  );
+}
+
 /** A value whose whole purpose is to be pasted somewhere else, so it copies. */
 function CopyLine({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -804,48 +818,50 @@ function TikTokConnection() {
         </p>
       )}
       {configured && !connected && status?.client_key_hint && (
-        <details className="mt-3">
+        <details className="mt-3" open>
           <summary className="cursor-pointer list-none text-[12px] font-semibold text-[var(--color-muted)] hover:text-[var(--color-ink)]">
             TikTok says &ldquo;client_key&rdquo;? What it checks
             <span className="ml-2 font-normal text-[var(--color-faint)]">show</span>
           </summary>
 
-          <p className="mono mt-2.5 text-[11px] break-all text-[var(--color-muted)]">
-            {status.client_key_hint}
-          </p>
-          <p className="mt-1 text-[11px] text-[var(--color-faint)]">
-            The client key the engine is sending. It is a public identifier — it
-            travels in the URL — so compare it character for character with the
-            app on developers.tiktok.com.
-          </p>
-
           {/* TikTok answers all of these with the same word and no detail, so the
               only way through is to check them in order. Ordered by how often
               each is actually the cause. */}
-          <ol className="mt-3 grid gap-2 text-[12px] leading-relaxed text-[var(--color-muted)]">
+          <ol className="mt-3 grid gap-3 text-[12px] leading-relaxed text-[var(--color-muted)]">
             <li>
-              <span className="font-semibold">Are you a test user?</span> While the app
-              is unaudited, only accounts listed under Test Users can authorise it —
-              and the account you are signing in with must be one of them. This is
-              the most common cause of this exact error.
+              <span className="font-semibold">Is the account you signed in with a Test User?</span>{" "}
+              While the app is unaudited it is in development mode, and only the
+              accounts listed under Test Users can authorise it. This is the most
+              common cause of this exact error by a distance. Add the account on{" "}
+              <PortalLink /> under Manage apps → your app → Test Users, then sign
+              in again <em>as that account</em>.
             </li>
             <li>
-              <span className="font-semibold">Is Login Kit added to the app?</span> The
+              <span className="font-semibold">Is the app registered as Desktop rather than Web?</span>{" "}
+              TikTok will not accept an <span className="mono">http://</span>{" "}
+              redirect URI for a <em>web</em> app — those must be{" "}
+              <span className="mono">https</span>. Studio runs on your own
+              machine, so its callback is <span className="mono">http://localhost</span>,
+              which is only legal under the <em>desktop</em> platform. An app set
+              up as Web can never accept the URI below.
+            </li>
+            <li>
+              <span className="font-semibold">Is Login Kit added as a product?</span> The
               key exists as soon as the app does, but authorising against it fails
               until Login Kit is one of the app&apos;s products.
             </li>
             <li>
-              <span className="font-semibold">Does the redirect URI match exactly?</span>{" "}
-              It must be registered on the app, character for character —{" "}
-              <span className="mono break-all">
-                http://localhost:8080/v1/repurpose/auth/tiktok/callback
-              </span>
-              . A trailing slash counts as a difference.
+              <span className="font-semibold">Is the redirect URI registered, character for character?</span>{" "}
+              A trailing slash counts as a difference.
+              <CopyLine value="http://localhost:8080/v1/repurpose/auth/tiktok/callback" />
             </li>
             <li>
               <span className="font-semibold">Is that the client key, not the app ID?</span>{" "}
               They sit next to each other on the credentials page and are easy to
-              transpose.
+              transpose. This is the key Studio is sending — it is a public
+              identifier that travels in the URL, so compare it against the app&apos;s
+              own page:
+              <CopyLine value={status.client_key_hint} />
             </li>
           </ol>
         </details>

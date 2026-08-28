@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Clip, ClipGrantRequest } from "@studio/contracts";
 import { Button, Card, Empty } from "@/components/ui";
@@ -332,7 +333,12 @@ function Sweep({
   failure: string | null;
 }) {
   const [sweeping, setSweeping] = useState(false);
-  const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
+  // `help` points at Setup, where the checklist for a refused sign-in lives.
+  // Only set on a connect failure: TikTok answers those with one word on a page
+  // in another window, and this screen has nowhere to put four paragraphs.
+  const [note, setNote] = useState<{ text: string; bad?: boolean; help?: boolean } | null>(
+    null,
+  );
   const [needsConnect, setNeedsConnect] = useState(false);
   const [connecting, setConnecting] = useState(false);
   // Set when the popup reports success. Distinct from `outcome`, which is the
@@ -346,8 +352,8 @@ function Sweep({
   // both a cascading render and the thing this repo's lint config rejects. The
   // sweep's own note takes precedence once there is one, so pressing Find clips
   // replaces the arrival message instead of arguing with it.
-  const arrival: { text: string; bad?: boolean } | null = failure
-    ? { text: failure, bad: true }
+  const arrival: { text: string; bad?: boolean; help?: boolean } | null = failure
+    ? { text: failure, bad: true, help: true }
     : outcome === "connected"
       ? { text: "TikTok connected. Press Find clips to sweep your posts." }
       : null;
@@ -387,9 +393,10 @@ function Sweep({
     setNote({
       text:
         settled.status === "failed"
-          ? settled.reason
+          ? `TikTok refused the sign-in: ${settled.reason}`
           : "The TikTok window closed before it finished. Nothing was changed.",
       bad: true,
+      help: settled.status === "failed",
     });
   }
 
@@ -445,10 +452,21 @@ function Sweep({
       {shown && (
         <p
           role="status"
-          className="text-[12px]"
+          className="max-w-[46ch] text-right text-[12px]"
           style={{ color: shown.bad ? "var(--color-bad)" : "var(--color-muted)" }}
         >
           {shown.text}
+          {shown.help && (
+            <>
+              {" "}
+              <Link
+                href="/setup"
+                className="whitespace-nowrap underline decoration-[var(--color-line-hover)] underline-offset-4"
+              >
+                What TikTok checks
+              </Link>
+            </>
+          )}
         </p>
       )}
     </div>
