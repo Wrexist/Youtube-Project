@@ -713,11 +713,51 @@ function TikTokConnection() {
         </p>
       )}
       {configured && !connected && status?.client_key_hint && (
-        <p className="mono mt-2 text-[11px] text-[var(--color-faint)]">
-          Using client key {status.client_key_hint} — check it matches the app on
-          developers.tiktok.com. TikTok reports a mismatch only as
-          &ldquo;client_key&rdquo;.
-        </p>
+        <details className="mt-3">
+          <summary className="cursor-pointer list-none text-[12px] font-semibold text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+            TikTok says &ldquo;client_key&rdquo;? What it checks
+            <span className="ml-2 font-normal text-[var(--color-faint)]">show</span>
+          </summary>
+
+          <p className="mono mt-2.5 text-[11px] break-all text-[var(--color-muted)]">
+            {status.client_key_hint}
+          </p>
+          <p className="mt-1 text-[11px] text-[var(--color-faint)]">
+            The client key the engine is sending. It is a public identifier — it
+            travels in the URL — so compare it character for character with the
+            app on developers.tiktok.com.
+          </p>
+
+          {/* TikTok answers all of these with the same word and no detail, so the
+              only way through is to check them in order. Ordered by how often
+              each is actually the cause. */}
+          <ol className="mt-3 grid gap-2 text-[12px] leading-relaxed text-[var(--color-muted)]">
+            <li>
+              <span className="font-semibold">Are you a test user?</span> While the app
+              is unaudited, only accounts listed under Test Users can authorise it —
+              and the account you are signing in with must be one of them. This is
+              the most common cause of this exact error.
+            </li>
+            <li>
+              <span className="font-semibold">Is Login Kit added to the app?</span> The
+              key exists as soon as the app does, but authorising against it fails
+              until Login Kit is one of the app&apos;s products.
+            </li>
+            <li>
+              <span className="font-semibold">Does the redirect URI match exactly?</span>{" "}
+              It must be registered on the app, character for character —{" "}
+              <span className="mono break-all">
+                http://localhost:8080/v1/repurpose/auth/tiktok/callback
+              </span>
+              . A trailing slash counts as a difference.
+            </li>
+            <li>
+              <span className="font-semibold">Is that the client key, not the app ID?</span>{" "}
+              They sit next to each other on the credentials page and are easy to
+              transpose.
+            </li>
+          </ol>
+        </details>
       )}
       {error && <p className="mt-2 text-[12px] text-[var(--color-bad)]">{error}</p>}
       <div className="mt-3">

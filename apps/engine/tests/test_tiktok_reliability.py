@@ -579,15 +579,17 @@ class TestCredentialPreflight:
         assert get_settings().tiktok_client_secret == "sk-9z8y7x6w5v4u3t2s1r"
         get_settings.cache_clear()
 
-    def test_the_hint_identifies_the_key_without_exposing_it(self, monkeypatch):
-        """It reaches a browser and a screenshot, so it carries two characters
-        and a length — enough to spot the wrong field or a truncated copy."""
-        _creds(monkeypatch, "aw8s7d6f5g4h3j2k1l", "secret")
+    def test_the_hint_shows_the_key_but_never_the_secret(self, monkeypatch):
+        """The key is shown in full and the secret is not, which is the whole
+        distinction: a client key is a public OAuth identifier that travels in
+        the authorize URL, and comparing it against TikTok's page character by
+        character is the only way a transposed field is ever found."""
+        _creds(monkeypatch, "aw8s7d6f5g4h3j2k1l", "sk-the-actual-secret")
 
         hint = tiktok.credential_hint()
 
-        assert hint == "aw… (18 characters)"
-        assert "8s7d6f5g4h3j2k1l" not in hint
+        assert hint == "aw8s7d6f5g4h3j2k1l"
+        assert "sk-the-actual-secret" not in hint
         get_settings.cache_clear()
 
 

@@ -271,16 +271,19 @@ def credential_problem() -> str | None:
 
 
 def credential_hint() -> str:
-    """Enough of the configured key to compare against TikTok's page, and no more.
+    """The configured client key, in full, so it can be compared with TikTok's page.
 
-    Two characters and a length. That is sufficient to spot the three things that
-    actually go wrong — the wrong field pasted, a truncated copy, a value from a
-    different app — without putting a credential on a screen or in a log.
+    Shown rather than masked, which was the wrong call the first time. A client
+    key is an OAuth *client identifier*: it is public by definition, it travels
+    in the query string of the URL the browser is sent to, and TikTok displays it
+    on the app's own page. The **secret** is the one that must never be rendered,
+    and it never is.
+
+    Masking it made the one thing this exists for impossible — comparing what the
+    engine holds against what TikTok shows, character by character, which is how
+    a transposed field or a key from a different app is actually found.
     """
-    key = get_settings().tiktok_client_key
-    if not key:
-        return "not set"
-    return f"{key[:2]}… ({len(key)} characters)"
+    return get_settings().tiktok_client_key or "not set"
 
 
 #: PKCE verifier alphabet and length, from RFC 7636 §4.1 — the unreserved
@@ -327,7 +330,7 @@ def authorize_url(redirect_uri: str, state: str, verifier: str) -> str:
     if not configured():
         raise TikTokUnavailable("TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET are not set")
 
-    return (
+    url = (
         AUTH_URL
         + "?"
         + urlencode(
@@ -342,6 +345,16 @@ def authorize_url(redirect_uri: str, state: str, verifier: str) -> str:
             }
         )
     )
+    # Logged in full, deliberately. Every value in it is public — the client key
+    # is an OAuth client identifier, and the rest is a scope list, a redirect and
+    # a hash. The secret and the verifier are not here and never will be.
+    #
+    # It is logged because TikTok's refusals name a parameter and nothing else
+    # ("client_key"), on a page the operator reaches after leaving the app. The
+    # request that produced it is the only other evidence there is, and without
+    # this line it existed nowhere.
+    logger.info("tiktok authorize url: {}", url)
+    return url
 
 
 # ── the transport ───────────────────────────────────────────────────────────
